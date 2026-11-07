@@ -126,6 +126,30 @@ def _check(results: list, name: str, fn) -> None:
     results.append({"check": name, "ok": bool(ok), "detail": detail, "ms": round((time.perf_counter() - t0) * 1000)})
 
 
+def _await_loki_startup(max_wait_s: float = 40.0) -> bool:
+    """Wait for Loki's transient startup readiness delay without masking an actual outage.
+
+    Readiness probes remain instantaneous for the dashboard; only the release
+    verifier waits, so a clean deployment does not fail during ingester warm-up.
+    """
+    from .infrastructure.runtime import log_store
+    store = log_store()
+    if store is None:
+        return False
+    deadline = time.monotonic() + max(0.0, max_wait_s)
+    while True:
+        try:
+            ready, _ = store.ready()
+            if ready:
+                return True
+        except Exception:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(2.0, remaining))
+
+
 def cmd_verify(a) -> int:
     import httpx
     from .application.health import collect
@@ -134,6 +158,7 @@ def cmd_verify(a) -> int:
     from .infrastructure.runtime import inm_settings, log_store, nats_settings, telemetry_store
     _init()
     s, inm = get_settings(), inm_settings()
+    _await_loki_startup()
     api = a.api_url.rstrip("/")
     results: list[dict] = []
 
