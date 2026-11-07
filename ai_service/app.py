@@ -23,8 +23,16 @@ VERSION = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip
     if (Path(__file__).resolve().parent.parent / "VERSION").exists() else "0.0.0-dev"
 OLLAMA_URL = os.environ.get("INM_OLLAMA_URL", "").rstrip("/")
 TOKEN = os.environ.get("INM_AI_SHARED_TOKEN", "")
-FORBIDDEN_ENV = ("SIMS_FERNET_KEY", "SIMS_DATABASE_URL", "INM_TELEMETRY_DATABASE_URL", "INM_NATS_PASSWORD",
-                 "SIMS_JWT_SECRET")
+# Fail closed if the isolated AI container is accidentally given any management,
+# authentication, database, bus or device credential. It only needs its own service token.
+FORBIDDEN_ENV = (
+    "SIMS_FERNET_KEY", "SIMS_DATABASE_URL", "SIMS_JWT_SECRET",
+    "SIMS_ADMIN_PASSWORD", "INM_TELEMETRY_DATABASE_URL",
+    "MGMT_DB_PASSWORD", "TS_DB_PASSWORD",
+    "INM_NATS_URL", "INM_NATS_USER", "INM_NATS_PASSWORD",
+    "INM_NATS_API_PASSWORD", "INM_NATS_WORKER_PASSWORD",
+    "SIMS_ARUBA_PASSWORD", "SIMS_SSH_PASSWORD",
+)
 
 
 
