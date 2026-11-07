@@ -113,7 +113,7 @@ jobs:
           INM_E2E_URL: https://127.0.0.1:8443
           INM_E2E_ALLOW_SELF_SIGNED: '1'
         run: |
-          python3 -m pip install --disable-pip-version-check pytest playwright
+          python3 -m pip install --disable-pip-version-check -r requirements.lock pytest pytest-asyncio playwright
           python3 -m playwright install --with-deps chromium
           export INM_E2E_ADMIN_PASSWORD="$(sed -n 's/^SIMS_ADMIN_PASSWORD=//p' .env.ci)"
           python3 -m pytest -q tests/e2e/test_browser_live.py
