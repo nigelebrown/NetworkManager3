@@ -87,6 +87,9 @@ jobs:
           openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
             -subj '/CN=localhost' \
             -keyout .ci-tls/tls.key -out .ci-tls/tls.crt >/dev/null 2>&1
+          # The hardened Nginx container has CAP_DAC_OVERRIDE removed. Its
+          # root process must own the read-only mounted key, not runner UID 1001.
+          sudo chown 0:0 .ci-tls/tls.key .ci-tls/tls.crt
           chmod 600 .ci-tls/tls.key
       - name: Validate Compose syntax/topology
         run: docker compose --env-file .env.ci --project-name inm -f compose.yaml config --quiet
