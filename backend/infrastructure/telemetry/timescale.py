@@ -51,8 +51,15 @@ def _iso(dt: datetime) -> datetime:
 class TimescaleTelemetryStore:
     def __init__(self, url: str, engine: Engine | None = None):
         self.url = url
-        self.engine = engine or create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5) \
-            if not url.startswith("sqlite") else create_engine(url)
+        # Honor an injected SQLAlchemy engine (including SQLite test engines).
+        # The former conditional expression bound to the entire assignment and
+        # silently replaced a caller-supplied SQLite engine.
+        if engine is not None:
+            self.engine = engine
+        elif url.startswith("sqlite"):
+            self.engine = create_engine(url)
+        else:
+            self.engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
 
     # ---- schema ------------------------------------------------------------------------
     @property
