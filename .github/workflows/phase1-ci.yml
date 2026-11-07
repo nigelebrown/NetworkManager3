@@ -1,0 +1,111 @@
+name: Phase 1 application CI and end-to-end integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inm-phase1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install locked runtime dependencies and test runner
+        run: python -m pip install -r requirements.lock pytest pytest-asyncio
+      - name: Validate Python syntax
+        run: python -m compileall -q backend workers ai_service tests
+      - name: Run isolated regression, unit and contract tests
+        env:
+          SIMS_DISABLE_SCHEDULER: 'true'
+        run: python -m pytest -q tests/unit tests/contract
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  full-stack-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: [backend-tests, frontend-build]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deployment shell syntax
+        run: bash -n deployment/centos9/*.sh
+      - name: Create ephemeral demo-only secrets and TLS
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, os, secrets
+          from pathlib import Path
+          env = {
+              "INM_VERSION": Path("VERSION").read_text().strip(),
+              "INM_PROFILE": "demo",
+              "INM_WEB_BIND": "127.0.0.1",
+              "INM_WEB_PORT": "8443",
+              "INM_SYSLOG_BIND": "127.0.0.1",
+              "INM_SYSLOG_PORT": "1514",
+              "INM_TLS_DIR": str(Path(".ci-tls").resolve()),
+              "INM_NATS_API_PASSWORD": secrets.token_urlsafe(36),
+              "INM_NATS_WORKER_PASSWORD": secrets.token_urlsafe(36),
+              "MGMT_DB_PASSWORD": secrets.token_urlsafe(36),
+              "TS_DB_PASSWORD": secrets.token_urlsafe(36),
+              "SIMS_JWT_SECRET": secrets.token_urlsafe(48),
+              "SIMS_FERNET_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+              "SIMS_ADMIN_PASSWORD": secrets.token_urlsafe(24),
+              "INM_AI_SHARED_TOKEN": secrets.token_urlsafe(48),
+          }
+          Path(".ci-tls").mkdir(exist_ok=True)
+          path = Path(".env.ci")
+          path.write_text("".join(f"{k}={v}\n" for k,v in env.items()))
+          path.chmod(0o600)
+          PY
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
+            -subj '/CN=localhost' \
+            -keyout .ci-tls/tls.key -out .ci-tls/tls.crt >/dev/null 2>&1
+          chmod 600 .ci-tls/tls.key
+      - name: Validate Compose syntax/topology
+        run: docker compose --env-file .env.ci --project-name inm -f compose.yaml config --quiet
+      - name: Build images and start all seven logical roles
+        run: |
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml up \
+            --build -d --wait --wait-timeout 600 \
+            management-db timeseries-db nats loki alloy ai api web worker
+      - name: Verify TLS endpoint and complete synthetic event pipeline
+        run: |
+          curl --fail --silent --show-error --insecure https://127.0.0.1:8443/healthz
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml exec -T api \
+            python -m backend.cli verify --api-url http://127.0.0.1:8000 --syslog-host alloy --syslog-port 1514
+      - name: Save service states and logs after failure
+        if: failure()
+        run: |
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml ps || true
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml logs --no-color --tail 80 \
+            api worker management-db timeseries-db nats ai loki alloy web || true
+      - name: Remove disposable demo containers and volumes
+        if: always()
+        run: docker compose --env-file .env.ci --project-name inm -f compose.yaml down -v --remove-orphans || true
