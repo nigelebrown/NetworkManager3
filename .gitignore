@@ -1,0 +1,53 @@
+# SIMS environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Aruba diagnostics and local data
+probe*.json
+
+# React / Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Archives and audit packages
+SIMS-Phase2C-Audit.zip
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+
+
+
+
+
+# INM
+/evidence/runtime/
+/.inm/
+*.sqlite

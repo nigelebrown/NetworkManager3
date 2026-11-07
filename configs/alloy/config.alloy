@@ -1,0 +1,39 @@
+// INM syslog receiver (role 05). RFC 5424 over TCP (octet counting) and UDP on 1514 -> Loki.
+// Every line is labelled source="syslog"; the sending hostname becomes the `host` label so the API can map it
+// to an inventory device (or report it UNMAPPED with a reason).
+loki.relabel "syslog" {
+  forward_to = []
+  rule {
+    source_labels = ["__syslog_message_hostname"]
+    target_label  = "host"
+  }
+  rule {
+    source_labels = ["__syslog_message_app_name"]
+    target_label  = "app_name"
+  }
+  rule {
+    source_labels = ["__syslog_message_severity"]
+    target_label  = "severity"
+  }
+}
+
+loki.source.syslog "inm" {
+  listener {
+    address  = "0.0.0.0:1514"
+    protocol = "tcp"
+    labels   = { source = "syslog" }
+  }
+  listener {
+    address  = "0.0.0.0:1514"
+    protocol = "udp"
+    labels   = { source = "syslog" }
+  }
+  relabel_rules = loki.relabel.syslog.rules
+  forward_to    = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+  }
+}

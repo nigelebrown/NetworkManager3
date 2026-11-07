@@ -1,0 +1,27 @@
+{
+  "product": "Intelligent Network Manager",
+  "version": "1.0.0-phase1",
+  "phase": 1,
+  "management_schema_head": "0004",
+  "telemetry_schema_head": "t001",
+  "accepts_management_schemas": [
+    "0004"
+  ],
+  "accepts_telemetry_schemas": [
+    "t001"
+  ],
+  "migrations_expand_only": true,
+  "device_writes": "LOCKED",
+  "images": {
+    "postgres": "postgres:17-alpine",
+    "timescaledb": "timescale/timescaledb:2.22.1-pg17",
+    "nats": "nats:2.11-alpine",
+    "loki": "grafana/loki:3.5.5",
+    "alloy": "grafana/alloy:v1.11.0",
+    "python": "python:3.13-slim-bookworm",
+    "node": "node:22-alpine",
+    "nginx": "nginx:1.28-alpine",
+    "ollama": "ollama/ollama:latest"
+  },
+  "image_pinning": "Tags above are resolved to digests at first install and frozen in /var/lib/inm/images.lock; update.sh only moves digests on an explicit --ref."
+}
