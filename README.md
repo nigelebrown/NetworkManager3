@@ -1,3 +1,18 @@
+> **Current CentOS server checkout (Phase 1 demo):** All 204 source files have been published to `main` (2026-11-07). The repository is now installable for **laboratory testing**, but has not passed an independent clean-CentOS Docker acceptance. Do not use against live devices or enable device writes.
+>
+> On the already-authenticated CentOS server:
+>
+> ```bash
+> cd /root/NetworkManager3
+> git pull origin main
+> test -f deployment/centos9/install.sh && echo "Phase 1 source present"
+> bash deployment/centos9/doctor.sh
+> bash deployment/centos9/install.sh --mode demo
+> bash deployment/centos9/verify.sh
+> ```
+>
+> **Do not use `git checkout v1.0.0-phase1` yet:** that illustrative release tag has not been published. This initial deployment uses the current reviewed main-branch commit. Future updates require an approved immutable release tag. See [the independent acceptance gate](docs/PHASE1_REVIEW_AND_RELEASE_GATE.md).
+
 # Intelligent Network Manager — Phase 1 (Connected platform + SIMS feature parity)
 
 Release `1.0.0-phase1`. DEMO profile only. **All device writes are locked.** Lineage: SIMS Wi-Fi Manager (frozen at
