@@ -25,15 +25,23 @@ def browser():
     from playwright.sync_api import sync_playwright
     EVID.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
-        b = p.chromium.launch(executable_path=os.environ.get("INM_E2E_CHROME", "/usr/bin/google-chrome"),
-                              args=["--no-sandbox", "--disable-dev-shm-usage"])
+        chrome = os.environ.get("INM_E2E_CHROME")
+        if not chrome and Path("/usr/bin/google-chrome").exists():
+            chrome = "/usr/bin/google-chrome"
+        kwargs = {"executable_path": chrome} if chrome else {}
+        b = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"], **kwargs)
         yield b
         b.close()
 
 
 @pytest.fixture(scope="module")
 def page(browser):
-    ctx = browser.new_context(viewport={"width": 1440, "height": 950})
+    # Local CI uses an ephemeral self-signed certificate. Never ignore TLS errors
+    # for a non-loopback test target or without an explicit test-only opt-in.
+    allow_local_test_cert = (os.environ.get("INM_E2E_ALLOW_SELF_SIGNED") == "1" and
+                             URL.startswith(("https://127.0.0.1:", "https://localhost:")))
+    ctx = browser.new_context(viewport={"width": 1440, "height": 950},
+                              ignore_https_errors=allow_local_test_cert)
     pg = ctx.new_page()
     frames: list[dict] = []
 
