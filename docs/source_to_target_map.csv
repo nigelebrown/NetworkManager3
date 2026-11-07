@@ -1,0 +1,83 @@
+source_path,kind,target_module,feature_ids,treatment
+backend/ai/context.py,backend,ai_service/advisory,F014/F015,Retain; isolated network path
+backend/ai/ollama.py,backend,ai_service/advisory,F014/F015,Retain; isolated network path
+backend/ai/prompts.py,backend,ai_service/advisory,F014/F015,Retain; isolated network path
+backend/api/ai.py,backend,ai_service/advisory via isolated AI gateway,F014,Retain; Ollama reached only via ai_service container
+backend/api/auth.py,backend,identity + authorization + audit ports,F003,"Harden: logout, request IDs, forced initial password change, auditor role"
+backend/api/config.py,backend,application/change_orchestration (read/plan only),F033,Plan retained; apply denied + audited by write lock
+backend/api/data.py,backend,presentation/api legacy facade -> application queries,F002/F001/F024,Retain via compatibility facade; site-scope filter added
+backend/api/experience.py,backend,domain/experience + application/experience,F022,Retain unchanged; parity fixture test
+backend/api/firmware.py,backend,modules/firmware,F037,Screens retained; upgrade/cert apply denied by write lock
+backend/api/sites.py,backend,presentation/api legacy facade; Phase 2 onboarding,F020,Retain; REST-enable write denied by Phase 1 write lock
+backend/api/system.py,backend,presentation/api_v1/system,F005,Retain + /api/v1/system/services
+backend/aruba/authentication.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/client.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/configuration.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/errors.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/monitoring.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/onboarding.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/parsers.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/ssh.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/aruba/telemetry.py,backend,infrastructure/adapters/aruba_instant (wrapped behind DeviceReadPort),F017/F018,"Retain; wrapped, write paths gated"
+backend/certs/bundle.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/certs/service.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/certs/tftp.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/config.py,backend,(unchanged support file),,Retain
+backend/configmgmt/service.py,backend,application/change_orchestration,F030/F033,Retain; legacy backups flagged NOT_RESTORABLE
+backend/database/migrations/env.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/migrations/script.py.mako,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/migrations/versions/0001_baseline_phase_1_configuration_.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/migrations/versions/0002_phase_2a_experience_scoring_events_.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/migrations/versions/0003_firmware_images.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/models.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/database/session.py,backend,infrastructure/persistence (PostgreSQL) + Timescale telemetry,F011/F012,Migrate; Alembic 0004 adds INM tables
+backend/experience/config.py,backend,domain/experience,F022,Retain unchanged
+backend/experience/scoring.py,backend,domain/experience,F022,Retain unchanged
+backend/firmware/compliance.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/firmware/images.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/firmware/upgrade.py,backend,"modules/firmware, modules/certificates",F037,Retain; hardware ops unverified + write-locked
+backend/main.py,backend,(unchanged support file),,Retain
+backend/monitoring/alerts.py,backend,workers/network_worker + domain alerts,F009/F024,Scheduler moved out of API into worker
+backend/monitoring/collector.py,backend,workers/network_worker + domain alerts,F009/F024,Scheduler moved out of API into worker
+backend/monitoring/demo.py,backend,workers/network_worker + domain alerts,F009/F024,Scheduler moved out of API into worker
+backend/monitoring/rules.py,backend,workers/network_worker + domain alerts,F009/F024,Scheduler moved out of API into worker
+backend/security/crypto.py,backend,infrastructure/security + audit port,F003/F016,"Harden: hash-chained audit, scope contextvar"
+backend/security/deps.py,backend,infrastructure/security + audit port,F003/F016,"Harden: hash-chained audit, scope contextvar"
+backend/security/privacy.py,backend,infrastructure/security + audit port,F003/F016,"Harden: hash-chained audit, scope contextvar"
+backend/tests/conftest.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_ai.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_api.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_aruba_client.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_config.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_experience.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_firmware.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_migrations.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_parsers.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_rest_enable.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/tests/test_telemetry.py,test,backend/tests (legacy regression suite),INTEG-P1-01,Run unchanged against integrated code
+backend/verify_live.py,backend,(unchanged support file),,Retain
+frontend/src/App.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/charts/HistoryChart.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/AiAnswerBox.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/ConfigEditor.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/ConfirmDialog.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/FwPlanDialog.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/Layout.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/PlanDialog.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/RestApiDialog.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/SiteFilter.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/ui.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/components/useLoad.ts,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/index.css,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/main.tsx,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
+frontend/src/pages/APs.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Alerts.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Assistant.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Clients.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Configuration.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Dashboard.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Experience.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Firmware.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Login.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/pages/Sites.tsx,screen,frontend/src/pages (preserved) ,F001,Retain; live WebSocket invalidation
+frontend/src/services/api.ts,frontend,frontend/src (preserved),F001/F010,Retain; useLoad gains WS invalidation
