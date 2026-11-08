@@ -101,14 +101,25 @@ def test_health_is_measured_never_assumed():
     assert len(r["services"]) == 7
 
 
-@pytest.mark.parametrize("current,expect", [
-    ({"management": "0004", "telemetry": "t001"}, 0),
-    ({"management": "0005", "telemetry": "t001"}, 3),   # newer schema than the target accepts: refuse
-    ({"management": "0004", "telemetry": "t002"}, 3),
-    ({"management": None, "telemetry": None}, 3),
+@pytest.mark.parametrize("scenario,expect", [
+    ("accepted", 0),
+    ("unknown_management", 3),
+    ("unknown_telemetry", 3),
+    ("missing", 3),
 ])
-def test_schema_gate(tmp_path, current, expect):
-    """INTEG-P1-10: incompatible schema -> exit 3 with manual restore path; nothing else is touched."""
+def test_schema_gate(tmp_path, scenario, expect):
+    """INTEG-P1-10: use release-declared schema, not a stale hardcoded version."""
+    release = json.loads((ROOT / "release.json").read_text())
+    current = {
+        "management": release["management_schema_head"],
+        "telemetry": release["telemetry_schema_head"],
+    }
+    if scenario == "unknown_management":
+        current["management"] = "unsupported-mgmt-schema"
+    elif scenario == "unknown_telemetry":
+        current["telemetry"] = "unsupported-telemetry-schema"
+    elif scenario == "missing":
+        current = {"management": None, "telemetry": None}
     cur = tmp_path / "cur.json"; cur.write_text(json.dumps(current))
     r = subprocess.run([sys.executable, "-I", str(ROOT / "deployment/tools/schema_gate.py"), str(cur), str(ROOT / "release.json")],
                        capture_output=True, text=True)
