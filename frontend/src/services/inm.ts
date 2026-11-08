@@ -43,6 +43,12 @@ export const v1 = {
     model: string; firmware?: string | null; management_ip?: string | null; status: string; metrics: Record<string, number> }) =>
     request<{ id: string; evidence: string; hostname: string; device_writes: string }>(
       "/v1/quick-devices", { method: "POST", body: JSON.stringify(body) }),
+  bulkQuickDevices: (devices: { family: "access_point" | "switch"; site_name: string;
+    hostname: string; serial_number: string; model: string; firmware?: string | null;
+    management_ip?: string | null; status?: string; metrics?: Record<string, number> }[]) =>
+    request<{ count: number; added: number; updated: number; device_writes: "LOCKED"; results: {
+      id: string; hostname: string; serial_number: string; action: "ADDED" | "UPDATED"
+    }[] }>("/v1/quick-devices/bulk", { method: "POST", body: JSON.stringify({ devices }) }),
   probeQuickDevice: (body: { family: "access_point" | "switch"; site_name: string; hostname: string; serial_number: string;
     model: string; management_ip: string; username: string; password: string }) =>
     request<{ id: string; evidence: string; hostname: string; device_writes: string }>(
