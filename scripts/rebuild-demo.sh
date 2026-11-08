@@ -15,6 +15,8 @@ say() { printf '[inm-demo-reload] %s\n' "$*"; }
 
 [[ $EUID -eq 0 ]] || die "Run as root (or sudo with root's configured GitHub SSH deploy key)."
 [[ -d "$ROOT/.git" ]] || die "Application must come from a GitHub clone, not a PC/ZIP source package."
+[[ "${INM_WEB_BIND:-127.0.0.1}" == 127.0.0.1 ]] || die "Loopback bind is required for the restricted demo profile."
+[[ "${INM_PROFILE:-demo}" == demo ]] || die "Only demo profile is supported."
 command -v git >/dev/null || die "Install Git: dnf -y install git"
 [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "Uncommitted tracked source changes; refusing to overwrite."
 ORIGIN="$(git -C "$ROOT" remote get-url origin)"
