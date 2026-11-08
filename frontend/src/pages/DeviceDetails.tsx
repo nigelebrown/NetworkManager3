@@ -70,9 +70,14 @@ export default function DeviceDetails() {
                   : "This device is simulated and is not linked to physical network equipment."}
             </p>
             <p className="mt-3 text-sm text-amber-200">Configuration writes are disabled. No SSIDs, VLANs, radio settings or switch ports will be modified.</p>
-            <Link className="mt-3 inline-block text-sm text-sky-400 hover:underline" to="/onboarding">
-              Update this device by importing another observation
-            </Link>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <Link className="text-sm text-sky-400 underline" to={`/devices/${id}/config`}>
+                View imported configuration / edit draft
+              </Link>
+              <Link className="text-sm text-slate-300 underline" to="/onboarding/manual">
+                Update inventory details manually
+              </Link>
+            </div>
           </Card>
         </div>
         <Card title="Latest recorded readings">
