@@ -57,13 +57,13 @@ default; use an SSH tunnel) and where the one-time admin password is.
 
 | Operation | Command |
 |---|---|
-| Preflight report | `sudo bash deployment/centos9/doctor.sh` |
-| Verify readiness | `sudo bash deployment/centos9/verify.sh` (non-zero exit names each failed dependency) |
-| Status | `sudo bash deployment/centos9/status.sh` |
-| Backup (encrypted) | `sudo bash deployment/centos9/backup.sh` |
+| Preflight report | `bash scripts/inm.sh doctor` |
+| Verify readiness | `bash scripts/inm.sh verify` (non-zero exit names each failed dependency) |
+| Status | `bash scripts/inm.sh status` |
+| Backup (encrypted) | `bash scripts/inm.sh backup` |
 | Prove a backup restores | `sudo bash deployment/centos9/restore.sh --archive <file> --target test` |
-| Update to a tag | `sudo bash deployment/centos9/update.sh --ref <tag>` |
-| Roll back | `sudo bash deployment/centos9/rollback.sh --to <tag> --acknowledge-schema-compatible` |
+| Update to a tag | `bash scripts/inm.sh update` |
+| Roll back | `bash scripts/inm.sh rollback --to <tag> --acknowledge-schema-compatible` |
 
 Full guide: [docs/DEPLOYMENT_CENTOS9.md](docs/DEPLOYMENT_CENTOS9.md). Evidence and open items:
 [docs/PHASE1_EVIDENCE.md](docs/PHASE1_EVIDENCE.md).
