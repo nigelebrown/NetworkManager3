@@ -48,7 +48,7 @@ def test_pre_migration_database_is_upgraded_in_place_without_losing_data(tmp_pat
     assert "client_events" in {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
 
 
-def test_expand_only_management_0004_to_0005_preserves_existing_site(tmp_path, monkeypatch):
+def test_expand_only_management_0004_to_0006_preserves_existing_site(tmp_path, monkeypatch):
     """The LAN enablement's one-shot migration must safely upgrade an existing 0004 database."""
     from pathlib import Path
     from alembic import command
@@ -70,9 +70,12 @@ def test_expand_only_management_0004_to_0005_preserves_existing_site(tmp_path, m
     dbs.create_schema()
     con = sqlite3.connect(path)
     try:
-        assert con.execute("select version_num from alembic_version").fetchone() == ("0005",)
+        assert con.execute("select version_num from alembic_version").fetchone() == ("0006",)
         assert con.execute("select name from sites").fetchall() == [("Preserved-AP-Site",)]
-        assert "printer_devices" in {r[0] for r in con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "printer_devices" in tables
+        assert "onboarding_credentials" in tables
+        assert "onboarding_device_credentials" in tables
+        assert "onboarding_config_snapshots" in tables
     finally:
         con.close()
