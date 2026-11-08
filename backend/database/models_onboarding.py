@@ -58,3 +58,11 @@ class OnboardingConfigDraft(Base):
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+class OnboardingDeviceCredential(Base):
+    """Reusable credential binding: many devices reference one shared profile."""
+    __tablename__ = "onboarding_device_credentials"
+    device_id: Mapped[str] = mapped_column(ForeignKey("inm_devices.id", ondelete="CASCADE"), primary_key=True)
+    credential_id: Mapped[str] = mapped_column(ForeignKey("onboarding_credentials.id"), nullable=False, index=True)
+    bound_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
