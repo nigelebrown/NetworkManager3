@@ -14,9 +14,11 @@ export interface Capability { operation: string; status: string; evidence: strin
 export interface Device {
   id: string; source_type: "DEMO" | "REAL"; environment: string; vendor: string; family: "access_point" | "switch";
   model: string | null; serial_number: string; hostname: string | null; firmware: string | null; status: string; adapter: string;
-  site_id: string | null; cluster_id: string | null; legacy_site_id: number | null; last_observed_at: string | null; capabilities?: Capability[];
+  site_id: string | null; cluster_id: string | null; legacy_site_id: number | null; last_observed_at: string | null;
+  management_addresses?: string[]; capabilities?: Capability[];
 }
-export interface MetricPoint { observed_at: string; metric_name: string; value: number | null; unit: string; quality: string; source_type: string }
+export interface MetricPoint { observed_at: string; metric_name: string; value: number | null; unit: string;
+  collection_method?: string; quality: string; source_type: string }
 export interface EventRow { event_id: string; event_type: string; occurred_at: string; ingested_at: string; correlation_id: string; source_type: string; source_service: string; actor: string; summary: string | null; delivery_count: number; legacy_site_id: number | null }
 export interface LogEntry { ts: string; labels: Record<string, string>; line: string; json: Record<string, unknown> | null; device?: Device | null; correlation?: "MAPPED" | "UNMAPPED"; unmapped_reason?: string | null }
 export interface AuditRow { id: number; ts: string; actor: string | null; actor_role: string | null; actor_kind: string | null; action: string; target: string | null; detail: string | null; outcome: string; source_ip: string | null; request_id: string | null; correlation_id: string | null; session_id_hash: string | null; channel: string; prev_hash: string | null; event_hash: string | null }
@@ -36,6 +38,7 @@ export const v1 = {
   trace: (cid: string) => request<Trace>(`/v1/system/synthetic-event/${cid}`),
   physicalSites: () => request<{ sites: { id: string; name: string; source_type: string }[] }>("/v1/sites"),
   devices: (family?: "access_point" | "switch") => request<Device[]>(`/v1/devices${family ? `?family=${family}` : ""}`),
+  getDevice: (id: string) => request<Device>(`/v1/devices/${encodeURIComponent(id)}`),
   addQuickDevice: (body: { family: "access_point" | "switch"; site_name: string; hostname: string; serial_number: string;
     model: string; firmware?: string | null; management_ip?: string | null; status: string; metrics: Record<string, number> }) =>
     request<{ id: string; evidence: string; hostname: string; device_writes: string }>(
