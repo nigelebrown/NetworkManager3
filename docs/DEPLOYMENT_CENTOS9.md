@@ -74,13 +74,13 @@ re-run `install.sh --mode demo`.
 
 | Need | Command | Result |
 |---|---|---|
-| Is everything healthy? | `sudo bash deployment/centos9/verify.sh` | PASS/FAIL per check; exit 1 names failures |
-| Quick status | `sudo bash deployment/centos9/status.sh` | containers, seven-role health, last receipts |
-| Backup | `sudo bash deployment/centos9/backup.sh` | `/var/lib/inm/backups/inm-backup-<ts>.tar.enc` + `.sha256` + manifest |
+| Is everything healthy? | `bash scripts/inm.sh verify` | PASS/FAIL per check; exit 1 names failures |
+| Quick status | `bash scripts/inm.sh status` | containers, seven-role health, last receipts |
+| Backup | `bash scripts/inm.sh backup` | `/var/lib/inm/backups/inm-backup-<ts>.tar.enc` + `.sha256` + manifest |
 | Prove a backup restores | `sudo bash deployment/centos9/restore.sh --archive <file> --target test` | restores into disposable volumes, checks schema, row counts and the audit hash chain, then deletes them |
 | Restore over live data | `... restore.sh --archive <file> --target live --confirm-overwrite-live-data` | takes a safety backup first; keeps replaced DBs as `*_replaced_<ts>` |
-| Update | `sudo bash deployment/centos9/update.sh --ref <tag>` | backup → migrate → health-gated start → verify; automatic app rollback only when the schema gate allows |
-| Roll back | `sudo bash deployment/centos9/rollback.sh --to <tag> --acknowledge-schema-compatible` | refused (exit 3, nothing changed) when the target cannot run on the current schema |
+| Update | `bash scripts/inm.sh update` | backup → migrate → health-gated start → verify; automatic app rollback only when the schema gate allows |
+| Roll back | `bash scripts/inm.sh rollback --to <tag> --acknowledge-schema-compatible` | refused (exit 3, nothing changed) when the target cannot run on the current schema |
 
 **Keep `/etc/inm/backup.key` off this server** (password manager or vault). Without it, backups cannot be
 decrypted. Backups contain `inm.env`, so treat them as secret.
