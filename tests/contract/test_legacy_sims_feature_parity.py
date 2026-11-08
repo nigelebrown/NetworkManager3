@@ -49,8 +49,13 @@ LEGACY_SCREENS = {
 
 
 def test_original_sims_routes_survive_integration(client):
-    routes = {(method, route.path) for route in client.app.routes
-              for method in getattr(route, "methods", set())}
+    # Check the actual documented API from the running TestClient, not the
+    # underlying transport/middleware's potentially wrapped .app.routes.
+    response = client.get("/openapi.json")
+    assert response.status_code == 200, response.text
+    spec = response.json()
+    routes = {(method.upper(), path) for path, details in spec["paths"].items()
+              for method in details if method.lower() in ("get", "post", "put", "patch", "delete")}
     missing = LEGACY_ROUTES - routes
     assert not missing, f"Original SIMS API routes lost: {sorted(missing)}"
 
