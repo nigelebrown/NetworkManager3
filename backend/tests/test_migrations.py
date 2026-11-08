@@ -46,3 +46,33 @@ def test_pre_migration_database_is_upgraded_in_place_without_losing_data(tmp_pat
     cols = {r[1] for r in con.execute("pragma table_info(clients)")}
     assert {"exp_score", "exp_band", "poor_streak"} <= cols
     assert "client_events" in {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+
+
+def test_expand_only_management_0004_to_0005_preserves_existing_site(tmp_path, monkeypatch):
+    """The LAN enablement's one-shot migration must safely upgrade an existing 0004 database."""
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+
+    path = _setup(tmp_path, monkeypatch)
+    eng = dbs.get_engine()
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(dbs.__file__).parent / "migrations"))
+    with eng.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0004")
+        conn.execute(text("INSERT INTO sites (name, vc_port, simulated, enabled, created_at) "
+                          "VALUES ('Preserved-AP-Site', 4343, 0, 1, '2026-01-01')"))
+    con = sqlite3.connect(path)
+    assert con.execute("select version_num from alembic_version").fetchone() == ("0004",)
+    con.close()
+
+    dbs.create_schema()
+    con = sqlite3.connect(path)
+    try:
+        assert con.execute("select version_num from alembic_version").fetchone() == ("0005",)
+        assert con.execute("select name from sites").fetchall() == [("Preserved-AP-Site",)]
+        assert "printer_devices" in {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        con.close()
