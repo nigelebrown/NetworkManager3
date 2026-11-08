@@ -65,7 +65,7 @@ class PrinterInput(BaseModel):
 
 class MeterInput(BaseModel):
     meter_kind: METER_KINDS
-    counter_value: int = Field(ge=0, le=2147483647)
+    counter_value: int = Field(ge=0, le=9223372036854775807)
     observed_at: datetime | None = None
     note: str | None = Field(None, max_length=255)
 
@@ -87,7 +87,7 @@ class CycleInput(BaseModel):
     supplier: str | None = Field(None, max_length=100)
     quality_class: QUALITY_CLASSES = "unknown"
     meter_kind: METER_KINDS = "impressions_total"
-    start_meter: int = Field(ge=0)
+    start_meter: int = Field(ge=0, le=9223372036854775807)
     partial_refill: bool = False
     quantity_added_ml: Decimal | None = Field(None, ge=0)
     currency: Literal["JMD", "USD"] = "JMD"
@@ -97,7 +97,7 @@ class CycleInput(BaseModel):
 
 
 class CloseCycle(BaseModel):
-    end_meter: int = Field(ge=0)
+    end_meter: int = Field(ge=0, le=9223372036854775807)
     measured_consumed_ml: Decimal | None = Field(None, ge=0)
     notes: str | None = Field(None, max_length=1000)
 
