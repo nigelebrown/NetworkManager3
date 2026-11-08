@@ -2,10 +2,10 @@
   "product": "Intelligent Network Manager",
   "version": "1.0.0-phase1",
   "phase": 1,
-  "management_schema_head": "0006",
+  "management_schema_head": "0007",
   "telemetry_schema_head": "t001",
   "accepts_management_schemas": [
-    "0006"
+    "0007"
   ],
   "accepts_telemetry_schemas": [
     "t001"
@@ -52,6 +52,24 @@
       "no device configuration writes",
       "range preview is not unrestricted network scan",
       "real model validation required"
+    ]
+  },
+  "configuration_inheritance": {
+    "status": "GLOBAL_SITE_DEVICE_DRAFT_ONLY",
+    "schema_revision": "0007",
+    "device_writes": "LOCKED",
+    "features": [
+      "global base templates by device family and optional model",
+      "physical site templates",
+      "per-device overrides",
+      "deterministic merged preview with provenance",
+      "save inherited app-only configuration draft"
+    ],
+    "not_certified": [
+      "hardware configuration apply",
+      "configuration restore",
+      "safe device rollback",
+      "automatic group sync"
     ]
   }
 }

@@ -19,6 +19,7 @@ import { ChangeControl } from "./pages/Planned";
 import DeviceIntake from "./pages/DeviceIntake";
 import GuidedOnboarding from "./pages/GuidedOnboarding";
 import DeviceConfig from "./pages/DeviceConfig";
+import ConfigTemplates from "./pages/ConfigTemplates";
 import DiscoveryRanges from "./pages/DiscoveryRanges";
 import { Printers, PrinterDetails } from "./pages/Printers";
 import DeviceDetails from "./pages/DeviceDetails";
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="onboarding" element={<GuidedOnboarding />} />
         <Route path="onboarding/manual" element={<DeviceIntake />} />
         <Route path="devices/:id/config" element={<DeviceConfig />} />
+        <Route path="config-templates" element={<ConfigTemplates />} />
         <Route path="discovery" element={<DiscoveryRanges />} />
         <Route path="printers" element={<Printers />} />
         <Route path="printers/:id" element={<PrinterDetails />} />

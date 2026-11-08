@@ -10,7 +10,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Inventory", items: [{ to: "/onboarding", label: "Add device", roles: ["admin"] }, { to: "/discovery", label: "Discovery ranges", roles: ["admin"] }, { to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches" }, { to: "/clients", label: "Clients" }] },
   { title: "Printers", items: [{ to: "/printers", label: "Printer intelligence", roles: ["admin"] }] },
   { title: "Observability", items: [{ to: "/experience", label: "Experience" }, { to: "/alerts", label: "Alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
-  { title: "Configuration", items: [{ to: "/config", label: "Configuration", tag: "READ ONLY" }, { to: "/changes", label: "Change control", tag: "LOCKED" }] },
+  { title: "Configuration", items: [{ to: "/config", label: "Configuration", tag: "READ ONLY" }, { to: "/config-templates", label: "Config inheritance", roles: ["admin"], tag: "DRAFTS" }, { to: "/changes", label: "Change control", tag: "LOCKED" }] },
   { title: "Recovery", items: [{ to: "/recovery", label: "Backups & recovery", roles: ["admin"], tag: "PLANNED" }] },
   { title: "Intelligence", items: [{ to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI learning", tag: "RULES" }] },
   { title: "Operations", items: [{ to: "/firmware", label: "Firmware & certificates" }] },
