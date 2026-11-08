@@ -178,7 +178,8 @@ def test_import_actual_ap_and_switch_observations(page):
     page.get_by_text("REAL · MANUAL").first.wait_for(timeout=15000)
     page.get_by_role("link", name="View details").first.click()
     page.get_by_text("Latest recorded readings").wait_for(timeout=15000)
-    page.get_by_text("Connected clients").wait_for(timeout=15000)
+    # The metric appears in both the summary card and history table.
+    page.get_by_text("Connected clients").first.wait_for(timeout=15000)
     page.get_by_text("CI-REAL-AP-535").wait_for(timeout=15000)
     page.get_by_text("10.101.7.15").wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "12_real_ap_detail.png"), full_page=True)
