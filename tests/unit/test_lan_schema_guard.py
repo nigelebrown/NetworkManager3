@@ -22,7 +22,7 @@ def plan(tmp_path: Path, current: dict, release: dict) -> subprocess.CompletedPr
                           input=py, text=True, capture_output=True, timeout=5)
 
 
-@pytest.mark.parametrize("mgmt,result", [("0004", "MIGRATE"), ("0005", "CURRENT")])
+@pytest.mark.parametrize("mgmt,result", [("0004", "MIGRATE"), ("0005", "MIGRATE"), ("0006", "CURRENT")])
 def test_expected_or_previous_schema_accepted(tmp_path, mgmt, result):
     manifest = json.loads((ROOT / "release.json").read_text())
     output = plan(tmp_path, {"management": mgmt, "telemetry": "t001"}, manifest)
@@ -55,7 +55,7 @@ def test_one_click_lan_script_runs_schema_gate_before_binding_api():
     assert lan.index('bash "$ROOT/scripts/ensure-lan-schema.sh"') < lan.index('setvar INM_WEB_BIND "$SERVER_IP"')
     assert 'build migrate web' in lan
     assert 'run -T --rm --no-deps migrate' in schema
-    assert 'bash "$ROOT/deployment/centos9/backup.sh" --label pre-lan-schema-0005' in schema
+    assert 'bash "$ROOT/deployment/centos9/backup.sh" --label pre-lan-schema-upgrade' in schema
     assert 'sha256sum -c' in schema
     assert schema.index('backup.sh" --label') < schema.index('run -T --rm --no-deps migrate \\')
     assert "down -v" not in lan + schema
