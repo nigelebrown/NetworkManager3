@@ -93,14 +93,27 @@ setvar INM_GIT_COMMIT "$(git -C "$ROOT" rev-parse HEAD)"
 chmod 0600 "$ENV"
 # Bring the updated API guard and Nginx ACL into the runtime. No change to
 # the admin password or PostgreSQL/TimescaleDB volume contents.
-say "Building current Git API/web images, without changing data volumes."
+say "Building current Git backend and web images without changing data volumes."
 docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
   -f "$ROOT/compose.yaml" config --quiet
+# The API service has image: but no build: declaration. The one-shot 'migrate'
+# service owns the backend Dockerfile and produces the SAME inm/backend:<version>
+# image consumed by API and worker. 'build api web' silently builds web only,
+# leaving API running an old image that rejects LAN mode.
 docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
-  -f "$ROOT/compose.yaml" build api web
-say "Recreating API and HTTPS web containers; all other INM services remain running."
+  -f "$ROOT/compose.yaml" build migrate web
+say "Recreating API and HTTPS web containers; other services and all data volumes remain intact."
+# Start API separately. The web service has a service_healthy dependency on
+# API; starting both at once can report only a misleading dependency error.
+if ! docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
+  -f "$ROOT/compose.yaml" up -d --no-deps --force-recreate --wait --wait-timeout 120 api; then
+  echo "[inm-lan] API did not become healthy. Last 80 lines (credentials should not appear):" >&2
+  docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
+    -f "$ROOT/compose.yaml" logs --no-color --tail 80 api >&2 || true
+  die "API startup failed: see the redacted logs above; rollback will restore the previous binding."
+fi
 docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
-  -f "$ROOT/compose.yaml" up -d --no-deps --force-recreate --wait --wait-timeout 120 api web
+  -f "$ROOT/compose.yaml" up -d --no-deps --force-recreate --wait --wait-timeout 120 web
 # Test Nginx from inside its container. Host-to-published-port NAT often
 # changes the source to a Docker bridge gateway, which the LAN CIDR ACL
 # correctly blocks even though remote LAN clients are permitted.
