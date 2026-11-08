@@ -42,11 +42,29 @@ export default function DeviceIntake() {
   const physicalSites = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
   const real = useMemo(() => (devices.data ?? []).filter((d) => d.source_type === "REAL"), [devices.data]);
 
-  const editDevice = (device: Device) => {
+  const editDevice = async (device: Device) => {
+    // A newly imported physical site may not yet be in the cached /v1/sites list.
+    // Fetch it before filling the required location rather than blanking the site
+    // or accidentally assigning a different location on the next Save.
+    let siteName = physicalSites.data?.sites.find(site => site.id === device.site_id)?.name;
+    if (!siteName && device.site_id) {
+      try {
+        const fresh = await v1.physicalSites();
+        siteName = fresh.sites.find(site => site.id === device.site_id)?.name;
+        physicalSites.reload();
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : "Unable to fetch existing physical site");
+        return;
+      }
+    }
+    if (!siteName) {
+      setError("This device has no verified physical site. Set its location before editing.");
+      return;
+    }
     setFamily(device.family);
     setMethod("manual");
     setForm({
-      site_name: physicalSites.data?.sites.find(site => site.id === device.site_id)?.name ?? "",
+      site_name: siteName,
       hostname: device.hostname ?? "",
       serial_number: device.serial_number,
       model: device.model ?? "",
