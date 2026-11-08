@@ -195,9 +195,15 @@ services:
       INM_NATS_PASSWORD: ${INM_NATS_API_PASSWORD:?}
       SIMS_ADMIN_USERNAME: ${INM_ADMIN_USERNAME:-admin}
       SIMS_ADMIN_PASSWORD: ${SIMS_ADMIN_PASSWORD:?}
+      SIMS_DEMO_SIMPLE_LOGIN: ${INM_DEMO_SIMPLE_LOGIN:-false}
+      SIMS_FORCE_INITIAL_PASSWORD_CHANGE: ${INM_FORCE_PASSWORD_CHANGE:-true}
+      INM_WEB_BIND: ${INM_WEB_BIND:-127.0.0.1}
+      INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       SIMS_CORS_ORIGINS: ""
     volumes: ["app-data:/data"]
-    networks: [frontend, backend, ai]
+    # Egress available only to API for opt-in, CIDR-allowlisted, read-only probes.
+    # Worker remains entirely on its internal Docker network with no external route.
+    networks: [frontend, backend, ai, edge]
     depends_on:
       migrate: { condition: service_completed_successfully }
       ai: { condition: service_healthy }
