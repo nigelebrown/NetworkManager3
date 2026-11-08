@@ -120,7 +120,7 @@ jobs:
           curl --fail --silent --show-error --insecure https://127.0.0.1:8443/healthz
           docker compose --env-file .env.ci --project-name inm -f compose.yaml exec -T api \
             python -m backend.cli verify --api-url http://127.0.0.1:8000 --syslog-host alloy --syslog-port 1514
-      - name: Verify PostgreSQL 0004-to-0005 migration preserves existing site data
+      - name: Verify PostgreSQL 0004-to-release-head migration preserves existing site data
         run: |
           # Run against a separate disposable database, never the main demo
           # database used by the browser tests.
@@ -142,19 +142,23 @@ jobs:
               cfg.attributes["connection"] = conn
               command.upgrade(cfg, "0004")
               conn.execute(text("INSERT INTO sites (name, vc_port, simulated, enabled, created_at) "
-                                "VALUES ('Persist-through-0005', 4343, FALSE, TRUE, '2026-01-01')"))
+                                "VALUES ('Persist-through-release-head', 4343, FALSE, TRUE, '2026-01-01')"))
           print("PASS: created PostgreSQL 0004 with an existing site")
           PY
           docker compose --env-file .env.ci --project-name inm -f compose.yaml \
             run --rm --no-deps -T -e SIMS_DATABASE_URL="$TEST_MIGRATION_URL" migrate
           docker compose --env-file .env.ci --project-name inm -f compose.yaml \
             exec -T management-db psql -U inm_app -d inm_migration_test -Atqc \
-            "SELECT version_num FROM alembic_version" | grep -qx 0005
+            "SELECT version_num FROM alembic_version" | grep -qx "$(python3 -c 'import json;print(json.load(open("release.json"))["management_schema_head"])')"
           docker compose --env-file .env.ci --project-name inm -f compose.yaml \
             exec -T management-db psql -U inm_app -d inm_migration_test -Atqc \
-            "SELECT name FROM sites WHERE name = 'Persist-through-0005'" \
-            | grep -qx Persist-through-0005
-          echo "PASS: PostgreSQL 0004-to-0005 migration preserved existing site data"
+            "SELECT name FROM sites WHERE name = 'Persist-through-release-head'" \
+            | grep -qx Persist-through-release-head
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml \
+            exec -T management-db psql -U inm_app -d inm_migration_test -Atqc \
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('onboarding_credentials','onboarding_discoveries','onboarding_config_snapshots','onboarding_config_drafts','onboarding_device_credentials')" \
+            | grep -qx 5
+          echo "PASS: PostgreSQL 0004-to-release-head migration preserves existing sites and creates onboarding tables"
           unset DB_PASS TEST_MIGRATION_URL
       - name: Run actual browser navigation, WebSocket and dashboard workflows
         env:
