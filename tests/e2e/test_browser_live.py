@@ -244,3 +244,28 @@ def test_printer_intelligence_workflow(page):
     page.get_by_role("button", name="Analyse now").click()
     page.get_by_text("Rule-based recommendations").wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "15_printer_rule_analysis.png"), full_page=True)
+
+
+def test_admin_can_bulk_import_and_edit_existing_real_network_devices(page):
+    """Use the actual CSV file input, then edit a device on the new onboarding screen."""
+    page.click("nav >> a[href='/onboarding']")
+    page.get_by_text("Add a network device").wait_for(timeout=15000)
+    csv = (
+        "family,site_name,hostname,serial_number,model,management_ip,firmware,status\\n"
+        "access_point,CI Bulk Site,BULK-AP-535,CI-BULK-AP-001,AP-535,10.101.10.15,8.10.0.21,unknown\\n"
+        "switch,CI Bulk Site,BULK-CX-6200,CI-BULK-CX-002,CX 6200F,10.103.10.21,10.14,unknown\\n"
+    )
+    page.locator("input[type=file]").set_input_files({
+        "name": "ci-bulk-devices.csv", "mimeType": "text/csv", "buffer": csv.encode("utf-8")
+    })
+    page.get_by_text("Review 2 device(s) before import").wait_for(timeout=15000)
+    page.get_by_role("button", name="Confirm and import 2 device(s)").click()
+    page.get_by_text("2 new device(s), 0 updated").wait_for(timeout=15000)
+    page.get_by_text("BULK-AP-535").last.wait_for(timeout=15000)
+    # Editing an existing serial updates the inventory row, not an AP's configuration.
+    row = page.locator("tr", has=page.get_by_text("CI-BULK-AP-001")).last
+    row.get_by_role("button", name="Edit details").click()
+    page.get_by_label("Device name").fill("BULK-AP-535-RENAMED")
+    page.get_by_role("button", name="Save real device and readings").click()
+    page.get_by_text("Real device snapshot saved: BULK-AP-535-RENAMED").wait_for(timeout=15000)
+    page.screenshot(path=str(EVID / "16_bulk_import_edit_network_devices.png"), full_page=True)
