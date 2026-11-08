@@ -205,10 +205,10 @@ def _probe_cx(body: QuickProbe) -> dict:
             ports = iface.json()
             if not isinstance(ports, dict):
                 ports = {}
-            ports_up = sum(1 for x in ports.values() if isinstance(x, dict) and
-                           str(x.get("oper_state", "")).lower() == "up")
             physical = [x for name, x in ports.items() if
                         isinstance(x, dict) and str(name).startswith("1/")]
+            selected = physical if physical else [x for x in ports.values() if isinstance(x, dict)]
+            ports_up = sum(1 for x in selected if str(x.get("oper_state", "")).lower() == "up")
             result = {"hostname": data.get("hostname") or body.hostname,
                       "serial_number": data.get("serial_number") or body.serial_number,
                       "model": data.get("platform_name") or body.model,
@@ -243,6 +243,7 @@ def probe_device(body: QuickProbe, request: Request, db: Session = Depends(get_d
         audit(db, "device_probe_failed", username=admin.username,
               target=f"{body.family}:{body.management_ip}",
               detail=f"{type(exc).__name__}; read-only probe failed", request=request, success=False)
+        db.commit()  # retain the failure audit when returning HTTP 502
         raise HTTPException(502, f"Read-only device probe failed ({type(exc).__name__}). Confirm REST enablement, TLS trust and reachability.")
     return record_observation(db, out, admin.username, request,
                               evidence="PROBED", notes=observation.get("notes", ""))
