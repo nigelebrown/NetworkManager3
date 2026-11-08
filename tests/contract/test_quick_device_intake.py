@@ -117,3 +117,44 @@ def test_demo_simple_login_rejected_outside_localhost_locked_demo(app_env, monke
     monkeypatch.setenv("INM_WEB_BIND", "0.0.0.0")
     get_settings.cache_clear()
     assert get_settings().validate_profile()
+
+
+def test_failed_aruba_instant_auth_returns_safe_502_and_persists_audit(client, admin, monkeypatch):
+    from backend.api import quick_devices
+    from backend.aruba.errors import ArubaAuthError
+    from backend.database.session import session_scope
+    from backend.database.models import AuditLog
+    from sqlalchemy import select
+
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.101.7.15/32")
+    probe = {
+        "family": "access_point", "site_name": "HQ", "hostname": "AP535",
+        "serial_number": "AP-CERT-TEST", "model": "AP-535",
+        "management_ip": "10.101.7.15", "username": "readonly",
+        "password": "top-secret-device-password",
+    }
+    with patch.object(quick_devices, "_probe_ap", side_effect=ArubaAuthError("upstream text with secret")):
+        r = client.post("/api/v1/quick-devices/probe", headers=admin, json=probe)
+    assert r.status_code == 502, r.text
+    assert "top-secret" not in r.text
+    with session_scope() as db:
+        failures = list(db.scalars(select(AuditLog).where(AuditLog.action == "device_probe_failed")))
+        assert len(failures) >= 1
+        assert failures[-1].success is False
+        assert "top-secret" not in (failures[-1].detail or "")
+
+
+def test_failed_cx_rest_connection_returns_502_without_leaking_credentials(client, admin, monkeypatch):
+    from backend.api import quick_devices
+    import httpx
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.7.21/32")
+    probe = {
+        "family": "switch", "site_name": "HQ", "hostname": "sw1",
+        "serial_number": "CX-ERR", "model": "CX 6100",
+        "management_ip": "10.103.7.21", "username": "readonly",
+        "password": "secret-not-in-response",
+    }
+    with patch.object(quick_devices, "_probe_cx", side_effect=httpx.ConnectError("device unavailable")):
+        response = client.post("/api/v1/quick-devices/probe", headers=admin, json=probe)
+    assert response.status_code == 502
+    assert "secret-not-in-response" not in response.text
