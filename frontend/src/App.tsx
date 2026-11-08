@@ -15,7 +15,8 @@ import AiLearning from "./pages/AiLearning";
 import Audit from "./pages/Audit";
 import ChangePassword from "./pages/ChangePassword";
 import Logs from "./pages/Logs";
-import { ChangeControl, Onboarding } from "./pages/Planned";
+import { ChangeControl } from "./pages/Planned";
+import DeviceIntake from "./pages/DeviceIntake";
 import Recovery from "./pages/Recovery";
 import Switches from "./pages/Switches";
 import SystemHealth from "./pages/SystemHealth";
@@ -57,7 +58,7 @@ export default function App() {
         <Route path="users" element={<Users />} />
         <Route path="recovery" element={<Recovery />} />
         <Route path="ai-learning" element={<AiLearning />} />
-        <Route path="onboarding" element={<Onboarding />} />
+        <Route path="onboarding" element={<DeviceIntake />} />
         <Route path="changes" element={<ChangeControl />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
