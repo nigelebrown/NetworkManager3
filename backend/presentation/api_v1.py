@@ -91,7 +91,7 @@ def features(_: User = Depends(get_current_user)):
         {"key": "dashboard", "status": live_or_demo}, {"key": "aps", "status": live_or_demo},
         {"key": "clients", "status": live_or_demo}, {"key": "sites", "status": live_or_demo},
         {"key": "experience", "status": live_or_demo}, {"key": "alerts", "status": live_or_demo},
-        {"key": "switches", "status": "DEMO", "phase_live": 2},
+        {"key": "switches", "status": "DEMO_PLUS_REAL_INVENTORY", "note": "REAL device metrics labelled MANUAL or PROBED"},
         {"key": "configuration", "status": "READ_PLAN_ONLY", "phase_write": 6},
         {"key": "firmware", "status": "READ_PLAN_ONLY", "phase_write": 6},
         {"key": "assistant", "status": "ADVISORY_READ_ONLY"},
@@ -99,7 +99,7 @@ def features(_: User = Depends(get_current_user)):
         {"key": "audit", "status": "LIVE"}, {"key": "system_health", "status": "LIVE"},
         {"key": "recovery", "status": "PLANNED", "phase": 5, "note": "legacy backups are NOT RESTORABLE"},
         {"key": "ai_learning", "status": "RULES_ONLY", "phase_ml": 8},
-        {"key": "onboarding", "status": "PLANNED", "phase": 2},
+        {"key": "onboarding", "status": "MANUAL_AND_READ_ONLY", "note": "Import AP/switch data now; live REST read only with approved management CIDRs"},
         {"key": "change_control", "status": "PLANNED", "phase": 6},
     ]}
 
@@ -186,7 +186,12 @@ def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$
     q = select(InmDevice).order_by(InmDevice.family, InmDevice.hostname)
     if family:
         q = q.where(InmDevice.family == family)
-    devs = [d for d in db.scalars(q) if d.legacy_site_id in ids]
+    # Manual/REST-read REAL inventory belongs to a physical INM site, not a
+    # legacy Instant cluster. Show it to administrators and global-scope viewers,
+    # but never bypass an explicitly granted legacy site scope.
+    global_scope = get_scope() is None
+    devs = [d for d in db.scalars(q) if d.legacy_site_id in ids or
+            (global_scope and d.source_type == "REAL" and d.legacy_site_id is None)]
     caps: dict[str, list] = {}
     for c in db.scalars(select(DeviceCapability).where(DeviceCapability.device_id.in_([d.id for d in devs]))):
         caps.setdefault(c.device_id, []).append(c)
@@ -195,7 +200,9 @@ def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$
 
 def _visible_device(db: Session, device_id: str) -> InmDevice:
     d = db.get(InmDevice, device_id)
-    if not d or d.legacy_site_id not in _visible_legacy_ids(db):
+    visible = d and (d.legacy_site_id in _visible_legacy_ids(db) or
+                     (get_scope() is None and d.source_type == "REAL" and d.legacy_site_id is None))
+    if not visible:
         raise HTTPException(404, "Device not found")
     return d
 
