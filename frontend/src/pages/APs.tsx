@@ -1,13 +1,16 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import SiteFilter from "../components/SiteFilter";
 import { Badge, Card, ErrorNote, SimBadge, fmtUptime, val } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PlanDialog from "../components/PlanDialog";
 import { api, configApi, getSession, type AP, type Change, type MoveResult } from "../services/api";
+import { v1 } from "../services/inm";
 
 export default function APs() {
   const [site, setSite] = useState<number | undefined>();
+  const imported = useLoad(() => v1.devices("access_point"), [], 30000, ["devices"]);
   const { data, error, reload } = useLoad(() => api.aps(site), [site]);
   const isAdmin = getSession()?.role === "admin";
   const [toRemove, setToRemove] = useState<AP | null>(null);
@@ -38,7 +41,18 @@ export default function APs() {
   };
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h1 className="text-lg font-semibold">Access points</h1><SiteFilter value={site} onChange={setSite} /></div>
+      <div className="flex items-center justify-between gap-3"><div><h1 className="text-lg font-semibold">Access points</h1><Link className="text-xs text-sky-400 underline" to="/onboarding">Add a real access point</Link></div><SiteFilter value={site} onChange={setSite} /></div>
+      <Card title="Imported real access points">
+        <div className="overflow-x-auto"><table className="w-full min-w-[660px] text-left text-sm">
+          <thead><tr>{["Name", "Model", "Serial", "Firmware", "Status", "Source"].map((h) => <th className="px-2 py-2 text-slate-400" key={h}>{h}</th>)}</tr></thead>
+          <tbody>{imported.data?.filter((d) => d.source_type === "REAL").map((d) => <tr className="border-t border-slate-800" key={d.id}>
+            <td className="px-2 py-2">{d.hostname}</td><td className="px-2 py-2">{d.model}</td><td className="px-2 py-2 font-mono text-xs">{d.serial_number}</td>
+            <td className="px-2 py-2">{d.firmware ?? "—"}</td><td className="px-2 py-2"><Badge value={d.status} /></td>
+            <td className="px-2 py-2 text-emerald-300">{d.adapter === "manual_snapshot" ? "REAL · MANUAL" : "REAL · REST READ"}</td>
+          </tr>)}</tbody>
+        </table></div>
+        {!imported.data?.some((d) => d.source_type === "REAL") && <p className="text-sm text-slate-500">No real APs added yet.</p>}
+      </Card>
       {toRemove && (
         <ConfirmDialog title={`Remove access point "${toRemove.name}"?`} confirmLabel="Remove AP" onCancel={() => setToRemove(null)} onConfirm={() => remove(toRemove.id)}>
           <p>This deletes the AP record, its history and its alerts from SIMS.</p>
