@@ -80,7 +80,7 @@ def _login(pg):
 
 def test_dashboard_parity_and_demo_labels(page):
     page.wait_for_selector("[data-testid=live-indicator][data-state=live]", timeout=15000)
-    page.get_by_text("all data shown is SIMULATED").wait_for(timeout=10000)
+    page.get_by_text("simulated fixtures are marked DEMO").wait_for(timeout=10000)
     page.get_by_text("Device writes are LOCKED").wait_for(timeout=10000)
     page.screenshot(path=str(EVID / "02_dashboard_live.png"), full_page=True)
     for path, marker in [("/aps", "Access points"), ("/clients", "Clients"), ("/sites", "Sites"), ("/alerts", "Alerts"),
