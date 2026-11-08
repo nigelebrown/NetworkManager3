@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, printers, discovery_ranges, onboarding_workflow
+from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, printers, discovery_ranges, onboarding_workflow, phase4_monitoring
 from .config import ROOT_DIR, get_settings
 from .database.models import User
 from .database.session import assert_schema_current, create_schema, init_engine, session_scope
@@ -204,7 +204,7 @@ def create_app() -> FastAPI:
         resp.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else resp.headers.get("Cache-Control", "no-cache")
         return resp
 
-    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, printers.router, discovery_ranges.router, onboarding_workflow.router):
+    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, printers.router, discovery_ranges.router, onboarding_workflow.router, phase4_monitoring.router):
         app.include_router(r)
     app.include_router(api_v1.router)
     app.include_router(ws.router)

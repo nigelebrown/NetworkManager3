@@ -9,7 +9,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Overview", items: [{ to: "/", label: "Dashboard" }, { to: "/system", label: "System health", roles: ["admin", "auditor"] }] },
   { title: "Inventory", items: [{ to: "/onboarding", label: "Add device", roles: ["admin"] }, { to: "/discovery", label: "Discovery ranges", roles: ["admin"] }, { to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches" }, { to: "/clients", label: "Clients" }] },
   { title: "Printers", items: [{ to: "/printers", label: "Printer intelligence", roles: ["admin"] }] },
-  { title: "Observability", items: [{ to: "/experience", label: "Experience" }, { to: "/alerts", label: "Alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
+  { title: "Observability", items: [{ to: "/experience", label: "Experience" }, { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" }, { to: "/alerts", label: "Alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
   { title: "Configuration", items: [{ to: "/config", label: "Configuration", tag: "READ ONLY" }, { to: "/changes", label: "Change control", tag: "LOCKED" }] },
   { title: "Recovery", items: [{ to: "/recovery", label: "Backups & recovery", roles: ["admin"], tag: "PLANNED" }] },
   { title: "Intelligence", items: [{ to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI learning", tag: "RULES" }] },

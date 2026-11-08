@@ -99,6 +99,7 @@ def features(_: User = Depends(get_current_user)):
         {"key": "audit", "status": "LIVE"}, {"key": "system_health", "status": "LIVE"},
         {"key": "recovery", "status": "PLANNED", "phase": 5, "note": "legacy backups are NOT RESTORABLE"},
         {"key": "ai_learning", "status": "RULES_ONLY", "phase_ml": 8},
+        {"key": "phase4_insights", "status": "RECORDED_DATA_RULES", "note": "No scheduled device polling, ML or hardware writes"},
         {"key": "onboarding", "status": "MANUAL_AND_READ_ONLY", "note": "Import AP/switch data now; live REST read only with approved management CIDRs"},
         {"key": "change_control", "status": "PLANNED", "phase": 6},
     ]}

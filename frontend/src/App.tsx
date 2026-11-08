@@ -19,6 +19,7 @@ import { ChangeControl } from "./pages/Planned";
 import DeviceIntake from "./pages/DeviceIntake";
 import GuidedOnboarding from "./pages/GuidedOnboarding";
 import DeviceConfig from "./pages/DeviceConfig";
+import Phase4Insights from "./pages/Phase4Insights";
 import DiscoveryRanges from "./pages/DiscoveryRanges";
 import { Printers, PrinterDetails } from "./pages/Printers";
 import DeviceDetails from "./pages/DeviceDetails";
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="users" element={<Users />} />
         <Route path="recovery" element={<Recovery />} />
         <Route path="ai-learning" element={<AiLearning />} />
+        <Route path="phase4-insights" element={<Phase4Insights />} />
         <Route path="onboarding" element={<GuidedOnboarding />} />
         <Route path="onboarding/manual" element={<DeviceIntake />} />
         <Route path="devices/:id/config" element={<DeviceConfig />} />

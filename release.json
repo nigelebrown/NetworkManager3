@@ -53,5 +53,21 @@
       "range preview is not unrestricted network scan",
       "real model validation required"
     ]
+  },
+  "phase4_monitoring": {
+    "status": "RECORDED_TELEMETRY_RULES_ONLY",
+    "device_writes": "LOCKED",
+    "features": [
+      "source-qualified telemetry overview",
+      "sustained utilization rules",
+      "analyze now with deduplication",
+      "advisory acknowledgement and dismissal"
+    ],
+    "not_yet_certified": [
+      "scheduled Aruba device polling",
+      "trained ML model",
+      "autonomous RF optimization",
+      "configuration apply"
+    ]
   }
 }
