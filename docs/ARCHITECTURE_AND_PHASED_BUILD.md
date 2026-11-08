@@ -61,7 +61,7 @@ Every release must provide and test `doctor.sh`, `install.sh --mode demo`, `veri
 
 Installation must run a state machine **preflight → prepare → deploy → verify → receipt** and return nonzero on failure. Updates must take a verified backup first, refuse unsupported/downgrade schemas, build or use approved pinned images, verify all services, and record both success and failure.
 
-The Phase 1 source archive has scripts in these locations. Their mere presence is insufficient: see the independent clean-CentOS release gate and unresolved image-digest enforcement note in `PHASE1_REVIEW_AND_RELEASE_GATE.md`.
+The application source and deployment scripts are committed to GitHub. The **only supported server entrypoint** is `bash scripts/inm.sh install` for initial installation and `bash scripts/inm.sh update` for approved Git-tag updates, with `doctor`, `verify`, `status`, `backup`, and `rollback` subcommands. No Windows PC or transferred ZIP is involved. Their presence alone is insufficient: see the clean-CentOS release gate and unresolved image-digest enforcement note in `PHASE1_REVIEW_AND_RELEASE_GATE.md`.
 
 ## 7. Acceptance evidence format
 
