@@ -16,6 +16,7 @@ export default function DeviceConfig() {
   const { id = "" } = useParams<{ id: string }>();
   const device = useLoad(() => v1.getDevice(id), [id], 30000, ["devices"]);
   const config = useLoad(() => onboardingApi.deviceConfig(id), [id], 30000, ["device-config"]);
+  const acceptance = useLoad(() => onboardingApi.acceptance(id), [id], 30000, ["device-config"]);
   const profiles = useLoad(onboardingApi.credentials, [], 30000, ["onboarding-credentials"]);
   const [credentialId, setCredentialId] = useState("");
   const [vlanText, setVlanText] = useState("");
@@ -44,7 +45,7 @@ export default function DeviceConfig() {
 
   const perform = async (fn: () => Promise<unknown>, result: string) => {
     setBusy(true); setError(null); setMessage(null);
-    try { await fn(); config.reload(); setMessage(result); }
+    try { await fn(); config.reload(); acceptance.reload(); setMessage(result); }
     catch (e) { setError(e instanceof Error ? e.message : "Operation failed"); }
     finally { setBusy(false); }
   };
@@ -88,6 +89,37 @@ export default function DeviceConfig() {
     </p>
     <ErrorNote error={error ?? config.error ?? device.error} />
     {message && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-200">{message}</p>}
+    <Card title="Phase 2 — device acceptance evidence">
+      <p className="text-sm text-slate-300">
+        This checks what was actually recorded. It does not contact the network or certify physical equipment.
+      </p>
+      <ErrorNote error={acceptance.error} />
+      {acceptance.data && <>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
+          <span>Stage: <b>{acceptance.data.stage.replaceAll("_", " ")}</b></span>
+          <span>Model: <b>{acceptance.data.recognized_pilot_model ?? "Not in certified pilot model list"}</b></span>
+          <span>Identity: <b>{acceptance.data.inventory_evidence.replaceAll("_", " ")}</b></span>
+          <span>Credential: <b>{acceptance.data.credential.enabled ? "Assigned and enabled" : "Missing or disabled"}</b></span>
+        </div>
+        <p className="mt-2 text-xs text-amber-300">Physical-device certified: NO · Device writes: {acceptance.data.device_writes}</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {acceptance.data.field_checks.map(field => <div key={field.field}
+            className="rounded border border-slate-700 p-3 text-xs">
+            <div className="font-semibold">{field.field.replaceAll("_", " ")}:
+              <span className={field.status === "OBSERVED" ? "ml-2 text-emerald-300" : "ml-2 text-amber-300"}>
+                {field.status.replaceAll("_", " ")}
+              </span>
+            </div>
+            <p className="mt-1 text-slate-400">{field.detail}</p>
+          </div>)}
+        </div>
+        <details className="mt-3 text-sm"><summary className="cursor-pointer">Remaining acceptance actions ({acceptance.data.remaining_actions.length})</summary>
+          <ul className="ml-5 mt-2 list-disc space-y-1 text-slate-300">
+            {acceptance.data.remaining_actions.map((action, i) => <li key={i}>{action}</li>)}
+          </ul>
+        </details>
+      </>}
+    </Card>
     <Card title="1. Capture or refresh the existing configuration">
       <label className="block text-sm">Credential profile (shared across devices)
         <select className={input} value={credentialId} onChange={e => setCredentialId(e.target.value)}>

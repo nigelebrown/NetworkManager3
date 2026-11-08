@@ -17,6 +17,7 @@ const secondary = "rounded border border-slate-700 px-4 py-2 text-sm hover:bg-sl
 export default function GuidedOnboarding() {
   const allowed = getSession()?.role === "admin";
   const profiles = useLoad(onboardingApi.credentials, [], 30000, ["onboarding-credentials"]);
+  const fleetAcceptance = useLoad(onboardingApi.fleetAcceptance, [], 60000, ["devices", "device-config"]);
   const [step, setStep] = useState(0);
   const [family, setFamily] = useState<Family>("access_point");
   const [site, setSite] = useState("");
@@ -134,6 +135,22 @@ export default function GuidedOnboarding() {
         </div>)}
     </div>
     <ErrorNote error={error ?? profiles.error} />
+    <Card title="Phase 2 pilot — read-only equipment acceptance">
+      <p className="text-sm text-slate-300">
+        {fleetAcceptance.data?.device_count ?? 0} registered real Aruba device(s) in the latest fleet view.
+        Device readiness is evidence-based; no device is declared hardware-certified by the application.
+      </p>
+      <p className="mt-1 text-xs text-amber-300">
+        Hardware certification: 0 verified by application · Actual device writes: LOCKED
+      </p>
+      {fleetAcceptance.data && <p className="mt-2 text-xs text-slate-400">
+        Manual: {fleetAcceptance.data.stages.MANUAL_REGISTERED ?? 0} ·
+        REST discovered: {fleetAcceptance.data.stages.REST_DISCOVERED ?? 0} ·
+        Baseline imported: {fleetAcceptance.data.stages.BASELINE_CAPTURED ?? 0} ·
+        Drafted: {fleetAcceptance.data.stages.DRAFTED ?? 0}
+      </p>}
+    </Card>
+
     {notice && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-200">{notice}</p>}
     {step === 0 && <Card title="1. Select the device family and its physical location">
       <div className="grid gap-3 sm:grid-cols-2">
