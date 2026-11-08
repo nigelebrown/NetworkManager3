@@ -47,8 +47,10 @@ def _bootstrap_admin() -> None:
     with session_scope() as db:
         if db.scalar(select(User).limit(1)):
             return
-        if s.admin_password == "CHANGE_ME_MIN_12_CHARS" or len(s.admin_password) < 12:
-            raise RuntimeError("Set SIMS_ADMIN_PASSWORD (12+ characters) in .env before first start.")
+        if s.admin_password == "CHANGE_ME_MIN_12_CHARS" or (
+            len(s.admin_password) < 12 and not s.demo_simple_login
+        ):
+            raise RuntimeError("Set a 12+ character administrator password (weak passwords require restricted demo-only mode).")
         db.add(User(username=s.admin_username, password_hash=hash_password(s.admin_password), role="admin",
                     must_change_password=s.force_initial_password_change))
         db.flush()
