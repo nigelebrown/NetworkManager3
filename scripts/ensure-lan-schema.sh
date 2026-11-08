@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Safe one-time 0004 -> 0005 additive schema upgrade for an existing INM demo.
+# Safe expand-only 0004/0005 -> 0006 schema upgrade for existing INM demos.
 # Called by enable-lan-demo.sh after building the current backend image.
 set -Eeuo pipefail
 umask 077
@@ -25,7 +25,7 @@ try:
     if r.get('device_writes')!='LOCKED' or cur.get('telemetry')!=r['telemetry_schema_head']:
         raise ValueError('unexpected telemetry schema or device-write policy')
     if cur.get('management')==r['management_schema_head']: print('CURRENT')
-    elif (cur.get('management')=='0004' and r['management_schema_head']=='0005'
+    elif (cur.get('management') in ('0004','0005') and r['management_schema_head']=='0006'
           and r.get('migrations_expand_only') is True): print('MIGRATE')
     else: raise ValueError('unsupported management revision')
 except (ValueError,KeyError,TypeError,OSError) as e:
@@ -33,9 +33,9 @@ except (ValueError,KeyError,TypeError,OSError) as e:
 PY
 )" || fail "Unknown schema. Nothing was migrated."
 if [[ "$decision" == MIGRATE ]]; then
-  echo "[inm-schema] Creating encrypted backup before 0004 -> 0005 migration."
+  echo "[inm-schema] Creating encrypted backup before management schema migration."
   tmp="$(mktemp /etc/inm/.schema-backup.XXXXXXXX)"
-  if ! bash "$ROOT/deployment/centos9/backup.sh" --label pre-lan-schema-0005 >"$tmp" 2>&1; then
+  if ! bash "$ROOT/deployment/centos9/backup.sh" --label pre-lan-schema-upgrade >"$tmp" 2>&1; then
     cat "$tmp" >&2; rm -f "$tmp"; fail "Encrypted backup failed; no migration attempted."
   fi
   archive="$(tail -n 1 "$tmp")"
