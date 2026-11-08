@@ -4,6 +4,7 @@ import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { v1, type Device } from "../services/inm";
 import { getSession } from "../services/api";
+import BulkDeviceImport from "../components/BulkDeviceImport";
 
 type Family = "access_point" | "switch";
 type Method = "manual" | "probe";
@@ -32,13 +33,33 @@ export default function DeviceIntake() {
   const [method, setMethod] = useState<Method>("manual");
   const [form, setForm] = useState(empty);
   const [numbers, setNumbers] = useState<Record<string, string>>({});
-  const [status, setStatus] = useState<"up" | "down" | "unknown">("up");
+  const [status, setStatus] = useState<"up" | "down" | "unknown">("unknown");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const canAdd = getSession()?.role === "admin";
   const devices = useLoad(() => v1.devices(), [], 30000, ["devices"]);
+  const physicalSites = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
   const real = useMemo(() => (devices.data ?? []).filter((d) => d.source_type === "REAL"), [devices.data]);
+
+  const editDevice = (device: Device) => {
+    setFamily(device.family);
+    setMethod("manual");
+    setForm({
+      site_name: physicalSites.data?.sites.find(site => site.id === device.site_id)?.name ?? "",
+      hostname: device.hostname ?? "",
+      serial_number: device.serial_number,
+      model: device.model ?? "",
+      firmware: device.firmware ?? "",
+      management_ip: device.management_addresses?.[0] ?? "",
+      username: "", password: "",
+    });
+    setStatus(["up", "down"].includes(device.status) ? device.status as "up" | "down" : "unknown");
+    setNumbers({});
+    setError(null);
+    setSuccess("Editing existing real device. Saving will update its inventory details and mark this observation as MANUAL.");
+    document.getElementById("single-device-form")?.scrollIntoView({ behavior: "smooth" });
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -107,7 +128,7 @@ export default function DeviceIntake() {
         </p>
       </Card>}
       {canAdd && <Card title="2. Device identity and location">
-        <form onSubmit={submit} className="space-y-4">
+        <form id="single-device-form" onSubmit={submit} className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {field("site_name", "Site / physical location", true, "text", "e.g. Head Office")}
             {field("hostname", "Device name", true, "text", "e.g. HQ-AP-01")}
@@ -147,6 +168,18 @@ export default function DeviceIntake() {
           </button>
         </form>
       </Card>}
+      {canAdd && <Card title="Import multiple access points or switches from CSV">
+        <BulkDeviceImport onImported={() => { devices.reload(); physicalSites.reload(); }} />
+      </Card>}
+      <Card title="Existing SIMS Wi-Fi Manager features">
+        <p className="text-sm text-slate-300">
+          The original SIMS Instant-cluster site management, AP/client telemetry,
+          experience scoring, configuration snapshots and alerts are preserved.
+          Live controller registration requires a separate restricted live-mode configuration;
+          adding a REAL device here does not silently create an Instant cluster or enable polling.
+        </p>
+        <Link className="mt-3 inline-block text-sm text-sky-400 underline" to="/sites">Open Aruba Instant cluster sites</Link>
+      </Card>
       <Card title="Your real devices">
         <ErrorNote error={devices.error} />
         <div className="overflow-x-auto">
@@ -164,7 +197,13 @@ export default function DeviceIntake() {
                   <td className="px-2 py-2"><Badge value={d.status} /></td>
                   <td className="px-2 py-2 text-xs text-emerald-300">{d.adapter === "manual_snapshot" ? "REAL · MANUAL" : "REAL · REST READ"}</td>
                   <td className="px-2 py-2 text-xs">{fmtTime(d.last_observed_at)}</td>
-                  <td className="px-2 py-2 text-sky-400"><Link to={`/devices/${d.id}`}>View details</Link></td>
+                  <td className="px-2 py-2 text-sky-400">
+                    <div className="flex flex-wrap gap-2">
+                      <Link to={`/devices/${d.id}`}>View details</Link>
+                      {canAdd && <button type="button" onClick={() => editDevice(d)}
+                        className="text-slate-300 underline hover:text-sky-300">Edit details</button>}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
