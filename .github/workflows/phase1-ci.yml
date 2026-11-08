@@ -124,6 +124,41 @@ jobs:
           python3 -m playwright install --with-deps chromium
           export INM_E2E_ADMIN_PASSWORD="$(sed -n 's/^SIMS_ADMIN_PASSWORD=//p' .env.ci)"
           python3 -m pytest -q tests/e2e/test_browser_live.py
+      - name: Verify restricted demo login and persistent real inventory
+        run: |
+          # Reproduce the security-critical post-install configuration performed
+          # by scripts/rebuild-demo.sh, without weakening TLS or exposing a port.
+          {
+            printf '\nINM_DEMO_SIMPLE_LOGIN=true\n'
+            printf 'INM_FORCE_PASSWORD_CHANGE=false\n'
+            printf 'SIMS_ADMIN_PASSWORD=demo123!\n'
+          } >> .env.ci
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml \
+            up -d --no-deps --force-recreate --wait --wait-timeout 90 api
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml \
+            exec -T api python -m backend.demo_access
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml \
+            exec -T api python - <<'PY'
+          import httpx
+          base = 'http://127.0.0.1:8000'
+          with httpx.Client(base_url=base, timeout=15) as client:
+              response = client.post('/api/auth/login',
+                  json={'username': 'admin', 'password': 'demo123!'})
+              assert response.status_code == 200, response.text
+              data = response.json()
+              assert data['role'] == 'admin'
+              assert data['must_change_password'] is False
+              headers = {'Authorization': 'Bearer ' + data['access_token']}
+              devices = client.get('/api/v1/devices', headers=headers)
+              assert devices.status_code == 200, devices.text
+              real = [d for d in devices.json() if d['source_type'] == 'REAL']
+              assert any(d['hostname'] == 'CI-AP-535' for d in real)
+              assert any(d['hostname'] == 'CI-CX6200F' for d in real)
+              write = client.post('/api/config/changes/apply',
+                  headers=headers, json={})
+              assert write.status_code in (403, 404, 422), write.text
+          print('PASS: localhost demo login, saved REAL inventory, global device-write lock')
+          PY
       - name: Store demo browser screenshots
         if: always()
         uses: actions/upload-artifact@v4
