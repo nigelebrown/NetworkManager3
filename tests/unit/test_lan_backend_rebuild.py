@@ -10,8 +10,10 @@ def test_lan_script_builds_backend_owner_service_before_api():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
     # Compose's 'migrate' service owns the backend Dockerfile, and 'api'
     # consumes the same inm/backend image. An API-only build is a no-op.
-    assert "build migrate web" in script
-    assert "build api web" not in script
+    commands = "\n".join(line for line in script.splitlines()
+                         if not line.lstrip().startswith("#"))
+    assert "build migrate web" in commands
+    assert "build api web" not in commands
     assert "up -d --no-deps --force-recreate --wait --wait-timeout 120 api" in script
     assert "up -d --no-deps --force-recreate --wait --wait-timeout 120 web" in script
     assert "dockerfile: deployment/docker/backend.Dockerfile" in compose
