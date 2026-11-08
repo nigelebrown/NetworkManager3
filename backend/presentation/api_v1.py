@@ -173,7 +173,8 @@ def v1_sites(db: Session = Depends(get_db), _: User = Depends(require_role("view
     ids = _visible_legacy_ids(db)
     clusters = [c for c in db.scalars(select(InmCluster)) if c.legacy_site_id in ids]
     site_ids = {c.site_id for c in clusters}
-    sites = [s for s in db.scalars(select(InmSite)) if s.id in site_ids]
+    sites = [s for s in db.scalars(select(InmSite)) if s.id in site_ids or
+             (get_scope() is None and s.source_type == "REAL")]
     return {"sites": [{"id": s.id, "name": s.name, "source_type": s.source_type, "description": s.description} for s in sites],
             "clusters": [{"id": c.id, "name": c.name, "kind": c.kind, "source_type": c.source_type, "site_id": c.site_id,
                           "legacy_site_id": c.legacy_site_id} for c in clusters]}
