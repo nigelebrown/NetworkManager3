@@ -100,13 +100,37 @@ class Settings(BaseSettings):
                             "(device writes are disabled for Phase 1 and Phase 2).")
         if self.inm_profile == "demo" and self.mode != "demo":
             problems.append("SIMS_INM_PROFILE=demo requires SIMS_MODE=demo (no device access in the demo profile).")
+        import ipaddress
         import os
         if self.demo_simple_login:
+            bind = os.environ.get("INM_WEB_BIND", "127.0.0.1")
+            local_only = bind == "127.0.0.1"
+            scoped_lan = False
+            # A weak demo credential is allowed on LAN only by explicit
+            # administrator acknowledgement, private host-IP binding and a
+            # narrow trusted subnet. Nginx independently enforces that CIDR.
+            if os.environ.get("INM_LAN_DEMO_ACK") == "true":
+                try:
+                    ip = ipaddress.IPv4Address(bind)
+                    allowed = ipaddress.IPv4Network(
+                        os.environ["INM_LAN_CLIENT_CIDR"], strict=False
+                    )
+                    scoped_lan = (
+                        ip.is_private and not ip.is_loopback and
+                        not ip.is_link_local and not ip.is_multicast and
+                        allowed.is_private and allowed.prefixlen >= 24 and
+                        ip in allowed
+                    )
+                except (ValueError, KeyError, ipaddress.AddressValueError):
+                    scoped_lan = False
             if not (self.mode == "demo" and self.inm_profile == "demo" and
                     self.device_write_lock and not self.allow_config_changes and
-                    os.environ.get("INM_WEB_BIND", "127.0.0.1") == "127.0.0.1" and
-                    self.admin_password == "demo123!"):
-                problems.append("SIMS_DEMO_SIMPLE_LOGIN requires a loopback-bound, write-locked demo with exactly the demo-only credential.")
+                    (local_only or scoped_lan) and self.admin_password == "demo123!"):
+                problems.append(
+                    "SIMS_DEMO_SIMPLE_LOGIN requires a write-locked demo on "
+                    "127.0.0.1, or an explicitly approved private /24-or-narrower "
+                    "LAN CIDR containing the bound server IP."
+                )
         elif self.admin_password == "demo123!":
             problems.append("The demo123! password is prohibited outside explicitly restricted demo mode.")
         return problems
