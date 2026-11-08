@@ -99,7 +99,7 @@ class Settings(BaseSettings):
             problems.append("SIMS_ALLOW_CONFIG_CHANGES=true is not permitted while SIMS_DEVICE_WRITE_LOCK=true "
                             "(device writes are disabled for Phase 1 and Phase 2).")
         if self.inm_profile == "demo" and self.mode != "demo":
-            problems.append("SIMS_INM_PROFILE=demo requires SIMS_MODE=demo.")
+            problems.append("SIMS_INM_PROFILE=demo requires SIMS_MODE=demo (no device access in the demo profile).")
         import os
         if self.demo_simple_login:
             if not (self.mode == "demo" and self.inm_profile == "demo" and
