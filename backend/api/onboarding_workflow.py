@@ -25,6 +25,7 @@ from ..aruba.monitoring import collect_snapshot
 from ..config import get_settings
 from ..database.models import User
 from ..database.models_inm import InmDevice
+from ..domain.phase2_acceptance import build_acceptance
 from ..database.models_onboarding import (
     OnboardingCredential, OnboardingDiscovery, OnboardingDeviceCredential,
     OnboardingConfigSnapshot, OnboardingConfigDraft,
@@ -432,6 +433,52 @@ def device_config(device_id: str, db: Session = Depends(get_db),
         "drafts": [{"id": d.id, "state": d.state, "created_at": d.created_at.isoformat(),
                     "proposed": d.proposed_json} for d in drafts],
         "hardware_writes": "LOCKED",
+    }
+
+
+def _device_acceptance(db: Session, device: InmDevice) -> dict:
+    binding = db.get(OnboardingDeviceCredential, device.id)
+    credential = db.get(OnboardingCredential, binding.credential_id) if binding else None
+    snapshot = db.scalar(select(OnboardingConfigSnapshot).where(
+        OnboardingConfigSnapshot.device_id == device.id
+    ).order_by(OnboardingConfigSnapshot.captured_at.desc(),
+               OnboardingConfigSnapshot.id.desc()))
+    drafts = list(db.scalars(select(OnboardingConfigDraft).where(
+        OnboardingConfigDraft.device_id == device.id
+    ).order_by(OnboardingConfigDraft.created_at.desc()).limit(100)))
+    return build_acceptance(device, credential, binding, snapshot, drafts,
+                            writes_locked=get_settings().device_write_lock)
+
+
+@router.get("/devices/{device_id}/acceptance")
+def device_acceptance_report(device_id: str, db: Session = Depends(get_db),
+                             admin: User = Depends(require_role("admin"))):
+    """Auditable no-network-I/O evidence report. NOT hardware certification."""
+    device = db.get(InmDevice, device_id)
+    if not device or device.source_type != "REAL" or device.vendor != "Aruba":
+        raise HTTPException(404, "Real Aruba device not found")
+    return _device_acceptance(db, device)
+
+
+@router.get("/acceptance")
+def fleet_acceptance_report(db: Session = Depends(get_db),
+                            admin: User = Depends(require_role("admin"))):
+    """Pilot acceptance summary, limited to 250 devices to bound database work."""
+    devices = list(db.scalars(select(InmDevice).where(
+        InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba"
+    ).order_by(InmDevice.last_observed_at.desc()).limit(250)))
+    reports = [_device_acceptance(db, d) for d in devices]
+    return {
+        "device_count": len(reports),
+        "limit": 250,
+        "hardware_certified": 0,
+        "device_writes": "LOCKED" if get_settings().device_write_lock else "UNSAFE",
+        "stages": {stage: sum(r["stage"] == stage for r in reports)
+                   for stage in ("MANUAL_REGISTERED", "REST_DISCOVERED",
+                                 "BASELINE_CAPTURED", "DRAFTED")},
+        "devices": [{k: r[k] for k in ("device_id", "family", "reported_model",
+                   "recognized_pilot_model", "inventory_evidence", "stage",
+                   "hardware_certified")} for r in reports],
     }
 
 
