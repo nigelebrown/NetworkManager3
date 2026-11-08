@@ -58,8 +58,13 @@ jobs:
     needs: [backend-tests, frontend-build]
     steps:
       - uses: actions/checkout@v4
-      - name: Check deployment shell syntax
-        run: bash -n deployment/centos9/*.sh
+      - name: Check Git-only deployment entrypoint and shell syntax
+        run: |
+          bash -n deployment/centos9/*.sh scripts/inm.sh
+          bash scripts/inm.sh --help | grep -q 'Git-managed Intelligent Network Manager'
+          test -f deployment/releases/approved-demo-tag
+          test ! -e scripts/bootstrap_phase1_zip.sh
+          test ! -e scripts/import_phase1_source.ps1
       - name: Create ephemeral demo-only secrets and TLS
         shell: bash
         run: |
