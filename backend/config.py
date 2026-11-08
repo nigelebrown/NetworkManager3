@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     auto_migrate: bool = True
     # First-login password change for the bootstrap administrator (installer sets true).
     force_initial_password_change: bool = False
+    # Deliberately weak convenience credential is allowed ONLY in loopback-bound
+    # and device-write-locked DEMO installations, never lab/production.
+    demo_simple_login: bool = False
     cors_origins: str = "http://localhost:5173"
 
     @field_validator("jwt_secret")
@@ -96,7 +99,16 @@ class Settings(BaseSettings):
             problems.append("SIMS_ALLOW_CONFIG_CHANGES=true is not permitted while SIMS_DEVICE_WRITE_LOCK=true "
                             "(device writes are disabled for Phase 1 and Phase 2).")
         if self.inm_profile == "demo" and self.mode != "demo":
-            problems.append("SIMS_INM_PROFILE=demo requires SIMS_MODE=demo (no device access in the demo profile).")
+            problems.append("SIMS_INM_PROFILE=demo requires SIMS_MODE=demo.")
+        import os
+        if self.demo_simple_login:
+            if not (self.mode == "demo" and self.inm_profile == "demo" and
+                    self.device_write_lock and not self.allow_config_changes and
+                    os.environ.get("INM_WEB_BIND", "127.0.0.1") == "127.0.0.1" and
+                    self.admin_password == "demo123!"):
+                problems.append("SIMS_DEMO_SIMPLE_LOGIN requires a loopback-bound, write-locked demo with exactly the demo-only credential.")
+        elif self.admin_password == "demo123!":
+            problems.append("The demo123! password is prohibited outside explicitly restricted demo mode.")
         return problems
 
     def validate_secrets(self) -> list[str]:
