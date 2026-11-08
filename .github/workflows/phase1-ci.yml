@@ -2,7 +2,7 @@ name: Phase 1 application CI and end-to-end integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/phase2-hardware-acceptance', 'feature/phase3-config-inheritance', 'feature/phase4-monitoring-optimization']
   pull_request:
     branches: [main]
   workflow_dispatch:
