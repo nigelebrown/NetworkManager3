@@ -279,3 +279,24 @@ def test_guided_onboarding_starts_with_site_and_reusable_credential_choice(page)
     page.get_by_role("button", name="Select existing credentials").wait_for(timeout=15000)
     page.get_by_role("button", name="Create credential profile").wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "17_guided_onboarding_credentials.png"), full_page=True)
+
+
+def test_phase2_acceptance_checklist_is_visible_for_manual_device(page):
+    """Phase 2: model eligibility is distinct from hardware certification."""
+    page.goto("https://127.0.0.1:8443/onboarding/manual")
+    page.get_by_text("Add a network device").wait_for(timeout=15000)
+    page.get_by_label("Site / physical location").fill("CI Phase 2 Pilot")
+    page.get_by_label("Device name").fill("P2-AP-535-MANUAL")
+    page.get_by_label("Device serial number").fill("CI-PHASE2-MANUAL-AP-535")
+    page.get_by_label("Model").fill("AP-535")
+    page.get_by_label("Management IPv4 address (optional)").fill("10.101.88.35")
+    page.get_by_role("button", name="Save real device and readings").click()
+    page.get_by_text("Real device snapshot saved: P2-AP-535-MANUAL").wait_for(timeout=15000)
+    page.locator("tr", has=page.get_by_text("CI-PHASE2-MANUAL-AP-535")).get_by_role(
+        "link", name="View details").click()
+    page.get_by_role("link", name="View imported configuration / edit draft").click()
+    page.get_by_text("Phase 2 — device acceptance evidence").wait_for(timeout=15000)
+    page.get_by_text("Physical-device certified: NO").wait_for(timeout=15000)
+    page.get_by_text("MANUAL REGISTERED").wait_for(timeout=15000)
+    page.get_by_text("NOT VERIFIED").first.wait_for(timeout=15000)
+    page.screenshot(path=str(EVID / "18_phase2_acceptance_manual_device.png"), full_page=True)
