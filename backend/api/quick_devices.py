@@ -157,8 +157,14 @@ def _permit_probe(ip: ipaddress.IPv4Address) -> None:
         raise HTTPException(422, "Only explicitly allowed, private management IPv4 addresses can be probed.")
     try:
         allowed = [ipaddress.ip_network(x.strip(), strict=False) for x in cidrs.split(",") if x.strip()]
+        if not allowed or len(allowed) > 20 or any(
+            not isinstance(net, ipaddress.IPv4Network) or
+            not net.is_private or net.prefixlen < 24
+            for net in allowed
+        ):
+            raise ValueError("Oversized or nonprivate management allowlist")
     except ValueError:
-        raise HTTPException(503, "Server target allowlist is invalid.")
+        raise HTTPException(503, "Server target allowlist is invalid; use up to 20 private IPv4 /24–/32 ranges.")
     if not any(ip in net for net in allowed):
         raise HTTPException(403, "This device IP is not in the server administrator's approved management ranges.")
 
