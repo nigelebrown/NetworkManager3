@@ -54,6 +54,54 @@ This weak login is deliberately refused if the web bind is changed from localhos
 if the software is no longer in demo mode, or if device configuration writes are enabled.
 It MUST be replaced before exposing the service on the LAN or moving to production.
 
+## B2. Access from PCs on an approved local subnet (same demo password)
+
+This optional operation **does not change** the existing `admin / demo123!`
+credential or any database volume. It binds HTTPS to an assigned private
+CentOS interface IP, enables the corresponding Nginx IP allowlist and adds a
+narrow firewalld rule where available. It refuses arbitrary 0.0.0.0 binding,
+public IPs, and broad CIDRs.
+
+On CentOS, after fetching the latest GitHub changes:
+
+```bash
+cd /root/NetworkManager3
+git pull --ff-only origin main
+bash scripts/enable-lan-demo.sh 172.17.71.21 172.17.71.0/24
+```
+
+Use the real server IP and **your actual allowed client subnet**; the /24
+above is only an example. If the interface is already configured with a
+private /24-or-narrower netmask, you can omit the second argument and
+let the script detect its subnet:
+
+```bash
+bash scripts/enable-lan-demo.sh 172.17.71.21
+```
+
+After the script reports success, a PC in the approved subnet can browse to:
+
+```text
+https://172.17.71.21:8443
+Username: admin
+Password: demo123!
+```
+
+The initial self-signed certificate was generated for localhost; a direct
+IP address can trigger both a trust error and a hostname/SAN mismatch.
+For broader access, deploy a certificate for the correct DNS name signed
+by a trusted internal CA. The Nginx allowlist remains enforced even if
+Docker's published ports bypass some host firewall chains.
+
+**Security trade-off:** `demo123!` is intentionally weak. Restrict this demo
+to an isolated/trusted management VLAN, never expose port 8443 on the
+internet, and do not store operational credentials in its demo account.
+This permission is temporary and must not be reused for production.
+
+The older `scripts/rebuild-demo.sh` is intentionally loopback-only; after
+switching to LAN mode, use approved Git release updates rather than
+running that localhost-specific demo reload command against the LAN instance.
+
 ## C. Add a real AP or switch immediately — no network connection required
 
 1. In the left menu, open **Inventory → Add device**.
