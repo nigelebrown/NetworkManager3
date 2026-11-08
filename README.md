@@ -1,3 +1,29 @@
+> **Fast-track: usable AP + switch demo on CentOS, with no PC transfers.**
+>
+> From your existing CentOS Git checkout:
+>
+> ```bash
+> cd /root/NetworkManager3 && git pull --ff-only origin main && bash scripts/rebuild-demo.sh
+> ```
+>
+> This replaces **only INM Docker containers**, preserves named volumes, installs from Git,
+> runs end-to-end verification, and sets a restricted demo login:
+> **`admin` / `demo123!`**. The web interface is available through an SSH tunnel at
+> **https://localhost:8443** (the server listens on **127.0.0.1:8443** only while using
+> the deliberately weak demo password).
+>
+> Open **Inventory → Add device** to add an AP-505/AP-535 or CX 6100/CX 6200,
+> either by entering real observed readings or by an approved read-only REST probe.
+> The probe defaults to OFF until you run:
+>
+> ```bash
+> cd /root/NetworkManager3 && bash scripts/allow-readonly-device-range.sh 10.103.5.20/32
+> ```
+>
+> Replace that example address with your actual AP/switch management IP.
+> **No device configuration writes are enabled.** See
+> [the complete quick-start guide](docs/QUICK_START_REAL_DEVICES.md).
+>
 # Intelligent Network Manager — Git-managed Phase 1 Demo
 
 The complete application source is hosted in the **private**
