@@ -19,11 +19,27 @@ switches, every item labelled DEMO, no connection to any real device, and every 
 ## 2. Install
 
 ```bash
-sudo dnf -y install git
-sudo git clone <approved-repo-url> /opt/inm
-cd /opt/inm && sudo git checkout v1.0.0-phase1
-sudo bash deployment/centos9/install.sh --mode demo
+# The server's repository-scoped SSH deploy key is already authorized.
+# Only once, if a checkout does not exist:
+git clone github-networkmanager3:nigelebrown/NetworkManager3.git /root/NetworkManager3
+
+# All application source and installer scripts come from GitHub.
+cd /root/NetworkManager3 && bash scripts/inm.sh install
 ```
+
+There is **no local PC, transferred ZIP, or offline source bundle** in the installation
+workflow. For subsequent approved releases, run:
+
+```bash
+cd /root/NetworkManager3 && bash scripts/inm.sh update
+```
+
+The updater reads the approved demo release tag from
+`deployment/releases/approved-demo-tag` on GitHub, backs up state, validates database
+compatibility, builds from the tagged source and verifies all services. No update is
+performed if that channel does not contain an approved immutable Git tag.
+For a specific approved release, run `bash scripts/inm.sh update --ref <tag>`.
+**Do not manually `git pull` after an installation to simulate an upgrade.**
 
 What happens (transcript in `/var/log/inm/install-<timestamp>.log`):
 
@@ -88,7 +104,7 @@ Databases, NATS, Loki, the API container and the AI service are on internal Dock
 
 Add `INM_OLLAMA_ENABLED=true` and `INM_OLLAMA_INTERNAL_URL=http://ollama:11434` to `/etc/inm/inm.env`, then
 `docker compose --project-name inm --env-file /etc/inm/inm.env --profile ollama up -d ollama ai api` from
-`/opt/inm`, and pull a model inside the `ollama` container. The Ollama container shares only the internal `ai`
+`/root/NetworkManager3`, and pull a model inside the `ollama` container. The Ollama container shares only the internal `ai`
 network with the AI gateway; it cannot see the databases, the bus or any device network.
 
 ## 7. Troubleshooting
