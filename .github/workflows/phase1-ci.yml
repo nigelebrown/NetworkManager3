@@ -140,7 +140,7 @@ jobs:
               cfg.attributes["connection"] = conn
               command.upgrade(cfg, "0004")
               conn.execute(text("INSERT INTO sites (name, vc_port, simulated, enabled, created_at) "
-                                "VALUES ('Persist-through-0005', 4343, 0, 1, '2026-01-01')"))
+                                "VALUES ('Persist-through-0005', 4343, FALSE, TRUE, '2026-01-01')"))
           print("PASS: created PostgreSQL 0004 with an existing site")
           PY
           docker compose --env-file .env.ci --project-name inm -f compose.yaml \
