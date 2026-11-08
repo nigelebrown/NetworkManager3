@@ -22,6 +22,8 @@ nats-py==2.16.0
 paramiko==3.5.1
 psycopg==3.3.8
 psycopg-binary==3.3.8
+pyasn1==0.6.4
+pysnmp==7.1.30
 pycparser==3.12
 pydantic==2.14.3
 pydantic-settings==2.16.2
