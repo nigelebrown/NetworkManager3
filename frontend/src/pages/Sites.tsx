@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge, Card, ErrorNote, SimBadge, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -7,6 +8,7 @@ import { api, getSession, type Site } from "../services/api";
 
 export default function Sites() {
   const { data, error, reload } = useLoad(() => api.sites(), []);
+  const platform = useLoad(() => api.status(), [], 0);
   const isAdmin = getSession()?.role === "admin";
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -58,7 +60,11 @@ export default function Sites() {
           <tbody className="divide-y divide-slate-800">{data?.map((s) => <SiteRow key={s.id} s={s} />)}</tbody>
         </table></div>
       </Card>
-      {isAdmin && (
+      {isAdmin && platform.data?.mode === "demo" && <Card title="Add a real location or device">
+        <p className="text-sm text-slate-300">Demo Instant clusters appear above. For actual access points and switches, use the guided Add device workflow; it stores the physical site and keeps real data separate from simulated data.</p>
+        <Link to="/onboarding" className="mt-3 inline-block rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500">Add device</Link>
+      </Card>}
+      {isAdmin && platform.data?.mode === "live" && (
         <Card title="Register a site (live mode)">
           <form onSubmit={submit} className="grid gap-3 md:grid-cols-3">
             {([["name", "Site name"], ["group", "Group (optional)"], ["vc_host", "Virtual Controller IP / host"], ["api_username", "API username"]] as const).map(([k, label]) => (
