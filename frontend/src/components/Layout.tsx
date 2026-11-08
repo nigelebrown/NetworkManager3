@@ -7,7 +7,7 @@ type Item = { to: string; label: string; roles?: Role[]; tag?: string };
 // Workflow-first navigation (master design K.4). Unfinished modules are reachable and say PLANNED.
 const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Overview", items: [{ to: "/", label: "Dashboard" }, { to: "/system", label: "System health", roles: ["admin", "auditor"] }] },
-  { title: "Inventory", items: [{ to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches", tag: "DEMO" }, { to: "/clients", label: "Clients" }, { to: "/onboarding", label: "Onboarding", tag: "P2" }] },
+  { title: "Inventory", items: [{ to: "/onboarding", label: "Add device", roles: ["admin"] }, { to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches" }, { to: "/clients", label: "Clients" }] },
   { title: "Observability", items: [{ to: "/experience", label: "Experience" }, { to: "/alerts", label: "Alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
   { title: "Configuration", items: [{ to: "/config", label: "Configuration", tag: "READ/PLAN" }, { to: "/changes", label: "Change control", tag: "P6" }] },
   { title: "Recovery", items: [{ to: "/recovery", label: "Backups & recovery", roles: ["admin"], tag: "P5" }] },
@@ -40,7 +40,7 @@ export default function Layout() {
     <div className="min-h-screen">
       {status?.simulated_data && (
         <div className="bg-fuchsia-900/60 px-4 py-1.5 text-center text-xs font-semibold text-fuchsia-100">
-          DEMO MODE — all data shown is SIMULATED. No real access points or switches are contacted.
+          DEMO MODE — simulated fixtures are marked DEMO. Added real devices are marked MANUAL or REST READ. Device configuration writes remain locked.
         </div>
       )}
       {status?.device_write_lock && (
