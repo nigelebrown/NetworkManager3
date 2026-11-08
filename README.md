@@ -1,17 +1,43 @@
-> **Current CentOS server checkout (Phase 1 demo):** All 204 source files have been published to `main` (2026-11-07). The repository is now installable for **laboratory testing**, but has not passed an independent clean-CentOS Docker acceptance. Do not use against live devices or enable device writes.
->
-> On the already-authenticated CentOS server:
->
-> ```bash
-> cd /root/NetworkManager3
-> git pull origin main
-> test -f deployment/centos9/install.sh && echo "Phase 1 source present"
-> bash deployment/centos9/doctor.sh
-> bash deployment/centos9/install.sh --mode demo
-> bash deployment/centos9/verify.sh
-> ```
->
-> **Do not use `git checkout v1.0.0-phase1` yet:** that illustrative release tag has not been published. This initial deployment uses the current reviewed main-branch commit. Future updates require an approved immutable release tag. See [the independent acceptance gate](docs/PHASE1_REVIEW_AND_RELEASE_GATE.md).
+# Intelligent Network Manager — Git-managed Phase 1 Demo
+
+The complete application source is hosted in the **private**
+[nigelebrown/NetworkManager3](https://github.com/nigelebrown/NetworkManager3) repository.
+**No local PC, ZIP uploads or manual source transfers are required.** Device
+configuration writes are locked in this Phase 1 demo.
+
+The CentOS server's GitHub read-only SSH deploy key is already configured.
+
+**First installation — one command after cloning:**
+
+```bash
+# Only required once if /root/NetworkManager3 is not already present:
+git clone github-networkmanager3:nigelebrown/NetworkManager3.git /root/NetworkManager3
+# On your already-cloned server:
+cd /root/NetworkManager3 && bash scripts/inm.sh install
+```
+
+**Operations, all from this Git checkout:**
+
+| Operation | Command |
+|---|---|
+| Install or same-version repair | `bash scripts/inm.sh install` |
+| Approved release update | `bash scripts/inm.sh update` |
+| Update to an explicit approved Git tag | `bash scripts/inm.sh update --ref <tag>` |
+| Read-only diagnostics | `bash scripts/inm.sh doctor` |
+| Verify services and data pipeline | `bash scripts/inm.sh verify` |
+| View status | `bash scripts/inm.sh status` |
+| Encrypted backup | `bash scripts/inm.sh backup` |
+| Gate-compatible rollback | `bash scripts/inm.sh rollback --to <tag> --acknowledge-schema-compatible` |
+
+Updates use Git tags (not arbitrary branch changes), with a backup, migration
+compatibility checks and health verification. Running `update` without a tag reads
+`deployment/releases/approved-demo-tag` from GitHub's `main` branch. No tag is
+approved yet; the command refuses to proceed until an approved tag is published.
+
+**Release status:** GitHub CI has passed Python regressions, React build, full Docker
+Compose synthetic integration and automated browser workflows. Actual installation
+on the target CentOS Stream 9 VM still requires acceptance testing. Base images and
+build packages come from approved registries; **application source comes only from Git**.
 
 # Intelligent Network Manager — Phase 1 (Connected platform + SIMS feature parity)
 
@@ -21,9 +47,7 @@ git tag `sims-baseline`).
 ## Install on CentOS Stream 9 (one command)
 
 ```bash
-sudo dnf -y install git
-sudo git clone <your-approved-repo-url> /opt/inm && cd /opt/inm && sudo git checkout v1.0.0-phase1
-sudo bash deployment/centos9/install.sh --mode demo
+cd /root/NetworkManager3 && bash scripts/inm.sh install
 ```
 
 The installer checks the VM, installs Docker CE if needed, generates unique secrets (`/etc/inm`, mode 0600 —
