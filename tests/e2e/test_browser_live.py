@@ -252,8 +252,8 @@ def test_admin_can_bulk_import_and_edit_existing_real_network_devices(page):
     page.get_by_text("Add a network device").wait_for(timeout=15000)
     csv = (
         "family,site_name,hostname,serial_number,model,management_ip,firmware,status\\n"
-        "access_point,CI Bulk Site,BULK-AP-535,CI-BULK-AP-001,AP-535,10.101.10.15,8.10.0.21,unknown\\n"
-        "switch,CI Bulk Site,BULK-CX-6200,CI-BULK-CX-002,CX 6200F,10.103.10.21,10.14,unknown\\n"
+        "access_point,CI Bulk Site,BULK-AP-535,CI-BULK-AP-001,AP-535,10.101.10.15,8.10.0.21,unknown\n"
+        "switch,CI Bulk Site,BULK-CX-6200,CI-BULK-CX-002,CX 6200F,10.103.10.21,10.14,unknown\n"
     )
     page.locator("input[type=file]").set_input_files({
         "name": "ci-bulk-devices.csv", "mimeType": "text/csv", "buffer": csv.encode("utf-8")
