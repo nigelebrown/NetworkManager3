@@ -34,6 +34,7 @@ export const v1 = {
   features: () => request<Features>("/v1/system/features"),
   synthetic: () => request<{ correlation_id: string; event_id: string }>("/v1/system/synthetic-event", { method: "POST", ...j({}) }),
   trace: (cid: string) => request<Trace>(`/v1/system/synthetic-event/${cid}`),
+  physicalSites: () => request<{ sites: { id: string; name: string; source_type: string }[] }>("/v1/sites"),
   devices: (family?: "access_point" | "switch") => request<Device[]>(`/v1/devices${family ? `?family=${family}` : ""}`),
   addQuickDevice: (body: { family: "access_point" | "switch"; site_name: string; hostname: string; serial_number: string;
     model: string; firmware?: string | null; management_ip?: string | null; status: string; metrics: Record<string, number> }) =>
