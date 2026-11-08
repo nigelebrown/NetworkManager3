@@ -15,13 +15,14 @@ function latest(points: MetricPoint[]) {
 export default function Switches() {
   const devs = useLoad(() => v1.devices("switch"), [], 30000, ["devices"]);
   const sites = useLoad(() => api.sites(), [], 0, ["sites"]);
+  const physical = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
   const [metrics, setMetrics] = useState<Record<string, Record<string, number | null>>>({});
   useEffect(() => {
     devs.data?.forEach((d) => v1.metrics(d.id, 1).then((m) => setMetrics((x) => ({ ...x, [d.id]: latest(m.points) }))).catch(() => {}));
   }, [devs.data]);
   const siteName = (d: Device) => d.legacy_site_id
     ? (sites.data?.find((s) => s.id === d.legacy_site_id)?.name ?? "—")
-    : (d.source_type === "REAL" ? "Real inventory" : "—");
+    : (d.site_id ? physical.data?.sites.find((s) => s.id === d.site_id)?.name ?? "Real inventory" : "—");
   return (
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Switches</h1>
