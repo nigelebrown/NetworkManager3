@@ -30,13 +30,6 @@ if [[ -f "$ENV" ]]; then
   [[ "$(read_value INM_WEB_BIND)" == 127.0.0.1 ]] || die "Weak demo credentials require INM_WEB_BIND=127.0.0.1. Stop: do not expose on LAN."
   [[ "$(read_value INM_VERSION)" == "$(tr -d '[:space:]' < "$ROOT/VERSION")" ]] \
     || die "Installed version differs; use the approved tagged update workflow, not demo rebuild."
-  if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
-    if [[ -n "$(docker ps -q --filter label=com.docker.compose.project=inm)" ]]; then
-      say "Existing INM containers detected. Creating ENCRYPTED backup before any replacement."
-      (cd "$ROOT" && bash deployment/centos9/backup.sh --label pre-demo-rebuild) \
-        || die "Backup failed. No containers have been removed; resolve storage health first."
-    fi
-  fi
 fi
 
 say "Fetching latest application source directly from private GitHub"
@@ -44,8 +37,25 @@ say "Fetching latest application source directly from private GitHub"
   || die "Current source is not on main; make a controlled change before the demo reload."
 git -C "$ROOT" fetch --quiet origin main || die "Git fetch failed; check deploy key and internet access."
 git -C "$ROOT" merge --ff-only origin/main || die "Non-fast-forward update refused."
-[[ "$(sed -n 's/.*\"device_writes\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$ROOT/release.json" | head -1)" == LOCKED ]] \
-  || die "Release does not declare device writes locked."
+# Read the release manifest as JSON, not as a sed regular expression.
+# Validate both the global write lock and the intended release version.
+if ! python3 -I - "$ROOT/release.json" "$ROOT/VERSION" <<'PY'
+import json
+from pathlib import Path
+import sys
+try:
+    release = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    version = Path(sys.argv[2]).read_text(encoding="utf-8").strip()
+except (OSError, ValueError, TypeError):
+    sys.exit(1)
+if (not isinstance(release, dict) or release.get("device_writes") != "LOCKED"
+        or release.get("version") != version):
+    sys.exit(1)
+print(f"[inm-demo-reload] Verified release {version}: device writes LOCKED")
+PY
+then
+  die "Release manifest missing, invalid, mismatched, or device writes not LOCKED."
+fi
 
 # Never take a working demo offline until the target checkout passes the
 # CentOS resource, Docker, port, registry and secret-file safety preflight.
@@ -56,6 +66,14 @@ if [[ -f "$ENV" ]] && command -v docker >/dev/null && docker compose version >/d
   docker compose --project-name "$PROJECT" --project-directory "$ROOT" \
     -f "$ROOT/compose.yaml" --env-file "$ENV" config --quiet \
     || die "Compose validation failed; existing INM containers have not been stopped."
+fi
+
+if [[ -f "$ENV" ]] && command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  if [[ -n "$(docker ps -q --filter label=com.docker.compose.project=inm)" ]]; then
+    say "Creating ENCRYPTED backup before stopping INM containers."
+    (cd "$ROOT" && bash deployment/centos9/backup.sh --label pre-demo-rebuild) \
+      || die "Backup failed. Existing INM containers have not been stopped."
+  fi
 fi
 
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
