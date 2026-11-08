@@ -83,14 +83,6 @@ rollback() {
   exit "$rc"
 }
 trap rollback EXIT
-printf '# Authorized demo LAN clients only; compiled by enable-lan-demo.sh\nallow 127.0.0.1;\nallow %s;\ndeny all;\n' "$CIDR" > "$ACL"
-chmod 0644 "$ACL"
-setvar INM_NGINX_ACCESS_FILE "$ACL"
-setvar INM_WEB_BIND "$SERVER_IP"
-setvar INM_LAN_CLIENT_CIDR "$CIDR"
-setvar INM_LAN_DEMO_ACK true
-setvar INM_GIT_COMMIT "$(git -C "$ROOT" rev-parse HEAD)"
-chmod 0600 "$ENV"
 # Bring the updated API guard and Nginx ACL into the runtime. No change to
 # the admin password or PostgreSQL/TimescaleDB volume contents.
 say "Building current Git backend and web images without changing data volumes."
@@ -105,6 +97,18 @@ docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file 
 # The API refuses to boot against an older management schema. A fresh backend
 # image may require an additive migration; backup and apply it first.
 bash "$ROOT/scripts/ensure-lan-schema.sh"
+# Change LAN exposure only AFTER the pre-change encrypted backup, migration,
+# and exact version verification have succeeded.
+printf '# Authorized demo LAN clients only; compiled by enable-lan-demo.sh\nallow 127.0.0.1;\nallow %s;\ndeny all;\n' "$CIDR" > "$ACL"
+chmod 0644 "$ACL"
+setvar INM_NGINX_ACCESS_FILE "$ACL"
+setvar INM_WEB_BIND "$SERVER_IP"
+setvar INM_LAN_CLIENT_CIDR "$CIDR"
+setvar INM_LAN_DEMO_ACK true
+setvar INM_GIT_COMMIT "$(git -C "$ROOT" rev-parse HEAD)"
+chmod 0600 "$ENV"
+docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
+  -f "$ROOT/compose.yaml" config --quiet
 say "Recreating API and HTTPS web containers; other services and all data volumes remain intact."
 # Start API separately. The web service has a service_healthy dependency on
 # API; starting both at once can report only a misleading dependency error.
