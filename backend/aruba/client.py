@@ -109,6 +109,8 @@ class ArubaClient:
             timeout=httpx.Timeout(timeout),
             verify=verify,
             transport=transport,
+            # Never silently route private management credentials via environment proxies.
+            trust_env=False,
             follow_redirects=False,
         )
 
