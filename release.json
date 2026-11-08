@@ -2,10 +2,10 @@
   "product": "Intelligent Network Manager",
   "version": "1.0.0-phase1",
   "phase": 1,
-  "management_schema_head": "0005",
+  "management_schema_head": "0006",
   "telemetry_schema_head": "t001",
   "accepts_management_schemas": [
-    "0005"
+    "0006"
   ],
   "accepts_telemetry_schemas": [
     "t001"
@@ -35,6 +35,23 @@
       "model-adapter downloads",
       "trained predictive ML",
       "procurement recommendations"
+    ]
+  },
+  "onboarding_module": {
+    "status": "WIZARD_READ_ONLY",
+    "schema_revision": "0006",
+    "device_writes": "LOCKED",
+    "features": [
+      "reusable encrypted credentials",
+      "bounded discovery",
+      "review and import",
+      "redacted baseline",
+      "configuration drafts"
+    ],
+    "limitations": [
+      "no device configuration writes",
+      "range preview is not unrestricted network scan",
+      "real model validation required"
     ]
   }
 }
