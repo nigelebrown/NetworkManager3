@@ -164,7 +164,7 @@ export default function DeviceIntake() {
                   <td className="px-2 py-2"><Badge value={d.status} /></td>
                   <td className="px-2 py-2 text-xs text-emerald-300">{d.adapter === "manual_snapshot" ? "REAL · MANUAL" : "REAL · REST READ"}</td>
                   <td className="px-2 py-2 text-xs">{fmtTime(d.last_observed_at)}</td>
-                  <td className="px-2 py-2 text-sky-400"><Link to={d.family === "switch" ? "/switches" : "/aps"}>View</Link></td>
+                  <td className="px-2 py-2 text-sky-400"><Link to={`/devices/${d.id}`}>View details</Link></td>
                 </tr>
               ))}
             </tbody>
