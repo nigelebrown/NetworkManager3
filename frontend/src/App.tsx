@@ -17,6 +17,7 @@ import ChangePassword from "./pages/ChangePassword";
 import Logs from "./pages/Logs";
 import { ChangeControl } from "./pages/Planned";
 import DeviceIntake from "./pages/DeviceIntake";
+import DeviceDetails from "./pages/DeviceDetails";
 import Recovery from "./pages/Recovery";
 import Switches from "./pages/Switches";
 import SystemHealth from "./pages/SystemHealth";
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="recovery" element={<Recovery />} />
         <Route path="ai-learning" element={<AiLearning />} />
         <Route path="onboarding" element={<DeviceIntake />} />
+        <Route path="devices/:id" element={<DeviceDetails />} />
         <Route path="changes" element={<ChangeControl />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
