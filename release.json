@@ -2,10 +2,10 @@
   "product": "Intelligent Network Manager",
   "version": "1.0.0-phase1",
   "phase": 1,
-  "management_schema_head": "0004",
+  "management_schema_head": "0005",
   "telemetry_schema_head": "t001",
   "accepts_management_schemas": [
-    "0004"
+    "0005"
   ],
   "accepts_telemetry_schemas": [
     "t001"
@@ -23,5 +23,18 @@
     "nginx": "nginx:1.28-alpine",
     "ollama": "ollama/ollama:latest"
   },
-  "image_pinning": "Tags above are resolved to digests at first install and frozen in /var/lib/inm/images.lock; update.sh only moves digests on an explicit --ref."
+  "image_pinning": "Tags above are resolved to digests at first install and frozen in /var/lib/inm/images.lock; update.sh only moves digests on an explicit --ref.",
+  "printer_module": {
+    "status": "P0_FOUNDATION",
+    "device_writes": "LOCKED",
+    "schema_revision": "0005",
+    "scope": "inventory, manual meters/supplies, consumable cycles, basic analytics, maintenance records; optional SNMPv3 probe requires explicit approval",
+    "not_yet_certified": [
+      "bulk discovery",
+      "scheduled distributed polling",
+      "model-adapter downloads",
+      "trained predictive ML",
+      "procurement recommendations"
+    ]
+  }
 }
