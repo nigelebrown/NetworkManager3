@@ -38,7 +38,7 @@ export default function DeviceDetails() {
   const site = sites.data?.sites.find((s) => s.id === d?.site_id)?.name ?? "Unassigned";
   return (
     <div className="space-y-4">
-      <Link to="/onboarding" className="text-sm text-sky-400 hover:underline">← Back to device inventory</Link>
+      <Link to="/onboarding/manual" className="text-sm text-sky-400 hover:underline">← Back to device inventory</Link>
       <div>
         <h1 className="text-xl font-semibold">{d?.hostname ?? "Device details"}</h1>
         <p className="mt-1 text-sm text-slate-400">

@@ -185,6 +185,7 @@ def register_printer(body: PrinterInput, request: Request, db: Session = Depends
     db.flush()
     audit(db, "printer_registered", username=admin.username, target=obj.id,
           detail=f"{manufacturer} {obj.model} registered as MANUAL; device writes disabled", request=request)
+    db.commit()  # Make the registration visible before responding to UI.
     return _device(obj)
 
 
@@ -297,6 +298,7 @@ def record_meter(printer_id: str, body: MeterInput, request: Request, db: Sessio
     db.flush()
     audit(db, "printer_meter_recorded", username=admin.username, target=obj.id,
           detail=f"{body.meter_kind}={body.counter_value} source=MANUAL", request=request)
+    db.commit()  # Commit before live inventory refresh (yield cleanup can occur later).
     return {"id": reading.id, "meter_kind": reading.meter_kind,
             "counter_value": reading.counter_value, "source": "MANUAL"}
 
@@ -314,6 +316,7 @@ def record_supply(printer_id: str, body: SupplyInput, request: Request, db: Sess
     alert = low_supply_alert(reading.percent_remaining)
     audit(db, "printer_supply_recorded", username=admin.username, target=obj.id,
           detail=f"{body.supply_name} level reported source=MANUAL alert={alert}", request=request)
+    db.commit()
     return {"id": reading.id, "alert": alert, "source": "MANUAL"}
 
 
@@ -335,6 +338,7 @@ def open_cycle(printer_id: str, body: CycleInput, request: Request, db: Session 
     db.flush()
     audit(db, "printer_consumable_installed", username=admin.username, target=obj.id,
           detail=f"cycle={c.id} kind={c.consumable_kind} colour={c.colour} start_meter={c.start_meter}", request=request)
+    db.commit()
     return _cycle(c)
 
 
@@ -355,6 +359,7 @@ def close_cycle(printer_id: str, cycle_id: str, body: CloseCycle, request: Reque
     db.flush()
     audit(db, "printer_consumable_removed", username=admin.username, target=printer_id,
           detail=f"cycle={c.id} end_meter={c.end_meter}; counter quality={cycle_analysis(c)['quality']}", request=request)
+    db.commit()
     return _cycle(c)
 
 
@@ -368,6 +373,7 @@ def record_maintenance(printer_id: str, body: MaintenanceInput, request: Request
     db.flush()
     audit(db, "printer_maintenance_recorded", username=admin.username, target=printer_id,
           detail=f"{body.event_type} {body.component} {body.severity}", request=request)
+    db.commit()
     return {"id": event.id, "event_type": event.event_type, "severity": event.severity}
 
 

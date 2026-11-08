@@ -291,8 +291,8 @@ export default function GuidedOnboarding() {
         <button className={secondary} onClick={clear}>Start another onboarding</button>
       </div>
     </Card>}
-    {step > 0 && step < 4 && <div className="flex flex-wrap justify-between gap-2">
-      <button className={secondary} disabled={busy} onClick={() => setStep(x => Math.max(0, x - 1))}>Back</button>
+    {step < 4 && <div className="flex flex-wrap justify-between gap-2">
+      {step > 0 && <button className={secondary} disabled={busy} onClick={() => setStep(x => Math.max(0, x - 1))}>Back</button>}
       {step < 3 && <button className={primary} disabled={busy || (step === 1 ? !profileId : step === 2 ? !scope.trim() : !hasSite)}
         onClick={() => setStep(x => x + 1)}>Next</button>}
     </div>}
