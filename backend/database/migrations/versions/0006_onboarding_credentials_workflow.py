@@ -40,6 +40,13 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_onboarding_discoveries_credential_id", "onboarding_discoveries", ["credential_id"])
+    op.create_table("onboarding_device_credentials",
+        sa.Column("device_id", sa.String(36), sa.ForeignKey("inm_devices.id", ondelete="CASCADE"), primary_key=True),
+        sa.Column("credential_id", sa.String(36), sa.ForeignKey("onboarding_credentials.id"), nullable=False),
+        sa.Column("bound_by", sa.String(64), nullable=False),
+        sa.Column("bound_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_onboarding_device_credentials_credential_id", "onboarding_device_credentials", ["credential_id"])
     op.create_table("onboarding_config_snapshots",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("device_id", sa.String(36), sa.ForeignKey("inm_devices.id", ondelete="CASCADE"), nullable=False),
