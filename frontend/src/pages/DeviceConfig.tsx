@@ -96,18 +96,18 @@ export default function DeviceConfig() {
       <ErrorNote error={acceptance.error} />
       {acceptance.data && <>
         <div className="mt-3 flex flex-wrap gap-3 text-sm">
-          <span>Stage: <b>{acceptance.data.stage.replaceAll("_", " ")}</b></span>
+          <span>Stage: <b>{acceptance.data.stage.replace(/_/g, " ")}</b></span>
           <span>Model: <b>{acceptance.data.recognized_pilot_model ?? "Not in certified pilot model list"}</b></span>
-          <span>Identity: <b>{acceptance.data.inventory_evidence.replaceAll("_", " ")}</b></span>
+          <span>Identity: <b>{acceptance.data.inventory_evidence.replace(/_/g, " ")}</b></span>
           <span>Credential: <b>{acceptance.data.credential.enabled ? "Assigned and enabled" : "Missing or disabled"}</b></span>
         </div>
         <p className="mt-2 text-xs text-amber-300">Physical-device certified: NO · Device writes: {acceptance.data.device_writes}</p>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           {acceptance.data.field_checks.map(field => <div key={field.field}
             className="rounded border border-slate-700 p-3 text-xs">
-            <div className="font-semibold">{field.field.replaceAll("_", " ")}:
+            <div className="font-semibold">{field.field.replace(/_/g, " ")}:
               <span className={field.status === "OBSERVED" ? "ml-2 text-emerald-300" : "ml-2 text-amber-300"}>
-                {field.status.replaceAll("_", " ")}
+                {field.status.replace(/_/g, " ")}
               </span>
             </div>
             <p className="mt-1 text-slate-400">{field.detail}</p>
