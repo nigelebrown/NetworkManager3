@@ -102,6 +102,9 @@ docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file 
 # leaving API running an old image that rejects LAN mode.
 docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
   -f "$ROOT/compose.yaml" build migrate web
+# The API refuses to boot against an older management schema. A fresh backend
+# image may require an additive migration; backup and apply it first.
+bash "$ROOT/scripts/ensure-lan-schema.sh"
 say "Recreating API and HTTPS web containers; other services and all data volumes remain intact."
 # Start API separately. The web service has a service_healthy dependency on
 # API; starting both at once can report only a misleading dependency error.
