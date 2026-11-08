@@ -162,6 +162,28 @@ jobs:
               assert write.status_code in (403, 404, 422), write.text
           print('PASS: localhost demo login, saved REAL inventory, global device-write lock')
           PY
+      - name: Verify opt-in LAN demo API mode on rebuilt backend image
+        run: |
+          # Reproduce the LAN-specific API configuration without binding a
+          # non-existent LAN address on the shared GitHub CI runner.
+          # It must become healthy with the SAME demo123! credential.
+          {
+            printf '\nINM_LAN_DEMO_ACK=true\n'
+            printf 'INM_LAN_CLIENT_CIDR=172.17.71.0/24\n'
+            printf 'INM_WEB_BIND=172.17.71.21\n'
+          } >> .env.ci
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml build migrate web
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml \
+            up -d --no-deps --force-recreate --wait --wait-timeout 120 api
+          docker compose --env-file .env.ci --project-name inm -f compose.yaml exec -T api \
+            python - <<'PY'
+          import os, urllib.request
+          assert os.environ.get('INM_WEB_BIND') == '172.17.71.21'
+          assert os.environ.get('INM_LAN_DEMO_ACK') == 'true'
+          assert os.environ.get('SIMS_ADMIN_PASSWORD') == 'demo123!'
+          assert urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=6).status == 200
+          print('PASS: rebuilt API accepts restricted LAN demo without changing password')
+          PY
       - name: Store demo browser screenshots
         if: always()
         uses: actions/upload-artifact@v4
