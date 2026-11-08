@@ -163,7 +163,7 @@ def test_new_modules_are_truthful(page):
 
 def test_import_actual_ap_and_switch_observations(page):
     """An admin can import real (manually observed) AP and switch data without device writes."""
-    page.click("nav >> a[href='/onboarding']")
+    page.goto("https://127.0.0.1:8443/onboarding/manual")
     page.get_by_text("Add a network device").wait_for(timeout=15000)
     page.get_by_label("Site / physical location").fill("CI physical site")
     page.get_by_label("Device name").fill("CI-AP-535")
@@ -199,7 +199,7 @@ def test_import_actual_ap_and_switch_observations(page):
     page.get_by_text("Real device snapshot saved: CI-CX6200F").wait_for(timeout=15000)
     page.click("nav >> a[href='/switches']")
     page.get_by_text("CI-CX6200F").wait_for(timeout=15000)
-    page.get_by_text("19/24").wait_for(timeout=15000)
+    page.get_by_text("19/24").first.wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "13_real_switch_metrics.png"), full_page=True)
 
 
@@ -248,7 +248,7 @@ def test_printer_intelligence_workflow(page):
 
 def test_admin_can_bulk_import_and_edit_existing_real_network_devices(page):
     """Use the actual CSV file input, then edit a device on the new onboarding screen."""
-    page.click("nav >> a[href='/onboarding']")
+    page.goto("https://127.0.0.1:8443/onboarding/manual")
     page.get_by_text("Add a network device").wait_for(timeout=15000)
     csv = (
         "family,site_name,hostname,serial_number,model,management_ip,firmware,status\\n"
