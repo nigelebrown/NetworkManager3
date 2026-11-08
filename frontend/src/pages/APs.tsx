@@ -11,6 +11,7 @@ import { v1 } from "../services/inm";
 export default function APs() {
   const [site, setSite] = useState<number | undefined>();
   const imported = useLoad(() => v1.devices("access_point"), [], 30000, ["devices"]);
+  const physicalSites = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
   const [importedMetrics, setImportedMetrics] = useState<Record<string, Record<string, number>>>({});
   useEffect(() => {
     imported.data?.filter((d) => d.source_type === "REAL").forEach((d) => {
@@ -54,9 +55,11 @@ export default function APs() {
       <div className="flex items-center justify-between gap-3"><div><h1 className="text-lg font-semibold">Access points</h1><Link className="text-xs text-sky-400 underline" to="/onboarding">Add a real access point</Link></div><SiteFilter value={site} onChange={setSite} /></div>
       <Card title="Imported real access points">
         <div className="overflow-x-auto"><table className="w-full min-w-[660px] text-left text-sm">
-          <thead><tr>{["Name", "Model", "Serial", "Firmware", "Status", "Clients", "5 GHz util.", "CPU", "Source"].map((h) => <th className="px-2 py-2 text-slate-400" key={h}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Name", "Site", "Model", "Serial", "Firmware", "Status", "Clients", "5 GHz util.", "CPU", "Source"].map((h) => <th className="px-2 py-2 text-slate-400" key={h}>{h}</th>)}</tr></thead>
           <tbody>{imported.data?.filter((d) => d.source_type === "REAL").map((d) => <tr className="border-t border-slate-800" key={d.id}>
-            <td className="px-2 py-2">{d.hostname}</td><td className="px-2 py-2">{d.model}</td><td className="px-2 py-2 font-mono text-xs">{d.serial_number}</td>
+            <td className="px-2 py-2">{d.hostname}</td>
+            <td className="px-2 py-2">{physicalSites.data?.sites.find((site) => site.id === d.site_id)?.name ?? "—"}</td>
+            <td className="px-2 py-2">{d.model}</td><td className="px-2 py-2 font-mono text-xs">{d.serial_number}</td>
             <td className="px-2 py-2">{d.firmware ?? "—"}</td><td className="px-2 py-2"><Badge value={d.status} /></td>
             <td className="px-2 py-2">{importedMetrics[d.id]?.clients ?? "—"}</td>
             <td className="px-2 py-2">{importedMetrics[d.id]?.util_5g_percent != null ? `${importedMetrics[d.id].util_5g_percent}%` : "—"}</td>
