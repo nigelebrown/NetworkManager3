@@ -269,3 +269,13 @@ def test_admin_can_bulk_import_and_edit_existing_real_network_devices(page):
     page.get_by_role("button", name="Save real device and readings").click()
     page.get_by_text("Real device snapshot saved: BULK-AP-535-RENAMED").wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "16_bulk_import_edit_network_devices.png"), full_page=True)
+
+
+def test_guided_onboarding_starts_with_site_and_reusable_credential_choice(page):
+    page.click("nav >> a[href='/onboarding']")
+    page.get_by_text("Onboard network equipment").wait_for(timeout=15000)
+    page.get_by_label("Physical site / location").fill("CI Site")
+    page.get_by_role("button", name="Next").click()
+    page.get_by_role("button", name="Select existing credentials").wait_for(timeout=15000)
+    page.get_by_role("button", name="Create credential profile").wait_for(timeout=15000)
+    page.screenshot(path=str(EVID / "17_guided_onboarding_credentials.png"), full_page=True)
