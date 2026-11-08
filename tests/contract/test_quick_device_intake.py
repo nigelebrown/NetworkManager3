@@ -40,6 +40,7 @@ def test_manual_real_ap_and_cx_inventory_and_metrics(client, admin):
         did = r.json()["id"]
         device = client.get(f"/api/v1/devices/{did}", headers=admin).json()
         assert device["adapter"] == "manual_snapshot"
+        assert device["management_addresses"] == [body["management_ip"]]
         metrics = client.get(f"/api/v1/devices/{did}/metrics", headers=admin).json()["points"]
         assert set(body["metrics"]).issubset({x["metric_name"] for x in metrics})
         assert all(x["collection_method"] == "MANUAL_ENTRY" for x in metrics)
