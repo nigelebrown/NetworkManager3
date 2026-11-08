@@ -76,6 +76,8 @@ jobs:
           python3 - <<'PY'
           import base64, os, secrets
           from pathlib import Path
+          # NATS parses unquoted env variables as config tokens; lead with a letter.
+          # 192 random bits per NATS credential; never expose values in logs.
           env = {
               "INM_VERSION": Path("VERSION").read_text().strip(),
               "INM_PROFILE": "demo",
@@ -85,8 +87,8 @@ jobs:
               "INM_SYSLOG_BIND": "127.0.0.1",
               "INM_SYSLOG_PORT": "1514",
               "INM_TLS_DIR": str(Path(".ci-tls").resolve()),
-              "INM_NATS_API_PASSWORD": secrets.token_urlsafe(36),
-              "INM_NATS_WORKER_PASSWORD": secrets.token_urlsafe(36),
+              "INM_NATS_API_PASSWORD": "nats" + secrets.token_hex(24),
+              "INM_NATS_WORKER_PASSWORD": "nats" + secrets.token_hex(24),
               "MGMT_DB_PASSWORD": secrets.token_urlsafe(36),
               "TS_DB_PASSWORD": secrets.token_urlsafe(36),
               "SIMS_JWT_SECRET": secrets.token_urlsafe(48),

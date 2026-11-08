@@ -73,8 +73,10 @@ INM_POLL_INTERVAL_SECONDS=60
 INM_ADMIN_USERNAME=admin
 MGMT_DB_PASSWORD=$(rand 40)
 TS_DB_PASSWORD=$(rand 40)
-INM_NATS_API_PASSWORD=$(rand 40)
-INM_NATS_WORKER_PASSWORD=$(rand 40)
+# NATS unquoted environment substitutions may fail when a password starts
+# with a digit; force an alphabetic prefix (random suffix remains secret).
+INM_NATS_API_PASSWORD=nats$(rand 40)
+INM_NATS_WORKER_PASSWORD=nats$(rand 40)
 INM_AI_SHARED_TOKEN=$(rand 48)
 SIMS_JWT_SECRET=$(rand 64)
 SIMS_FERNET_KEY=$fernet
