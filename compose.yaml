@@ -198,6 +198,8 @@ services:
       SIMS_DEMO_SIMPLE_LOGIN: ${INM_DEMO_SIMPLE_LOGIN:-false}
       SIMS_FORCE_INITIAL_PASSWORD_CHANGE: ${INM_FORCE_PASSWORD_CHANGE:-true}
       INM_WEB_BIND: ${INM_WEB_BIND:-127.0.0.1}
+      INM_LAN_DEMO_ACK: ${INM_LAN_DEMO_ACK:-false}
+      INM_LAN_CLIENT_CIDR: ${INM_LAN_CLIENT_CIDR:-}
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       SIMS_CORS_ORIGINS: ""
     volumes: ["app-data:/data"]
@@ -225,6 +227,9 @@ services:
     cap_add: ["CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"]
     volumes:
       - ${INM_TLS_DIR:-/etc/inm/tls}:/etc/nginx/tls:ro,Z
+      # Loopback default allows all at Nginx because the host binds 127.0.0.1 only.
+      # LAN mode binds a generated, private CIDR allowlist under /etc/inm.
+      - ${INM_NGINX_ACCESS_FILE:-./configs/nginx/inm-access-default.conf}:/etc/nginx/inm-access.conf:ro,Z
     ports:
       - "${INM_WEB_BIND:-127.0.0.1}:${INM_WEB_PORT:-8443}:8443"
     networks: [frontend, edge]
