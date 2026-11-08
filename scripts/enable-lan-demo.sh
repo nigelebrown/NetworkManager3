@@ -11,6 +11,9 @@ PROJECT=inm
 die() { echo "[inm-lan] ERROR: $*" >&2; exit 1; }
 say() { echo "[inm-lan] $*"; }
 [[ $EUID -eq 0 ]] || die "Run as root on the CentOS VM."
+# Environment exports take precedence over --env-file in Docker Compose; force
+# this operation to use its validated, persisted source of truth.
+unset INM_WEB_BIND INM_LAN_CLIENT_CIDR INM_LAN_DEMO_ACK INM_NGINX_ACCESS_FILE
 [[ $# -ge 1 && $# -le 2 ]] || die "Usage: bash scripts/enable-lan-demo.sh <SERVER_LAN_IP> [ALLOWED_PRIVATE_CIDR]"
 [[ -f "$ENV" && -f "$ROOT/compose.yaml" && -d "$ROOT/.git" ]] || die "Install INM from Git before enabling LAN access."
 command -v python3 >/dev/null || die "python3 is required"
@@ -76,7 +79,7 @@ rollback() {
   exit "$rc"
 }
 trap rollback ERR
-printf '# Authorized demo LAN clients only; compiled by enable-lan-demo.sh\nallow %s;\ndeny all;\n' "$CIDR" > "$ACL"
+printf '# Authorized demo LAN clients only; compiled by enable-lan-demo.sh\nallow 127.0.0.1;\nallow %s;\ndeny all;\n' "$CIDR" > "$ACL"
 chmod 0644 "$ACL"
 setvar INM_NGINX_ACCESS_FILE "$ACL"
 setvar INM_WEB_BIND "$SERVER_IP"
@@ -93,8 +96,13 @@ docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file 
 say "Recreating API and HTTPS web containers; all other INM services remain running."
 docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
   -f "$ROOT/compose.yaml" up -d --no-deps --force-recreate --wait --wait-timeout 120 api web
-curl -fsSk --max-time 12 "https://$SERVER_IP:8443/healthz" >/dev/null \
-  || die "The LAN-bound Nginx HTTPS health endpoint did not respond."
+# Test Nginx from inside its container. Host-to-published-port NAT often
+# changes the source to a Docker bridge gateway, which the LAN CIDR ACL
+# correctly blocks even though remote LAN clients are permitted.
+docker compose --project-name "$PROJECT" --project-directory "$ROOT" --env-file "$ENV" \
+  -f "$ROOT/compose.yaml" exec -T web \
+    wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/healthz \
+  || die "The internal Nginx HTTPS health endpoint did not respond."
 say "Verifying application and synthetic telemetry data pipeline."
 bash "$ROOT/deployment/centos9/verify.sh"
 # Best-effort firewalld restriction. Docker-published ports may bypass regular
