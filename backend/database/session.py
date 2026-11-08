@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import get_settings
 from .models import Base
+from . import models_printer  # register printer tables with metadata for tests and migrations
 
 log = logging.getLogger("sims.db")
 
