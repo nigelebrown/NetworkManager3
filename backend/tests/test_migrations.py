@@ -1,9 +1,10 @@
 """Alembic: fresh install, and in-place upgrade of a database created before migrations existed."""
 import sqlite3
+import json
 
 from sqlalchemy import create_engine, inspect, text
 
-from backend.config import get_settings
+from backend.config import ROOT_DIR, get_settings
 from backend.database import session as dbs
 from backend.database.models import Base
 
@@ -40,7 +41,8 @@ def test_pre_migration_database_is_upgraded_in_place_without_losing_data(tmp_pat
     dbs.create_schema()
     con = sqlite3.connect(path)
     assert con.execute("select name from sites").fetchall() == [("Keep-Me",)]  # data preserved
-    assert con.execute("select version_num from alembic_version").fetchone() == ("0004",)  # INM: head advanced by expand-only migration 0004 (docs/intentional_changes.md)
+    expected_head = json.loads((ROOT_DIR / "release.json").read_text())["management_schema_head"]
+    assert con.execute("select version_num from alembic_version").fetchone() == (expected_head,)  # latest expand-only migration, including printer tables
     cols = {r[1] for r in con.execute("pragma table_info(clients)")}
     assert {"exp_score", "exp_band", "poor_streak"} <= cols
     assert "client_events" in {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
