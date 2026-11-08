@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, JSON
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, BigInteger, Numeric, String, Text, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .models import Base, utcnow
@@ -45,7 +45,7 @@ class PrinterMeterReading(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     printer_id: Mapped[str] = mapped_column(ForeignKey("printer_devices.id", ondelete="CASCADE"), index=True)
     meter_kind: Mapped[str] = mapped_column(String(40))  # impressions_total, sheets_total etc.; never equated
-    counter_value: Mapped[int] = mapped_column(Integer)
+    counter_value: Mapped[int] = mapped_column(BigInteger)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     source: Mapped[str] = mapped_column(String(24))  # MANUAL | SNMPV3 | IPP
     quality: Mapped[str] = mapped_column(String(24), default="REPORTED")
@@ -77,8 +77,8 @@ class PrinterConsumableCycle(Base):
     quality_class: Mapped[str] = mapped_column(String(24), default="unknown")  # genuine/compatible/remanufactured/unknown
     supplier: Mapped[str | None] = mapped_column(String(100), nullable=True)
     meter_kind: Mapped[str] = mapped_column(String(40), default="impressions_total")
-    start_meter: Mapped[int] = mapped_column(Integer)
-    end_meter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    start_meter: Mapped[int] = mapped_column(BigInteger)
+    end_meter: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     installed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(12), default="open")  # open | closed
