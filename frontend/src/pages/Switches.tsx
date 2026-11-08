@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge, Card, ErrorNote, NA, fmtTime } from "../components/ui";
 import { CapChip, DemoBadge, Table } from "../components/inm";
 import { useLoad } from "../components/useLoad";
@@ -18,13 +19,16 @@ export default function Switches() {
   useEffect(() => {
     devs.data?.forEach((d) => v1.metrics(d.id, 1).then((m) => setMetrics((x) => ({ ...x, [d.id]: latest(m.points) }))).catch(() => {}));
   }, [devs.data]);
-  const siteName = (d: Device) => sites.data?.find((s) => s.id === d.legacy_site_id)?.name ?? "—";
+  const siteName = (d: Device) => d.legacy_site_id
+    ? (sites.data?.find((s) => s.id === d.legacy_site_id)?.name ?? "—")
+    : (d.source_type === "REAL" ? "Real inventory" : "—");
   return (
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Switches</h1>
-      <div className="rounded-lg border border-fuchsia-900/60 bg-fuchsia-950/30 p-3 text-sm text-fuchsia-200">
-        These ArubaOS-CX 6100/6200 switches are DEMO fixtures that exercise the generic device and capability model.
-        Real CX read-only onboarding is Phase 2 and needs per-model hardware evidence; switch writes stay disabled until Phase 6.
+      <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 text-sm text-slate-200">
+        DEMO switches are simulated. REAL devices are imported from actual readings or a read-only Aruba CX REST probe.
+        No switch configuration changes are permitted.
+        {" "}<Link className="text-sky-400 underline" to="/onboarding">Add a switch</Link>
       </div>
       <ErrorNote error={devs.error} />
       <Card>
@@ -33,7 +37,7 @@ export default function Switches() {
             const m = metrics[d.id] ?? {};
             return (
               <tr key={d.id}>
-                <td className="px-2 py-2"><div className="flex items-center gap-2 font-medium">{d.hostname}<DemoBadge source={d.source_type} /></div><div className="text-xs text-slate-500">{d.serial_number} · {d.firmware}</div></td>
+                <td className="px-2 py-2"><div className="flex items-center gap-2 font-medium">{d.hostname}<DemoBadge source={d.source_type} />{d.source_type === "REAL" && <span className="text-xs text-emerald-300">{d.adapter === "manual_snapshot" ? "MANUAL" : "REST READ"}</span>}</div><div className="text-xs text-slate-500">{d.serial_number} · {d.firmware}</div></td>
                 <td className="px-2 py-2">{d.model}</td>
                 <td className="px-2 py-2">{siteName(d)}</td>
                 <td className="px-2 py-2"><Badge value={d.status} /></td>
