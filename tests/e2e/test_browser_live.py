@@ -279,3 +279,28 @@ def test_guided_onboarding_starts_with_site_and_reusable_credential_choice(page)
     page.get_by_role("button", name="Select existing credentials").wait_for(timeout=15000)
     page.get_by_role("button", name="Create credential profile").wait_for(timeout=15000)
     page.screenshot(path=str(EVID / "17_guided_onboarding_credentials.png"), full_page=True)
+
+
+def test_phase3_config_inheritance_workflow_in_browser(page):
+    """Register a real inventory row, create global template, preview draft-only settings."""
+    page.goto("https://127.0.0.1:8443/onboarding/manual")
+    page.get_by_text("Add a network device").wait_for(timeout=15000)
+    page.get_by_label("Site / physical location").fill("CI Phase 3")
+    page.get_by_label("Device name").fill("CI-PHASE3-CX-6200")
+    page.get_by_label("Device serial number").fill("CI-PHASE3-CX-SERIAL")
+    page.get_by_label("Model").fill("CX 6200F")
+    page.get_by_role("button", name="Aruba CX switch").click()
+    page.get_by_role("button", name="Save real device and readings").click()
+    page.get_by_text("Real device snapshot saved: CI-PHASE3-CX-6200").wait_for(timeout=15000)
+
+    page.goto("https://127.0.0.1:8443/config-templates")
+    page.get_by_text("Configuration inheritance — Phase 3").wait_for(timeout=15000)
+    page.get_by_label("Template name").fill("CI Phase3 Global Standard")
+    page.get_by_label("Mandatory and additional VLAN IDs (comma-separated)").fill("100,200,300")
+    page.get_by_role("button", name="Save configuration template").click()
+    page.get_by_text("Configuration template saved").wait_for(timeout=15000)
+    page.get_by_label("Registered real Aruba device").select_option(label="CI-PHASE3-CX-6200 — CX 6200F")
+    page.get_by_role("button", name="Preview effective configuration").click()
+    page.get_by_text("Preview only — applied to hardware: NO").wait_for(timeout=15000)
+    page.get_by_text("100, 200, 300").wait_for(timeout=15000)
+    page.screenshot(path=str(EVID / "19_phase3_template_preview.png"), full_page=True)

@@ -156,9 +156,9 @@ jobs:
             | grep -qx Persist-through-release-head
           docker compose --env-file .env.ci --project-name inm -f compose.yaml \
             exec -T management-db psql -U inm_app -d inm_migration_test -Atqc \
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('onboarding_credentials','onboarding_discoveries','onboarding_config_snapshots','onboarding_config_drafts','onboarding_device_credentials')" \
-            | grep -qx 5
-          echo "PASS: PostgreSQL 0004-to-release-head migration preserves existing sites and creates onboarding tables"
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('onboarding_credentials','onboarding_discoveries','onboarding_config_snapshots','onboarding_config_drafts','onboarding_device_credentials','inm_config_templates')" \
+            | grep -qx 6
+          echo "PASS: PostgreSQL 0004-to-release-head migration preserves existing sites and creates onboarding and template tables"
           unset DB_PASS TEST_MIGRATION_URL
       - name: Run actual browser navigation, WebSocket and dashboard workflows
         env:
