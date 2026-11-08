@@ -79,6 +79,17 @@ let the script detect its subnet:
 bash scripts/enable-lan-demo.sh 172.17.71.21
 ```
 
+**Existing database schemas:** A rebuild may introduce a newer schema. For
+an existing demo at management schema `0004`, this LAN command now backs up
+the management database, TimescaleDB, JetStream, Loki and app state into an
+encrypted archive, verifies the archive checksum, and applies the additive
+`0004 → 0005` migration through the one-shot `migrate` service **before**
+restarting the API. It checks the management and telemetry revisions against
+`release.json` and refuses unknown revisions. If a backup or migration
+fails, do not delete volumes or manually downgrade the schema; inspect the
+reported backup path and failure. Verifying an archive checksum is not a
+substitute for a separate test-restore.
+
 After the script reports success, a PC in the approved subnet can browse to:
 
 ```text
