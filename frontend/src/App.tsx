@@ -17,6 +17,8 @@ import ChangePassword from "./pages/ChangePassword";
 import Logs from "./pages/Logs";
 import { ChangeControl } from "./pages/Planned";
 import DeviceIntake from "./pages/DeviceIntake";
+import GuidedOnboarding from "./pages/GuidedOnboarding";
+import DeviceConfig from "./pages/DeviceConfig";
 import DiscoveryRanges from "./pages/DiscoveryRanges";
 import { Printers, PrinterDetails } from "./pages/Printers";
 import DeviceDetails from "./pages/DeviceDetails";
@@ -61,7 +63,9 @@ export default function App() {
         <Route path="users" element={<Users />} />
         <Route path="recovery" element={<Recovery />} />
         <Route path="ai-learning" element={<AiLearning />} />
-        <Route path="onboarding" element={<DeviceIntake />} />
+        <Route path="onboarding" element={<GuidedOnboarding />} />
+        <Route path="onboarding/manual" element={<DeviceIntake />} />
+        <Route path="devices/:id/config" element={<DeviceConfig />} />
         <Route path="discovery" element={<DiscoveryRanges />} />
         <Route path="printers" element={<Printers />} />
         <Route path="printers/:id" element={<PrinterDetails />} />
