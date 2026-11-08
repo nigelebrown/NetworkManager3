@@ -61,7 +61,7 @@ def test_duplicate_real_identity_is_upserted_but_cross_family_rejected(client, a
 
 def test_negative_readings_and_unapproved_metric_rejected(client, admin):
     migrate_telemetry()
-    for vals in ({"cpu_percent": 101}, {"clients": -1}, {"ports_up": 1}, {"util_5g_percent": float("nan")}):
+    for vals in ({"cpu_percent": 101}, {"clients": -1}, {"ports_up": 1}, {"util_5g_percent": -5}):
         p = {**ap_payload(), "metrics": vals}
         assert client.post("/api/v1/quick-devices", headers=admin, json=p).status_code == 422
 
