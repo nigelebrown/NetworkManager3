@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..aruba.errors import ArubaError
 from ..database.models import User
 from ..database.models_inm import DeviceCapability, InmDevice, InmSite
 from ..database.session import get_db
@@ -238,7 +239,7 @@ def probe_device(body: QuickProbe, request: Request, db: Session = Depends(get_d
                           model=str(observation["model"])[:64], firmware=str(observation.get("firmware") or "")[:64] or None,
                           management_ip=body.management_ip, status=observation["status"],
                           metrics=observation["metrics"])
-    except (httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
+    except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
         # Never leak the request URL: AOS-CX login uses query parameters for credentials.
         audit(db, "device_probe_failed", username=admin.username,
               target=f"{body.family}:{body.management_ip}",
