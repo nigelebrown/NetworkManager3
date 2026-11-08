@@ -1,6 +1,6 @@
 # Server deployment runbook — CentOS Stream 9
 
-**Applicability:** `INM-1.0.0-phase1` demo candidate after all source files have been committed to this private repository. **Not a certified production release.**
+**Applicability:** `INM-1.0.0-phase1` Git-hosted demo candidate. All application source is committed to this private repository; the clean CentOS acceptance is still outstanding. **Not a certified production release.**
 
 ## VM specification
 
@@ -13,24 +13,44 @@ Use a supported hypervisor. Confirm NTP/chrony and enough free space, and assign
 - CentOS Stream 9 with outbound access to approved image registries and GitHub, or an approved offline image mirror.
 - Git, sudo, and an authorized SSH deploy key / Git credential to clone the **private** repository.
 - Phase 1 source committed: `compose.yaml`, `backend/`, `frontend/`, `deployment/`, `configs/`, `release.json`.
-- A reviewed immutable Git release tag and matching source commit. Maintain the release SHA and image digests in the acceptance record.
+- For the initial demo, fetch and install from current Git `main` using the wrapper; for all subsequent upgrades require an approved immutable Git release tag. Maintain the source SHA and image digests in the acceptance record.
 - No device credentials and no real management-network connectivity in the demo environment.
 
-## Initial checkout (after source import)
+## One-command Git installation (no PC/source upload)
+
+The CentOS root account is already authorized through the repository's read-only
+SSH deploy key, using the `github-networkmanager3` SSH alias. If not already cloned:
 
 ```bash
-sudo dnf -y install git
-git clone git@github.com:nigelebrown/NetworkManager3.git
-cd NetworkManager3
-git fetch --tags
-git checkout <approved-release-tag>
-sudo bash deployment/centos9/doctor.sh
-sudo bash deployment/centos9/install.sh --mode demo
-sudo bash deployment/centos9/verify.sh
-sudo bash deployment/centos9/status.sh
+git clone github-networkmanager3:nigelebrown/NetworkManager3.git /root/NetworkManager3
 ```
 
-For an HTTPS clone, use an authorized Git credential helper. Never put personal-access tokens in shell history or clone URLs. Confirm the installer is sourced from the reviewed commit.
+On the current server, the repository is already cloned, so run only:
+
+```bash
+cd /root/NetworkManager3 && bash scripts/inm.sh install
+```
+
+This automatically fetches the GitHub main branch, accepts only a fast-forward
+checkout and executes the existing preflight/install/verify state machine.
+No Windows PC, ZIP transfer or copy of application files is involved.
+An installed checkout is deliberately not advanced to a different commit without
+the audited update operation.
+
+**Git-based updates:**
+
+```bash
+cd /root/NetworkManager3 && bash scripts/inm.sh update
+```
+
+The wrapper fetches Git tags and reads the approved release reference from
+`deployment/releases/approved-demo-tag` in GitHub. Until an approved immutable
+tag is published, this command safely refuses to upgrade. To choose a named
+approved release use `bash scripts/inm.sh update --ref <approved-tag>`.
+
+Application source comes from Git; Docker images and build dependencies still
+come from approved package registries. The server requires network access to those
+registries during a normal build.
 
 ## Browser access
 
@@ -46,19 +66,19 @@ Open `https://localhost:8443` and verify the self-signed pilot certificate finge
 
 ```bash
 # Safe no-change/diagnostics
-sudo bash deployment/centos9/doctor.sh
-sudo bash deployment/centos9/status.sh
-sudo bash deployment/centos9/verify.sh
+bash scripts/inm.sh doctor
+bash scripts/inm.sh status
+bash scripts/inm.sh verify
 
 # Required before any update
-sudo bash deployment/centos9/backup.sh
+bash scripts/inm.sh backup
 # Restore rehearsal in disposable environment:
 sudo bash deployment/centos9/restore.sh --archive /var/lib/inm/backups/<backup>.tar.enc --target test
 
 # Approved, tagged update only
-sudo bash deployment/centos9/update.sh --ref <new-approved-tag>
+bash scripts/inm.sh update
 # Rollback only when current schema is compatible:
-sudo bash deployment/centos9/rollback.sh --to <old-approved-tag> --acknowledge-schema-compatible
+bash scripts/inm.sh rollback --to <old-approved-tag> --acknowledge-schema-compatible
 ```
 
 The Git checkout must be clean before updating. Do not change source code on the server. A failed backup, failed image verification, failed schema compatibility check, failed health check or failed restore rehearsal must block promotion.
