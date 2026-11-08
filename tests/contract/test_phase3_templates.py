@@ -41,7 +41,7 @@ def test_inheritance_api_and_baseline_gated_draft(client,admin):
     with session_scope() as db:
         db.add(OnboardingConfigSnapshot(
           device_id=did,source="aruba_cx_rest",completeness="PARTIAL",
-          config_json={"vlans":[{"id":100}],"interfaces":[]},"warning":"CI fixture only",
+          config_json={"vlans":[{"id":100}],"interfaces":[]},warning="CI fixture only",
           collected_by="test"))
     draft=client.post("/api/v1/config-templates/devices/"+did+"/draft",headers=admin)
     assert draft.status_code==201,draft.text
