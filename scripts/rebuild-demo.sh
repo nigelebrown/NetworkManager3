@@ -45,6 +45,17 @@ git -C "$ROOT" merge --ff-only origin/main || die "Non-fast-forward update refus
 [[ "$(sed -n 's/.*\"device_writes\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$ROOT/release.json" | head -1)" == LOCKED ]] \
   || die "Release does not declare device writes locked."
 
+# Never take a working demo offline until the target checkout passes the
+# CentOS resource, Docker, port, registry and secret-file safety preflight.
+say "Running safety and resource preflight BEFORE stopping the existing stack"
+(cd "$ROOT" && bash deployment/centos9/doctor.sh) \
+  || die "Preflight failed. Existing INM containers have not been stopped."
+if [[ -f "$ENV" ]] && command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
+  docker compose --project-name "$PROJECT" --project-directory "$ROOT" \
+    -f "$ROOT/compose.yaml" --env-file "$ENV" config --quiet \
+    || die "Compose validation failed; existing INM containers have not been stopped."
+fi
+
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   say "Stopping/removing containers for Compose project inm ONLY (retaining all named data volumes)"
   if [[ -f "$ENV" ]]; then
