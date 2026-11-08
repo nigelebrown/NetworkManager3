@@ -163,3 +163,53 @@ def test_failed_cx_rest_connection_returns_502_without_leaking_credentials(clien
         response = client.post("/api/v1/quick-devices/probe", headers=admin, json=probe)
     assert response.status_code == 502
     assert "secret-not-in-response" not in response.text
+
+
+def test_demo123_password_is_preserved_with_explicit_restricted_lan(monkeypatch, app_env):
+    """LAN demo may keep demo123!, but only on an approved private /24 or narrower."""
+    from backend.config import get_settings
+
+    values = {
+        "SIMS_MODE": "demo",
+        "SIMS_INM_PROFILE": "demo",
+        "SIMS_DEVICE_WRITE_LOCK": "true",
+        "SIMS_ALLOW_CONFIG_CHANGES": "false",
+        "SIMS_DEMO_SIMPLE_LOGIN": "true",
+        "SIMS_ADMIN_PASSWORD": "demo123!",
+        "INM_WEB_BIND": "172.17.71.21",
+        "INM_LAN_DEMO_ACK": "true",
+        "INM_LAN_CLIENT_CIDR": "172.17.71.0/24",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    assert get_settings().validate_profile() == []
+
+    for key, invalid in (
+        ("INM_LAN_DEMO_ACK", "false"),
+        ("INM_LAN_CLIENT_CIDR", "172.17.0.0/16"),
+        ("INM_LAN_CLIENT_CIDR", "10.103.7.0/24"),
+        ("INM_WEB_BIND", "0.0.0.0"),
+        ("INM_WEB_BIND", "8.8.8.8"),
+    ):
+        with monkeypatch.context() as changes:
+            changes.setenv(key, invalid)
+            get_settings.cache_clear()
+            assert get_settings().validate_profile(), (key, invalid)
+    get_settings.cache_clear()
+
+
+def test_lan_nginx_acl_mount_is_present():
+    """Both secure default and LAN-specific access-control mechanisms must exist."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / "compose.yaml").read_text(encoding="utf-8")
+    nginx = (root / "configs/nginx/inm.conf").read_text(encoding="utf-8")
+    script = (root / "scripts/enable-lan-demo.sh").read_text(encoding="utf-8")
+    assert "INM_NGINX_ACCESS_FILE" in compose
+    assert "include /etc/nginx/inm-access.conf;" in nginx
+    assert 'allow 127.0.0.1;' in script
+    assert 'deny all;' in script
+    assert 'SIMS_ADMIN_PASSWORD' in script and 'demo123!' in script
+    assert 'setvar SIMS_ADMIN_PASSWORD' not in script  # never reset the password
