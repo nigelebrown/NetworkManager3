@@ -83,6 +83,10 @@ def test_direct_probe_requires_allowlisted_private_target(client, admin, monkeyp
     assert client.post("/api/v1/quick-devices/probe", headers=admin, json=probe).status_code == 403
     monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.101.0.0/16")
     assert client.post("/api/v1/quick-devices/probe", headers=admin, json=probe).status_code == 403
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.0.0.0/8")
+    assert client.post("/api/v1/quick-devices/probe", headers=admin, json=probe).status_code == 503
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "0.0.0.0/0")
+    assert client.post("/api/v1/quick-devices/probe", headers=admin, json=probe).status_code == 503
     monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.7.0/24")
     assert client.post("/api/v1/quick-devices/probe", headers=admin,
                        json={**probe, "management_ip": "127.0.0.1"}).status_code == 422
