@@ -162,7 +162,8 @@ def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None) -> dic
            "family": d.family, "model": d.model, "serial_number": d.serial_number, "hostname": d.hostname,
            "firmware": d.firmware, "status": d.status, "adapter": d.adapter, "site_id": d.site_id,
            "cluster_id": d.cluster_id, "legacy_site_id": d.legacy_site_id, "legacy_ap_id": d.legacy_ap_id,
-           "last_observed_at": _iso(d.last_observed_at)}
+           "last_observed_at": _iso(d.last_observed_at),
+           "management_addresses": d.mgmt_addresses if d.source_type == "REAL" else []}
     if caps is not None:
         out["capabilities"] = [{"operation": c.operation, "status": c.status, "evidence": c.evidence} for c in caps]
     return out
