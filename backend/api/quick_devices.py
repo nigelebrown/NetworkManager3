@@ -15,7 +15,7 @@ from typing import Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -89,7 +89,7 @@ def record_observation(db: Session, body: QuickDevice, actor: str, request: Requ
 
     dev = db.scalar(select(InmDevice).where(InmDevice.source_type == "REAL",
                                            InmDevice.vendor == "Aruba",
-                                           InmDevice.serial_number == body.serial_number))
+                                           func.lower(InmDevice.serial_number) == body.serial_number.lower()))
     if dev is not None and dev.family != body.family:
         raise HTTPException(409, "This serial number is already registered as a different device family")
     if dev is None:
@@ -135,6 +135,52 @@ def create_device(body: QuickDevice, request: Request, db: Session = Depends(get
     if not get_settings().device_write_lock:
         raise HTTPException(403, "Quick intake requires the global device-write safety lock")
     return record_observation(db, body, admin.username, request)
+
+
+class BulkQuickDeviceInput(BaseModel):
+    """Review all entries before saving. Bulk onboarding is MANUAL only."""
+    devices: list[QuickDevice] = Field(min_length=1, max_length=100)
+
+
+@router.post("/bulk", status_code=201)
+def create_device_batch(body: BulkQuickDeviceInput, request: Request,
+                        db: Session = Depends(get_db),
+                        admin: User = Depends(require_role("admin"))):
+    """Import up to 100 AP/CX devices in one management-DB transaction.
+
+    No hardware calls. Bulk telemetry is excluded until cross-database transaction
+    reconciliation is available; add observations individually after import.
+    """
+    if not get_settings().device_write_lock:
+        raise HTTPException(403, "Bulk intake requires the global device-write safety lock.")
+    serials: set[str] = set()
+    for row in body.devices:
+        key = row.serial_number.strip().casefold()
+        if key in serials:
+            raise HTTPException(422, f"Duplicate serial number in batch: {row.serial_number}")
+        serials.add(key)
+        if row.metrics:
+            raise HTTPException(422, "Bulk device import accepts inventory only; record metrics individually.")
+    # Detect all cross-family collisions BEFORE writing any inventory rows.
+    existing = list(db.scalars(select(InmDevice).where(
+        InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba",
+        func.lower(InmDevice.serial_number).in_(serials))))
+    indexed = {device.serial_number.casefold(): device for device in existing}
+    for row in body.devices:
+        old = indexed.get(row.serial_number.casefold())
+        if old is not None and old.family != row.family:
+            raise HTTPException(409, f"Serial {row.serial_number} already exists as {old.family}")
+    results = []
+    for row in body.devices:
+        already = row.serial_number.casefold() in indexed
+        result = record_observation(db, row, admin.username, request, evidence="MANUAL")
+        results.append({"id": result["id"], "hostname": result["hostname"],
+                        "serial_number": row.serial_number,
+                        "action": "UPDATED" if already else "ADDED"})
+    return {"count": len(results), "added": sum(x["action"] == "ADDED" for x in results),
+            "updated": sum(x["action"] == "UPDATED" for x in results),
+            "source_type": "REAL", "collection_method": "MANUAL",
+            "device_writes": "LOCKED", "results": results}
 
 
 class QuickProbe(BaseModel):
