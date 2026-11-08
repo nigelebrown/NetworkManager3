@@ -59,7 +59,9 @@ PY
 )" || die "LAN address/subnet validation failed."
 say "Approving LAN access to $SERVER_IP:8443 from $CIDR only."
 say "Keeping existing demo administrator password unchanged."
-[[ -f "$ACL" ]] && cp -p "$ACL" "$ACL.before-lan-$(date -u +%Y%m%dT%H%M%SZ)"
+acl_existed=0
+aclbackup="$(mktemp /etc/inm/nginx-access.before-lan.XXXXXXXX)"
+if [[ -f "$ACL" ]]; then cp -p "$ACL" "$aclbackup"; acl_existed=1; fi
 backup="$(mktemp /etc/inm/inm.env.before-lan.XXXXXXXX)"
 cp -p "$ENV" "$backup"
 setvar() {
@@ -69,22 +71,25 @@ setvar() {
 }
 rollback() {
   local rc=$?
-  trap - ERR
-  say "LAN change failed (exit $rc): restoring original environment."
+  trap - EXIT
+  if (( rc == 0 )); then return 0; fi
+  say "LAN change failed (exit $rc): restoring original environment and access controls."
   cp -p "$backup" "$ENV" || true
-  rm -f "$backup"
+  if (( acl_existed )); then cp -p "$aclbackup" "$ACL" || true; else rm -f "$ACL"; fi
+  rm -f "$backup" "$aclbackup"
   # Recreate the previous API/web binding using the original env; never prune volumes.
   docker compose --project-name "$PROJECT" --project-directory "$ROOT" \
     --env-file "$ENV" -f "$ROOT/compose.yaml" up -d --no-deps --force-recreate api web || true
   exit "$rc"
 }
-trap rollback ERR
+trap rollback EXIT
 printf '# Authorized demo LAN clients only; compiled by enable-lan-demo.sh\nallow 127.0.0.1;\nallow %s;\ndeny all;\n' "$CIDR" > "$ACL"
 chmod 0644 "$ACL"
 setvar INM_NGINX_ACCESS_FILE "$ACL"
 setvar INM_WEB_BIND "$SERVER_IP"
 setvar INM_LAN_CLIENT_CIDR "$CIDR"
 setvar INM_LAN_DEMO_ACK true
+setvar INM_GIT_COMMIT "$(git -C "$ROOT" rev-parse HEAD)"
 chmod 0600 "$ENV"
 # Bring the updated API guard and Nginx ACL into the runtime. No change to
 # the admin password or PostgreSQL/TimescaleDB volume contents.
@@ -119,8 +124,8 @@ if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; t
 else
   say "firewalld unavailable: Nginx CIDR ACL is active; check host/network firewall separately if remote clients time out."
 fi
-trap - ERR
-rm -f "$backup"
+trap - EXIT
+rm -f "$backup" "$aclbackup"
 cat <<EOF
 
 INM HTTPS is now bound to:  https://$SERVER_IP:8443
