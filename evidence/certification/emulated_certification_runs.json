@@ -1,0 +1,1292 @@
+{
+ "switch:CX 6100 12G": {
+  "run_id": "681cfa91-df5a-4c9a-a6b2-99d26918967e",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "CX 6100 12G",
+   "firmware": "PL.10.14.DEMO",
+   "hostname": "emulated-cx"
+  },
+  "adapter": "aruba_cx_10_14",
+  "model_family": "CX 6100",
+  "firmware_train": "10.14",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 29085
+    }
+   },
+   {
+    "operation": "switch.vlan.define",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.vlan.define",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "POST",
+       "path": "/system/vlans",
+       "json": {
+        "id": 4090,
+        "name": "VLAN4090"
+       }
+      }
+     ],
+     "readback": {
+      "id": 4090,
+      "name": "VLAN4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.access_vlan",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.access_vlan",
+      "port": "1/1/20",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "access",
+        "vlan_tag": "/rest/v10.14/system/vlans/4090"
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "access",
+      "vlan_tag": "/rest/v10.14/system/vlans/4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.trunk_vlans",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.trunk_vlans",
+      "port": "1/1/20",
+      "value": [
+       1,
+       4090
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "native-untagged",
+        "vlan_tag": "/rest/v10.14/system/vlans/1",
+        "vlan_trunks": [
+         "/rest/v10.14/system/vlans/1",
+         "/rest/v10.14/system/vlans/4090"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "native-untagged",
+      "vlan_trunks": [
+       1,
+       4090
+      ]
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.admin_state",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.admin_state",
+      "port": "1/1/20",
+      "value": "down"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "admin": "down"
+       }
+      }
+     ],
+     "readback": {
+      "admin": "down"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.poe",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.poe",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20/poe_interface",
+       "json": {
+        "config": {
+         "admin_disable": true
+        }
+       }
+      }
+     ],
+     "readback": {
+      "admin_disable": true
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lldp",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lldp",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "other_config": {
+         "lldp_enable_dir": "off"
+        }
+       }
+      }
+     ],
+     "readback": {
+      "lldp_enable_dir": "off"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lag.members",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lag.members",
+      "lag": "lag250",
+      "value": [
+       "1/1/21",
+       "1/1/22"
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PUT",
+       "path": "/system/interfaces/lag250",
+       "json": {
+        "name": "lag250",
+        "type": "lag",
+        "admin": "up",
+        "lacp": "active",
+        "interfaces": [
+         "/rest/v10.14/system/interfaces/1%2F1%2F21",
+         "/rest/v10.14/system/interfaces/1%2F1%2F22"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "members": [
+       "1/1/21",
+       "1/1/22"
+      ],
+      "lacp": "active"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": true,
+    "evidence": {
+     "matches_baseline": true
+    }
+   }
+  ]
+ },
+ "switch:CX 6100 24G": {
+  "run_id": "92f3dffa-dc01-48e9-b2f2-9e598dd9d48b",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "CX 6100 24G",
+   "firmware": "PL.10.14.DEMO",
+   "hostname": "emulated-cx"
+  },
+  "adapter": "aruba_cx_10_14",
+  "model_family": "CX 6100",
+  "firmware_train": "10.14",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 29085
+    }
+   },
+   {
+    "operation": "switch.vlan.define",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.vlan.define",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "POST",
+       "path": "/system/vlans",
+       "json": {
+        "id": 4090,
+        "name": "VLAN4090"
+       }
+      }
+     ],
+     "readback": {
+      "id": 4090,
+      "name": "VLAN4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.access_vlan",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.access_vlan",
+      "port": "1/1/20",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "access",
+        "vlan_tag": "/rest/v10.14/system/vlans/4090"
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "access",
+      "vlan_tag": "/rest/v10.14/system/vlans/4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.trunk_vlans",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.trunk_vlans",
+      "port": "1/1/20",
+      "value": [
+       1,
+       4090
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "native-untagged",
+        "vlan_tag": "/rest/v10.14/system/vlans/1",
+        "vlan_trunks": [
+         "/rest/v10.14/system/vlans/1",
+         "/rest/v10.14/system/vlans/4090"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "native-untagged",
+      "vlan_trunks": [
+       1,
+       4090
+      ]
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.admin_state",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.admin_state",
+      "port": "1/1/20",
+      "value": "down"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "admin": "down"
+       }
+      }
+     ],
+     "readback": {
+      "admin": "down"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.poe",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.poe",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20/poe_interface",
+       "json": {
+        "config": {
+         "admin_disable": true
+        }
+       }
+      }
+     ],
+     "readback": {
+      "admin_disable": true
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lldp",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lldp",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "other_config": {
+         "lldp_enable_dir": "off"
+        }
+       }
+      }
+     ],
+     "readback": {
+      "lldp_enable_dir": "off"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lag.members",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lag.members",
+      "lag": "lag250",
+      "value": [
+       "1/1/21",
+       "1/1/22"
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PUT",
+       "path": "/system/interfaces/lag250",
+       "json": {
+        "name": "lag250",
+        "type": "lag",
+        "admin": "up",
+        "lacp": "active",
+        "interfaces": [
+         "/rest/v10.14/system/interfaces/1%2F1%2F21",
+         "/rest/v10.14/system/interfaces/1%2F1%2F22"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "members": [
+       "1/1/21",
+       "1/1/22"
+      ],
+      "lacp": "active"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": true,
+    "evidence": {
+     "matches_baseline": true
+    }
+   }
+  ]
+ },
+ "switch:CX 6200F 48G": {
+  "run_id": "052eb9b6-fca1-46fe-b382-c76dbcd50887",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "CX 6200F 48G",
+   "firmware": "PL.10.14.DEMO",
+   "hostname": "emulated-cx"
+  },
+  "adapter": "aruba_cx_10_14",
+  "model_family": "CX 6200",
+  "firmware_train": "10.14",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 29086
+    }
+   },
+   {
+    "operation": "switch.vlan.define",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.vlan.define",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "POST",
+       "path": "/system/vlans",
+       "json": {
+        "id": 4090,
+        "name": "VLAN4090"
+       }
+      }
+     ],
+     "readback": {
+      "id": 4090,
+      "name": "VLAN4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.access_vlan",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.access_vlan",
+      "port": "1/1/20",
+      "value": 4090
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "access",
+        "vlan_tag": "/rest/v10.14/system/vlans/4090"
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "access",
+      "vlan_tag": "/rest/v10.14/system/vlans/4090"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.trunk_vlans",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.trunk_vlans",
+      "port": "1/1/20",
+      "value": [
+       1,
+       4090
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "vlan_mode": "native-untagged",
+        "vlan_tag": "/rest/v10.14/system/vlans/1",
+        "vlan_trunks": [
+         "/rest/v10.14/system/vlans/1",
+         "/rest/v10.14/system/vlans/4090"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "vlan_mode": "native-untagged",
+      "vlan_trunks": [
+       1,
+       4090
+      ]
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.admin_state",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.admin_state",
+      "port": "1/1/20",
+      "value": "down"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "admin": "down"
+       }
+      }
+     ],
+     "readback": {
+      "admin": "down"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.port.poe",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.port.poe",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20/poe_interface",
+       "json": {
+        "config": {
+         "admin_disable": true
+        }
+       }
+      }
+     ],
+     "readback": {
+      "admin_disable": true
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lldp",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lldp",
+      "port": "1/1/20",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "method": "PATCH",
+       "path": "/system/interfaces/1%2F1%2F20",
+       "json": {
+        "other_config": {
+         "lldp_enable_dir": "off"
+        }
+       }
+      }
+     ],
+     "readback": {
+      "lldp_enable_dir": "off"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "switch.lag.members",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "switch.lag.members",
+      "lag": "lag250",
+      "value": [
+       "1/1/21",
+       "1/1/22"
+      ]
+     },
+     "rendered": [
+      {
+       "method": "PUT",
+       "path": "/system/interfaces/lag250",
+       "json": {
+        "name": "lag250",
+        "type": "lag",
+        "admin": "up",
+        "lacp": "active",
+        "interfaces": [
+         "/rest/v10.14/system/interfaces/1%2F1%2F21",
+         "/rest/v10.14/system/interfaces/1%2F1%2F22"
+        ]
+       }
+      }
+     ],
+     "readback": {
+      "members": [
+       "1/1/21",
+       "1/1/22"
+      ],
+      "lacp": "active"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": true,
+    "evidence": {
+     "matches_baseline": true
+    }
+   }
+  ]
+ },
+ "access_point:AP-505": {
+  "run_id": "c9ef29b1-dc40-45a2-8ada-540458b126fd",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "AP-505",
+   "firmware": "8.10.0.21-8.10.0.21"
+  },
+  "adapter": "aruba_instant_8_10",
+  "model_family": "AP-505",
+  "firmware_train": "8.10",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 328
+    }
+   },
+   {
+    "operation": "ap.client_match",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.client_match",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "no client-match",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "client-match": false
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.band_steering",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.band_steering",
+      "value": "balance-bands"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "band-steering-mode balance-bands",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "band-steering-mode": "balance-bands"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.airtime_fairness",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.airtime_fairness",
+      "value": "fair-access"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "air-time-fairness-mode fair-access",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "air-time-fairness-mode": "fair-access"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.width",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.width",
+      "value": 20
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "wide-bands none",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "wide-bands": "none"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.tx_power",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.tx_power",
+      "min_dbm": 10,
+      "max_dbm": 17
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "min-tx-power 10",
+        "max-tx-power 17",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "min-tx-power": 10,
+      "max-tx-power": 17
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.channel",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.channel",
+      "band": "5",
+      "value": 44,
+      "power": 14
+     },
+     "rendered": [
+      {
+       "transport": "SSH-EXEC",
+       "host": "emulated-vc",
+       "lines": [
+        "a-channel 44 14"
+       ]
+      }
+     ],
+     "readback": {
+      "channel": "44"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": false,
+    "unsupported": true,
+    "evidence": {
+     "error": "UNSUPPORTED: Full-config restore on Instant is a guided procedure (Replace device wizard)."
+    }
+   }
+  ]
+ },
+ "access_point:AP-515": {
+  "run_id": "b620cc5c-5b9d-4f83-9355-194aa8b27821",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "AP-515",
+   "firmware": "8.10.0.21-8.10.0.21"
+  },
+  "adapter": "generic_snmpv3",
+  "model_family": "AP-515",
+  "firmware_train": "8.10",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 328
+    }
+   },
+   {
+    "operation": "ap.client_match",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.client_match",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "no client-match",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "client-match": false
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.band_steering",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.band_steering",
+      "value": "balance-bands"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "band-steering-mode balance-bands",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "band-steering-mode": "balance-bands"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.airtime_fairness",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.airtime_fairness",
+      "value": "fair-access"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "air-time-fairness-mode fair-access",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "air-time-fairness-mode": "fair-access"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.width",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.width",
+      "value": 20
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "wide-bands none",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "wide-bands": "none"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.tx_power",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.tx_power",
+      "min_dbm": 10,
+      "max_dbm": 17
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "min-tx-power 10",
+        "max-tx-power 17",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "min-tx-power": 10,
+      "max-tx-power": 17
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.channel",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.channel",
+      "band": "5",
+      "value": 44,
+      "power": 14
+     },
+     "rendered": [
+      {
+       "transport": "SSH-EXEC",
+       "host": "emulated-vc",
+       "lines": [
+        "a-channel 44 14"
+       ]
+      }
+     ],
+     "readback": {
+      "channel": "44"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": false,
+    "unsupported": true,
+    "evidence": {
+     "error": "UNSUPPORTED: Full-config restore on Instant is a guided procedure (Replace device wizard)."
+    }
+   }
+  ]
+ },
+ "access_point:AP-535": {
+  "run_id": "0c139563-1d47-435b-a6a1-b53ca04f738c",
+  "environment": "EMULATED",
+  "identity": {
+   "model": "AP-535",
+   "firmware": "8.10.0.21-8.10.0.21"
+  },
+  "adapter": "aruba_instant_8_10",
+  "model_family": "AP-535",
+  "firmware_train": "8.10",
+  "results": [
+   {
+    "operation": "read.backup_full_config",
+    "passed": true,
+    "evidence": {
+     "bytes": 328
+    }
+   },
+   {
+    "operation": "ap.client_match",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.client_match",
+      "value": "disabled"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "no client-match",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "client-match": false
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.band_steering",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.band_steering",
+      "value": "balance-bands"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "band-steering-mode balance-bands",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "band-steering-mode": "balance-bands"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.airtime_fairness",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.airtime_fairness",
+      "value": "fair-access"
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "air-time-fairness-mode fair-access",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "air-time-fairness-mode": "fair-access"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.width",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.width",
+      "value": 20
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "wide-bands none",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "wide-bands": "none"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.tx_power",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.tx_power",
+      "min_dbm": 10,
+      "max_dbm": 17
+     },
+     "rendered": [
+      {
+       "transport": "SSH-CONFIG",
+       "host": "emulated-vc",
+       "lines": [
+        "configure terminal",
+        "arm",
+        "min-tx-power 10",
+        "max-tx-power 17",
+        "no 80mhz-support",
+        "exit",
+        "end",
+        "commit apply"
+       ]
+      }
+     ],
+     "readback": {
+      "min-tx-power": 10,
+      "max-tx-power": 17
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "ap.radio.channel",
+    "passed": true,
+    "evidence": {
+     "op": {
+      "op": "ap.radio.channel",
+      "band": "5",
+      "value": 44,
+      "power": 14
+     },
+     "rendered": [
+      {
+       "transport": "SSH-EXEC",
+       "host": "emulated-vc",
+       "lines": [
+        "a-channel 44 14"
+       ]
+      }
+     ],
+     "readback": {
+      "channel": "44"
+     },
+     "rollback_restored": true
+    }
+   },
+   {
+    "operation": "config.restore",
+    "passed": false,
+    "unsupported": true,
+    "evidence": {
+     "error": "UNSUPPORTED: Full-config restore on Instant is a guided procedure (Replace device wizard)."
+    }
+   }
+  ]
+ }
+}

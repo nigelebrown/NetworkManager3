@@ -19,7 +19,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, printers, discovery_ranges, onboarding_workflow
+from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
+from .api import collection, attribution, vault, change_control, replacement, learning, optimization, platform_ops, operations_center, production_ops
 from .config import ROOT_DIR, get_settings
 from .database.models import User
 from .database.session import assert_schema_current, create_schema, init_engine, session_scope
@@ -80,12 +81,17 @@ async def lifespan(app: FastAPI):
     init_engine()
     if s.auto_migrate:
         create_schema()
+        from .infrastructure.runtime import telemetry_store
+        if telemetry_store() is not None:   # same idempotent, versioned migration the installer runs
+            telemetry_store().migrate()
     else:
         assert_schema_current()  # the installer migrates; a newer/older schema here means stop, not guess
     _bootstrap_admin()
     if s.mode == "demo":
         with session_scope() as db:
-            ensure_demo_sites(db)
+            from backend.infrastructure.demo_dataset import demo_allowed_at_startup
+            if demo_allowed_at_startup(db):  # an explicit "Remove demo data" is respected across restarts
+                ensure_demo_sites(db)
 
     scheduler = None
     # Only the original single-process mode polls inside the web process. In INM the network worker owns
@@ -95,6 +101,15 @@ async def lifespan(app: FastAPI):
         scheduler = BackgroundScheduler(timezone="UTC")
         scheduler.add_job(poll_all, "interval", seconds=s.poll_interval_seconds,
                           max_instances=1, coalesce=True, id="poll_all")
+        # WP-02 scheduled read-only collection (the INM worker role runs the same job in its own process).
+        import os as _os
+        if _os.environ.get("INM_SCHEDULED_COLLECTION", "true").lower() not in ("0", "false", "no"):
+            scheduler.add_job(_run_collection, "interval", seconds=30, max_instances=1, coalesce=True,
+                              id="collection")
+        from .infrastructure import scheduled_jobs as J
+        scheduler.add_job(J.safe(J.vault_captures), "interval", minutes=5, max_instances=1, coalesce=True, id="vault")
+        scheduler.add_job(J.safe(J.scheduled_analysis), "interval", hours=1, max_instances=1, coalesce=True, id="analysis")
+        scheduler.add_job(J.safe(J.optimizer), "interval", minutes=5, max_instances=1, coalesce=True, id="optimizer")
         scheduler.start()
 
     stop = asyncio.Event()
@@ -161,6 +176,16 @@ class RequestContextMiddleware:
         return await self.app(scope, receive, send_with_id)
 
 
+def _run_collection() -> None:
+    from .infrastructure.collection_runner import run_due
+    from .infrastructure.runtime import telemetry_store
+    try:
+        with session_scope() as db:
+            run_due(db, store=telemetry_store(), worker="standalone")
+    except Exception as exc:  # never let one bad plan stop the scheduler
+        log.warning("collection cycle failed: %s", type(exc).__name__)
+
+
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(title="SIMS Wi-Fi Manager", version="0.1.0", lifespan=lifespan,
@@ -204,7 +229,9 @@ def create_app() -> FastAPI:
         resp.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else resp.headers.get("Cache-Control", "no-cache")
         return resp
 
-    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, printers.router, discovery_ranges.router, onboarding_workflow.router):
+    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, printers.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
+              collection.router, attribution.router, vault.router, change_control.router, replacement.router,
+              learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router):
         app.include_router(r)
     app.include_router(api_v1.router)
     app.include_router(ws.router)

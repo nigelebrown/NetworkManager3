@@ -223,6 +223,16 @@ def apply_change(db: Session, change: ConfigChange, user: str, confirm_text: str
         raise PlanError("This plan expired (15 minutes). Create a new plan.")
     if confirm_text.strip() != confirm_phrase(site):
         raise PlanError(f"Type exactly: {confirm_phrase(site)}")
+    from ..config import get_settings
+    if get_settings().require_independent_approval:
+        appr = (change.plan or {}).get("approval") or {}
+        if not appr.get("approved_by"):
+            raise PlanError("This change needs independent approval before it can be applied (two-person rule).")
+        if appr["approved_by"].casefold() == (change.created_by or "").casefold():
+            raise PlanError("The approver must be a different person from the requester.")
+    from ..infrastructure.phase_services import control as _control
+    if _control(db).emergency_stop:
+        raise PlanError("Emergency stop is active; no device writes are allowed.")
 
     if change.kind == "firmware_stage":
         from ..firmware import upgrade
@@ -268,3 +278,20 @@ def apply_change(db: Session, change: ConfigChange, user: str, confirm_text: str
           detail=f"#{change.id} {change.summary} -> {change.status}"[:240], request=request, success=not problems)
     poll_site(db, site, transport)  # refresh inventory so renamed APs show up immediately
     return {"ok": True, "status": change.status, "message": change.result, "problems": problems}
+
+
+def approve_change(db: Session, change: ConfigChange, approver: str, approver_role: str, *,
+                   request: Request | None = None) -> ConfigChange:
+    """Independent approval for legacy SIMS change plans — same two-person rule as INM change plans."""
+    if change.status != "planned":
+        raise PlanError(f"This change is already {change.status}.")
+    if approver_role not in ("approver", "admin"):
+        raise PlanError("Approver role required.")
+    if approver.casefold() == (change.created_by or "").casefold():
+        raise PlanError("The requester cannot approve their own change.")
+    plan = dict(change.plan or {})
+    plan["approval"] = {"approved_by": approver, "approved_at": utcnow().isoformat()}
+    change.plan = plan
+    audit(db, "config_change_approved", username=approver, target=f"change:{change.id}",
+          detail=f"{change.kind}; requester={change.created_by}", request=request)
+    return change

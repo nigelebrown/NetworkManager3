@@ -14,7 +14,7 @@ from ..config import get_settings
 from ..configmgmt import service
 from ..database.models import AccessPoint, ConfigBackup, ConfigChange, Site, User
 from ..database.session import get_db
-from ..security.deps import audit, require_role
+from ..security.deps import require_any_role, audit, require_role
 
 router = APIRouter(prefix="/api/config", tags=["configuration"])
 
@@ -156,6 +156,13 @@ def apply(change_id: int, body: ApplyBody, request: Request, db: Session = Depen
     change = _change(db, change_id)
     result = _guard(lambda: service.apply_change(db, change, admin.username, body.confirm_text, request=request))
     return {**result, "change": change_out(change)}
+
+
+@router.post("/changes/{change_id}/approve")
+def approve(change_id: int, request: Request, db: Session = Depends(get_db),
+            user: User = Depends(require_any_role("approver", "admin"))):
+    change = _change(db, change_id)
+    return change_out(_guard(lambda: service.approve_change(db, change, user.username, user.role, request=request)))
 
 
 @router.post("/changes/{change_id}/rollback-plan", status_code=201)
