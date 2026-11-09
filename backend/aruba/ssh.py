@@ -204,3 +204,49 @@ def copy_uiserver_cert(host: str, username: str, password: str, expected_fingerp
         return "\n".join(reply)[:500]
     finally:
         t.close()
+
+
+# ---- Phase 6: allowlisted configuration command sessions ---------------------------------------
+# Only commands rendered by backend.infrastructure.writers.aruba_instant reach this function, and each
+# line is re-validated here against a fixed grammar, so no free text can reach the AP shell.
+_ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
+    r"^configure terminal$", r"^end$", r"^commit apply$", r"^exit$",
+    r"^arm$", r"^(no )?client-match$", r"^band-steering-mode (prefer-5ghz|force-5ghz|balance-bands|disable)$",
+    r"^air-time-fairness-mode (default-access|fair-access|preferred-access)$",
+    r"^(min|max)-tx-power \d{1,2}$", r"^wide-bands (none|5ghz|2.4ghz|all)$", r"^no 80mhz-support$",
+    r"^(a|g)-channel \d{1,3} \d{1,2}$",
+)]
+
+
+def run_config_lines(host: str, username: str, password: str, expected_fingerprint: str, lines: list[str], *,
+                     port: int = 22, timeout: float = 20.0) -> list[dict[str, Any]]:
+    """Run an allowlisted command sequence with host-key pinning. Raises on the first rejected line."""
+    if not get_settings().device_writes_permitted:
+        raise ArubaUnsupportedError("Configuration changes are disabled (device writes not permitted).")
+    for ln in lines:
+        if not any(p.match(ln) for p in _ALLOWED_CONFIG_LINES):
+            raise ArubaUnsupportedError(f"Command not in the allowlisted grammar: {ln[:60]!r}")
+    t = _open_transport(host, port, timeout)
+    try:
+        if fingerprint(t.get_remote_server_key()) != expected_fingerprint:
+            raise ArubaSshError("SSH host key does not match the pinned fingerprint. Nothing was sent.")
+        try:
+            t.auth_password(username, password)
+        except paramiko.AuthenticationException:
+            raise ArubaAuthError("SSH login rejected.") from None
+        chan = t.open_session()
+        chan.get_pty()
+        chan.invoke_shell()
+        _read_until_prompt(chan, timeout)
+        results = []
+        for cmd in lines:
+            chan.send(cmd + "\n")
+            out = _read_until_prompt(chan, timeout)
+            reply = [ln for ln in out.replace("\r", "").split("\n")[1:] if ln.strip()]
+            bad = next((ln for ln in reply if any(m in ln.lower() for m in _ERRORS)), None)
+            results.append({"command": cmd, "ok": bad is None})
+            if bad:
+                raise ArubaSshError(f"The AP rejected '{cmd}': {bad.strip()[:120]}")
+        return results
+    finally:
+        t.close()

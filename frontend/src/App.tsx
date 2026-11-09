@@ -15,10 +15,11 @@ import AiLearning from "./pages/AiLearning";
 import Audit from "./pages/Audit";
 import ChangePassword from "./pages/ChangePassword";
 import Logs from "./pages/Logs";
-import { ChangeControl } from "./pages/Planned";
 import DeviceIntake from "./pages/DeviceIntake";
 import GuidedOnboarding from "./pages/GuidedOnboarding";
 import DeviceConfig from "./pages/DeviceConfig";
+import ConfigTemplates from "./pages/ConfigTemplates";
+import Phase4Insights from "./pages/Phase4Insights";
 import DiscoveryRanges from "./pages/DiscoveryRanges";
 import { Printers, PrinterDetails } from "./pages/Printers";
 import DeviceDetails from "./pages/DeviceDetails";
@@ -26,6 +27,21 @@ import Recovery from "./pages/Recovery";
 import Switches from "./pages/Switches";
 import SystemHealth from "./pages/SystemHealth";
 import Users from "./pages/Users";
+import NocDashboard from "./pages/NocDashboard";
+import ExecutiveDashboard from "./pages/ExecutiveDashboard";
+import Compliance from "./pages/Compliance";
+import Certification from "./pages/Certification";
+import DeviceAlerts from "./pages/DeviceAlerts";
+import Device360 from "./pages/Device360";
+import Collection from "./pages/Collection";
+import ChangePlans from "./pages/ChangePlans";
+import Vault from "./pages/Vault";
+import Accountability from "./pages/Accountability";
+import Replacement from "./pages/Replacement";
+import LearningCentre from "./pages/LearningCentre";
+import Optimization from "./pages/Optimization";
+import Platform from "./pages/Platform";
+import DataManagement from "./pages/DataManagement";
 
 function Protected({ children }: { children: JSX.Element }) {
   const s = getSession();
@@ -46,7 +62,8 @@ export default function App() {
       <Route path="/change-password" element={<WithSession><ChangePassword /></WithSession>} />
       <Route element={<Protected><Layout /></Protected>}>
         {/* Preserved SIMS screens (Phase 1 parity) */}
-        <Route index element={<Dashboard />} />
+        <Route index element={<NocDashboard />} />
+        <Route path="wifi" element={<Dashboard />} />
         <Route path="aps" element={<APs />} />
         <Route path="clients" element={<Clients />} />
         <Route path="experience" element={<Experience />} />
@@ -63,14 +80,29 @@ export default function App() {
         <Route path="users" element={<Users />} />
         <Route path="recovery" element={<Recovery />} />
         <Route path="ai-learning" element={<AiLearning />} />
+        <Route path="phase4-insights" element={<Phase4Insights />} />
         <Route path="onboarding" element={<GuidedOnboarding />} />
         <Route path="onboarding/manual" element={<DeviceIntake />} />
         <Route path="devices/:id/config" element={<DeviceConfig />} />
+        <Route path="config-templates" element={<ConfigTemplates />} />
         <Route path="discovery" element={<DiscoveryRanges />} />
         <Route path="printers" element={<Printers />} />
         <Route path="printers/:id" element={<PrinterDetails />} />
         <Route path="devices/:id" element={<DeviceDetails />} />
-        <Route path="changes" element={<ChangeControl />} />
+        <Route path="changes" element={<ChangePlans />} />
+        <Route path="executive" element={<ExecutiveDashboard />} />
+        <Route path="compliance" element={<Compliance />} />
+        <Route path="certification" element={<Certification />} />
+        <Route path="device-alerts" element={<DeviceAlerts />} />
+        <Route path="devices/:id/360" element={<Device360 />} />
+        <Route path="collection" element={<Collection />} />
+        <Route path="vault" element={<Vault />} />
+        <Route path="accountability" element={<Accountability />} />
+        <Route path="replace" element={<Replacement />} />
+        <Route path="learning" element={<LearningCentre />} />
+        <Route path="optimization" element={<Optimization />} />
+        <Route path="platform" element={<Platform />} />
+        <Route path="data" element={<DataManagement />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

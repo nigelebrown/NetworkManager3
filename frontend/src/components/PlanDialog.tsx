@@ -1,9 +1,20 @@
 import { useState } from "react";
-import { configApi, type ApplyResult, type Change } from "../services/api";
+import { configApi, getSession, type ApplyResult, type Change } from "../services/api";
 
 /** Shows a change plan (what, before/after, exact request, backup, rollback) and applies it only after the typed phrase. */
 export default function PlanDialog({ change, onClose, onDone }: { change: Change; onClose: () => void; onDone: () => void }) {
-  const p = change.plan;
+  const [current, setCurrent] = useState<Change>(change);
+  const p = current.plan;
+  const approval = (p as unknown as { approval?: { approved_by: string; approved_at: string } }).approval;
+  const me = getSession();
+  const requester = (current as unknown as { created_by?: string }).created_by;
+  const canApprove = !approval && me && ["approver", "admin"].includes(me.role) && me.username !== requester;
+  const approve = async () => {
+    setBusy(true); setErr(null);
+    try { setCurrent(await configApi.approve(change.id)); }
+    catch (e) { setErr(e instanceof Error ? e.message : "Failed"); }
+    finally { setBusy(false); }
+  };
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -47,6 +58,11 @@ export default function PlanDialog({ change, onClose, onDone }: { change: Change
             <details className="mt-3 text-sm"><summary className="cursor-pointer text-slate-300">Exact request that will be sent (passphrase masked)</summary>
               <pre className="mt-1 overflow-x-auto rounded bg-slate-950 p-2 text-xs">{p.request.method} {p.request.path}{"\n"}{JSON.stringify(p.request.body, null, 1)}</pre></details>
             <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm"><div className="font-semibold">Rollback plan</div><p className="mt-1 text-slate-300">{p.rollback}</p><p className="mt-1 text-xs text-slate-500">{p.verification}</p></div>
+            <div className={`mt-3 rounded-lg border p-3 text-sm ${approval ? "border-emerald-800 text-emerald-200" : "border-amber-800 text-amber-200"}`}>
+              {approval ? <>Independently approved by <b>{approval.approved_by}</b> at {new Date(approval.approved_at).toLocaleString()}.</>
+                : <>Awaiting independent approval (two-person rule): requested by <b>{requester ?? "unknown"}</b>; a different approver or administrator must approve before it can be applied.</>}
+              {canApprove && <button className="ml-3 rounded bg-emerald-700 px-3 py-1 text-xs font-semibold" disabled={busy} onClick={approve}>Approve</button>}
+            </div>
             <label className="mt-4 block text-sm">To confirm, type <code className="rounded bg-slate-800 px-1">{p.confirm_phrase}</code>
               <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5" /></label>
           </>
@@ -62,7 +78,7 @@ export default function PlanDialog({ change, onClose, onDone }: { change: Change
           ) : (
             <>
               <button className="rounded border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800" onClick={cancel}>Cancel</button>
-              <button disabled={busy || typed.trim() !== p.confirm_phrase} onClick={apply}
+              <button disabled={busy || typed.trim() !== p.confirm_phrase || !approval} onClick={apply}
                 className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Applying…" : "Apply to device"}</button>
             </>
           )}

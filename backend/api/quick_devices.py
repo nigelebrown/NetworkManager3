@@ -241,7 +241,9 @@ def _probe_ap(body: QuickProbe) -> dict:
 def _probe_cx(body: QuickProbe) -> dict:
     # ArubaOS-CX OpenAPI 10.14: POST /rest/v10.14/login with query username/password;
     # GET /system, GET /system/interfaces, POST /logout. No config paths are used.
-    url = f"https://{body.management_ip}/rest/v10.14"
+    # Base URL is the host only: request paths below already carry /rest/v10.14 (a base path here would
+    # double it to /rest/v10.14/rest/v10.14/... and every real switch would answer 404).
+    url = f"https://{body.management_ip}"
     with httpx.Client(base_url=url, timeout=8.0, verify=get_settings().tls_verify_arg,
                       follow_redirects=False, trust_env=False) as client:
         response = client.post("/rest/v10.14/login",

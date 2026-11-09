@@ -1,3 +1,26 @@
+> **Release candidate 1.2.0-rc1 — production read/write engine (branch `release/production-readiness`).**
+> Certified, backed-up, verified and rollback-protected configuration writes for Aruba CX 6100/6200 and
+> AP-505/AP-535, plus a write-certification workflow, live port faceplate, an alert engine with per-site
+> thresholds and maintenance windows, and per-device opt-in RF optimization (off by default). **Hardware
+> certification is pending, so all hardware writes are UNCERTIFIED and locked.** See
+> [docs/RELEASE_1.2.0_PRODUCTION_READINESS.md](docs/RELEASE_1.2.0_PRODUCTION_READINESS.md) and
+> [docs/RC_1.2.0_TEST_MATRIX.md](docs/RC_1.2.0_TEST_MATRIX.md).
+>
+> **Release 1.1.0 — on-premises network management (phases 5–11 software complete).**
+> Production install with real devices:
+>
+> ```bash
+> cd /root/NetworkManager3 && bash scripts/inm.sh install --mode live
+> bash scripts/allow-readonly-device-range.sh 10.10.0.0/24
+> ```
+>
+> NOC and executive dashboards, live read-only collection, best-practice compliance against the
+> actually-installed configuration, engineer change workflow with two-person approval, encrypted
+> config vault, change accountability, replacement planning and an AI learning centre.
+> **Load demo data / Remove demo data** buttons live under Administration → Data management.
+> Automatic optimization is not provided (owner policy). Details:
+> [docs/RELEASE_1.1.0_CAPABILITY_COMPLETION.md](docs/RELEASE_1.1.0_CAPABILITY_COMPLETION.md).
+
 > **Fast-track: usable AP + switch demo on CentOS, with no PC transfers.**
 >
 > From your existing CentOS Git checkout:

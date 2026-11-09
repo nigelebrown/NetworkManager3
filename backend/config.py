@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     inm_profile: Literal["standalone", "demo", "lab-readonly"] = "standalone"
     # Phase 1/2 hard lock: device writes are refused even if SIMS_ALLOW_CONFIG_CHANGES were set.
     device_write_lock: bool = False
+    # Every device write (legacy SIMS SSID/rename/firmware/cert screens included) needs an approver who is
+    # not the requester. Only the legacy protocol regression suite turns this off.
+    require_independent_approval: bool = True
     # When false the app refuses to start unless the schema is already at head (installer migrates).
     auto_migrate: bool = True
     # First-login password change for the bootstrap administrator (installer sets true).

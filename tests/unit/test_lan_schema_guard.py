@@ -22,7 +22,8 @@ def plan(tmp_path: Path, current: dict, release: dict) -> subprocess.CompletedPr
                           input=py, text=True, capture_output=True, timeout=5)
 
 
-@pytest.mark.parametrize("mgmt,result", [("0004", "MIGRATE"), ("0005", "MIGRATE"), ("0006", "CURRENT")])
+@pytest.mark.parametrize("mgmt,result", [("0004", "MIGRATE"), ("0005", "MIGRATE"), ("0006", "MIGRATE"),
+                                         ("0007", "MIGRATE"), ("0008", "MIGRATE"), ("0009", "CURRENT")])
 def test_expected_or_previous_schema_accepted(tmp_path, mgmt, result):
     manifest = json.loads((ROOT / "release.json").read_text())
     output = plan(tmp_path, {"management": mgmt, "telemetry": "t001"}, manifest)

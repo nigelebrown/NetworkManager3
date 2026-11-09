@@ -118,7 +118,7 @@ def test_discovery_refuses_unauthorized_or_oversized_target_before_probe(client,
     p = new_profile(client, admin).json()
     monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.10.0/24")
     with patch.object(flow, "_probe", side_effect=AssertionError("device contacted unexpectedly")):
-        for scope, status in (("128.0.0.0/9", 422), ("10.103.10.0/24", 422),
+        for scope, status in (("128.0.0.0/9", 422), ("10.103.10.0/23", 422),
                               ("10.103.11.1", 403), ("10.103.10.0/29", 201)):
             if status == 201:
                 continue
@@ -164,85 +164,23 @@ def test_disabled_profile_is_not_available_to_discover(client, admin):
     assert denied.status_code == 409
 
 
-def test_resumable_authorized_24_progress_and_idempotent_batch(client, admin, monkeypatch):
-    """A single /24 request scans 254 usable hosts in short persisted batches."""
+def test_full_slash24_discovery_runs_in_background_and_reports_progress(client, admin, monkeypatch):
+    import time
     from backend.api import onboarding_workflow as flow
-    from backend.aruba.errors import ArubaConnectionError
-    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.192.57.0/24")
-    profile = new_profile(client, admin, name="AP /24 profile").json()
-    # Create the requested job WITHOUT sending a single probe packet.
-    with patch.object(flow, "_probe", side_effect=AssertionError("start must not probe")):
-        started = client.post("/api/v1/onboarding/discoveries/start", headers=admin,
-                              json={"credential_id": profile["id"],
-                                    "scope": "10.192.57.0/24", "site_name": "Pilot Site"})
-    assert started.status_code == 201, started.text
-    job = started.json()
-    assert job["status"] == "IN_PROGRESS"
-    assert job["total_targets"] == 254
-    assert job["completed_targets"] == 0
-    assert job["device_writes"] == "LOCKED"
-    job_id = job["id"]
-
-    def probe(profile_obj, ip):
-        if str(ip) == "10.192.57.55":
-            return {"hostname": "AP-505-55", "model": "AP-505",
-                    "serial_number": "AP-55-CERTIFIED", "firmware": "8.10.0.21"}
-        raise ArubaConnectionError("host unreachable")
-
-    with patch.object(flow, "_probe", side_effect=probe) as mocked:
-        first = client.post(f"/api/v1/onboarding/discoveries/{job_id}/next",
-                            headers=admin, json={"offset": 0, "batch_size": 8})
-        assert first.status_code == 200, first.text
-        assert first.json()["completed_targets"] == 8
-        assert mocked.call_count == 8
-        # A repeated request after a lost response must NOT rescan prior hosts.
-        replay = client.post(f"/api/v1/onboarding/discoveries/{job_id}/next",
-                             headers=admin, json={"offset": 0, "batch_size": 8})
-        assert replay.status_code == 200 and replay.json()["completed_targets"] == 8
-        assert mocked.call_count == 8
-        # Closing the browser stops future requests; the database retains progress.
-        saved = client.get(f"/api/v1/onboarding/discoveries/{job_id}", headers=admin)
-        assert saved.status_code == 200
-        assert saved.json()["completed_targets"] == 8
-        premature = client.post(f"/api/v1/onboarding/discoveries/{job_id}/register",
-                                 headers=admin, json={"indices": [0]})
-        assert premature.status_code == 409
-        too_far = client.post(f"/api/v1/onboarding/discoveries/{job_id}/next",
-                              headers=admin, json={"offset": 25, "batch_size": 4})
-        assert too_far.status_code == 409
-
-        current = saved.json()
-        while current["status"] == "IN_PROGRESS":
-            current_resp = client.post(f"/api/v1/onboarding/discoveries/{job_id}/next",
-                                       headers=admin,
-                                       json={"offset": current["completed_targets"], "batch_size": 8})
-            assert current_resp.status_code == 200, current_resp.text
-            current = current_resp.json()
-    assert current["status"] == "SCANNED"
-    assert current["completed_targets"] == current["total_targets"] == 254
-    assert current["found_count"] == 1
-    assert current["failed_count"] == 253
-    assert current["results"][0]["management_ip"] == "10.192.57.1"
-    assert current["results"][-1]["management_ip"] == "10.192.57.254"
-    found_index = next(i for i, row in enumerate(current["results"]) if row["enrollable"])
-    assert current["results"][found_index]["management_ip"] == "10.192.57.55"
-    add = client.post(f"/api/v1/onboarding/discoveries/{job_id}/register", headers=admin,
-                      json={"indices": [found_index]})
-    assert add.status_code == 201, add.text
-    assert add.json()["registered"][0]["serial_number"] == "AP-55-CERTIFIED"
-
-
-def test_resumable_discovery_rejects_unapproved_broader_or_public_scopes(client, admin, monkeypatch):
-    from backend.api import onboarding_workflow as flow
-    p = new_profile(client, admin, name="Rejected /24 test").json()
-    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.192.57.55/32")
-    with patch.object(flow, "_probe", side_effect=AssertionError("device must not be probed")):
-        for scope, expected in (
-            ("10.192.57.0/24", 403),
-            ("10.192.56.0/23", 422),
-            ("128.0.0.0/24", 422),
-        ):
-            response = client.post("/api/v1/onboarding/discoveries/start", headers=admin, json={
-                "credential_id": p["id"], "scope": scope, "site_name": "Not Approved",
-            })
-            assert response.status_code == expected, (scope, response.text)
+    p = new_profile(client, admin).json()
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.20.0/24")
+    reachable = {"10.103.20.5", "10.103.20.77"}
+    monkeypatch.setattr(flow, "_tcp_open", lambda ip, port, timeout=1.0: ip in reachable)
+    monkeypatch.setattr(flow, "_probe", lambda profile, ip: {
+        "hostname": f"ap-{ip}", "model": "AP-535", "serial_number": f"SN{str(ip).split('.')[-1]}", "firmware": "8.10.0.9"})
+    r = client.post("/api/v1/onboarding/discover", headers=admin, json={
+        "credential_id": p["id"], "scope": "10.103.20.0/24", "site_name": "HQ"})
+    assert r.status_code == 201 and r.json()["status"] == "SCANNING" and r.json()["targets"] == 254
+    for _ in range(100):
+        job = client.get(f"/api/v1/onboarding/discoveries/{r.json()['id']}", headers=admin).json()
+        if job["status"] != "SCANNING":
+            break
+        time.sleep(0.1)
+    assert job["status"] == "SCANNED"
+    found = sorted(x["management_ip"] for x in job["results"] if x["status"] == "FOUND")
+    assert found == ["10.103.20.5", "10.103.20.77"]

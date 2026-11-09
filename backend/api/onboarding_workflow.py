@@ -25,6 +25,7 @@ from ..aruba.monitoring import collect_snapshot
 from ..config import get_settings
 from ..database.models import User
 from ..database.models_inm import InmDevice
+from ..domain.phase2_acceptance import build_acceptance
 from ..database.models_onboarding import (
     OnboardingCredential, OnboardingDiscovery, OnboardingDeviceCredential,
     OnboardingConfigSnapshot, OnboardingConfigDraft,
@@ -41,8 +42,9 @@ PROTOCOL = {"access_point": "aruba_instant_rest", "switch": "aruba_cx_rest"}
 
 
 def _locked():
-    if not get_settings().device_write_lock:
-        raise HTTPException(403, "Guided onboarding is read-only and requires the global device-write lock.")
+    """Read-only/draft module: no device-write path, so it stays usable whether or not the
+    operator has enabled manual config changes (device_writes_permitted)."""
+    return None
 
 
 def _profile(db: Session, profile_id: str, family: str | None = None) -> OnboardingCredential:
@@ -194,132 +196,19 @@ class DiscoveryRequest(BaseModel):
     site_name: str = Field(min_length=1, max_length=100)
 
 
-def _targets(scope: str, *, max_addresses: int = 8) -> list[ipaddress.IPv4Address]:
-    """Validate the *entire* requested range before sending any probe.
-
-    Legacy /discover remains limited to eight addresses; the resumable /24
-    workflow uses the same validation with a 256-address planning cap.
-    A permitted /24 is never permission to probe an unrelated network.
-    """
+def _targets(scope: str) -> list[ipaddress.IPv4Address]:
     try:
         net = ipaddress.ip_network(scope.strip(), strict=False)
     except ValueError:
         raise HTTPException(422, "Enter an IPv4 address or an authorized CIDR.")
     if not isinstance(net, ipaddress.IPv4Network):
         raise HTTPException(422, "Only IPv4 management targets are supported")
-    if net.num_addresses > max_addresses:
-        raise HTTPException(422, f"One live discovery supports at most {max_addresses} IPv4 addresses; larger ranges are planning-only.")
+    if net.num_addresses > 256:
+        raise HTTPException(422, "Scan at most one /24 (256 addresses) per job. Larger plans must be divided into approved /24 batches.")
     ips = list(net.hosts()) if net.prefixlen < 31 else list(net)
     for ip in ips:
-        _permit_probe(ip)  # reject any unapproved target before contacting a host
+        _permit_probe(ip)  # check ALL destinations before initiating traffic
     return ips
-
-
-def _discovery_view(job: OnboardingDiscovery) -> dict:
-    network = ipaddress.ip_network(job.scope, strict=False)
-    total = network.num_addresses - (2 if network.prefixlen <= 30 else 0)
-    results = job.results or []
-    return {
-        "id": job.id, "status": job.status, "results": results,
-        "site_name": job.site_name, "scope": job.scope,
-        "credential_id": job.credential_id, "device_writes": "LOCKED",
-        "total_targets": total, "completed_targets": len(results),
-        "found_count": sum(r.get("status") == "FOUND" for r in results),
-        "failed_count": sum(r.get("status") == "FAILED" for r in results),
-    }
-
-
-@router.post("/discoveries/start", status_code=201)
-def start_subnet_discovery(body: DiscoveryRequest, request: Request,
-                           db: Session = Depends(get_db),
-                           admin: User = Depends(require_role("admin"))):
-    """Create a resumable /24-or-narrower job; NO network traffic on creation."""
-    _locked()
-    profile = _profile(db, body.credential_id)
-    targets = _targets(body.scope, max_addresses=256)
-    job = OnboardingDiscovery(
-        credential_id=profile.id, site_name=body.site_name.strip(),
-        scope=body.scope.strip(), device_family=profile.device_family,
-        results=[], created_by=admin.username, status="IN_PROGRESS",
-    )
-    db.add(job)
-    db.flush()
-    audit(db, "onboarding_discovery_started", username=admin.username, target=job.id,
-          detail=f"authorized targets={len(targets)}, /24 maximum, device writes locked",
-          request=request)
-    db.commit()
-    return _discovery_view(job)
-
-
-class DiscoveryBatchInput(BaseModel):
-    offset: int = Field(ge=0, le=254)
-    batch_size: int = Field(default=4, ge=1, le=8)
-
-
-@router.post("/discoveries/{job_id}/next")
-def scan_next_batch(job_id: str, body: DiscoveryBatchInput, request: Request,
-                    db: Session = Depends(get_db),
-                    admin: User = Depends(require_role("admin"))):
-    """Run one bounded read-only batch, then persist progress atomically.
-
-    SELECT FOR UPDATE serializes concurrent requests on PostgreSQL. Offset
-    checking makes a repeated request after a lost response idempotent.
-    No background worker is required: the browser advances batches and can
-    stop requesting more at any time.
-    """
-    _locked()
-    job = db.scalar(select(OnboardingDiscovery).where(
-        OnboardingDiscovery.id == job_id).with_for_update())
-    if job is None:
-        raise HTTPException(404, "Discovery not found")
-    if job.created_by != admin.username:
-        raise HTTPException(403, "Only the initiating administrator may continue this discovery")
-    profile = _profile(db, job.credential_id, job.device_family)
-    targets = _targets(job.scope, max_addresses=256)
-    done = len(job.results or [])
-    if job.status == "SCANNED" or body.offset < done:
-        return _discovery_view(job)  # completed/retried request: no duplicate probes
-    if body.offset != done:
-        raise HTTPException(409, "Discovery offset changed. Reload the job to resume safely.")
-    if job.status != "IN_PROGRESS":
-        raise HTTPException(409, "Discovery is not in a resumable state")
-    found = list(job.results or [])
-    for address in targets[done:done + body.batch_size]:
-        try:
-            observed = _probe(profile, address)
-            serial = str(observed.get("serial_number") or "").strip()
-            if serial.startswith("UNKNOWN-"):
-                serial = ""
-            existing = db.scalar(select(InmDevice).where(
-                InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba",
-                func.lower(InmDevice.serial_number) == serial.lower())) if serial else None
-            found.append({
-                "management_ip": str(address), "status": "FOUND",
-                "family": profile.device_family,
-                "hostname": str(observed.get("hostname") or address)[:100],
-                "model": str(observed.get("model") or "Unknown")[:64],
-                "serial_number": serial[:64],
-                "firmware": str(observed.get("firmware") or "")[:64] or None,
-                "existing_device_id": existing.id if existing else None,
-                "enrollable": bool(serial),
-                "result_note": "API identity read; existing device" if existing else "API identity read",
-            })
-        except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
-            found.append({
-                "management_ip": str(address), "status": "FAILED",
-                "result_note": f"Read-only REST probe failed ({type(exc).__name__}).",
-                "enrollable": False,
-            })
-    job.results = found  # assign a new list so SQLAlchemy persists JSON changes
-    if len(found) == len(targets):
-        job.status = "SCANNED"
-    db.flush()
-    audit(db, "onboarding_discovery_batch", username=admin.username, target=job.id,
-          detail=f"completed={len(found)}/{len(targets)}, found={sum(r['status']=='FOUND' for r in found)}, writes locked",
-          request=request)
-    db.commit()
-    return _discovery_view(job)
-
 
 
 @router.post("/discover", status_code=201)
@@ -328,6 +217,21 @@ def discover_devices(body: DiscoveryRequest, request: Request,
     _locked()
     profile = _profile(db, body.credential_id)
     addresses = _targets(body.scope)
+    if len(addresses) > 8:
+        job = OnboardingDiscovery(credential_id=profile.id, site_name=body.site_name.strip(), scope=body.scope,
+                                  device_family=profile.device_family, results=[], created_by=admin.username,
+                                  status="SCANNING")
+        db.add(job)
+        db.flush()
+        audit(db, "onboarding_discovery_started", username=admin.username, target=job.id,
+              detail=f"profile={profile.id} scope={body.scope} targets={len(addresses)} (background, read-only)",
+              request=request)
+        db.commit()
+        import threading
+        threading.Thread(target=_background_scan, args=(job.id, profile.id, [str(a) for a in addresses]),
+                         daemon=True, name=f"discovery-{job.id[:8]}").start()
+        return {"id": job.id, "status": "SCANNING", "results": [], "targets": len(addresses),
+                "site_name": job.site_name, "credential_id": job.credential_id, "device_writes": "LOCKED"}
     found: list[dict] = []
     for address in addresses:
         try:
@@ -362,7 +266,71 @@ def discover_devices(body: DiscoveryRequest, request: Request,
     audit(db, "onboarding_discovery_finished", username=admin.username, target=job.id,
           detail=f"profile={profile.id}, targets={len(addresses)}, found={sum(x['status']=='FOUND' for x in found)}, writes locked",
           request=request)
-    return _discovery_view(job)
+    return {"id": job.id, "status": job.status, "results": job.results,
+            "site_name": job.site_name, "credential_id": job.credential_id,
+            "device_writes": "LOCKED"}
+
+
+def _tcp_open(ip: str, port: int, timeout: float = 1.0) -> bool:
+    import socket
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _identify(profile_id: str, ip: str) -> dict:
+    """Read-only identity probe of one reachable address (own DB session; credential decrypted per call)."""
+    from ..database.session import session_scope
+    with session_scope() as db:
+        profile = db.get(OnboardingCredential, profile_id)
+        port = 4343 if profile.device_family == "access_point" else 443
+        if not _tcp_open(ip, port):
+            return {"management_ip": ip, "status": "NO_RESPONSE", "enrollable": False,
+                    "result_note": f"TCP {port} closed or filtered"}
+        try:
+            observed = _probe(profile, ipaddress.IPv4Address(ip))
+        except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
+            return {"management_ip": ip, "status": "FAILED", "enrollable": False,
+                    "result_note": f"Read-only REST probe failed ({type(exc).__name__})."}
+        serial = str(observed.get("serial_number") or "").strip()
+        if serial.startswith("UNKNOWN-"):
+            serial = ""
+        existing = db.scalar(select(InmDevice).where(
+            InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba",
+            func.lower(InmDevice.serial_number) == serial.lower())) if serial else None
+        return {"management_ip": ip, "status": "FOUND", "family": profile.device_family,
+                "hostname": str(observed.get("hostname") or ip)[:100], "model": str(observed.get("model") or "Unknown")[:64],
+                "serial_number": serial[:64], "firmware": str(observed.get("firmware") or "")[:64] or None,
+                "existing_device_id": existing.id if existing else None, "enrollable": bool(serial),
+                "result_note": "API identity read; existing device" if existing else "API identity read"}
+
+
+def _background_scan(job_id: str, profile_id: str, addresses: list[str]) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from ..database.session import session_scope
+    results: list[dict] = []
+    try:
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for i, r in enumerate(pool.map(lambda a: _identify(profile_id, a), addresses), 1):
+                results.append(r)
+                if i % 16 == 0 or i == len(addresses):
+                    with session_scope() as db:
+                        job = db.get(OnboardingDiscovery, job_id)
+                        job.results = [x for x in results if x["status"] != "NO_RESPONSE"]
+                        job.status = "SCANNING" if i < len(addresses) else "SCANNED"
+        with session_scope() as db:
+            audit(db, "onboarding_discovery_finished", username="discovery-worker", target=job_id,
+                  detail=f"targets={len(addresses)} found={sum(x['status'] == 'FOUND' for x in results)} "
+                         f"no_response={sum(x['status'] == 'NO_RESPONSE' for x in results)}; read-only")
+    except Exception as exc:  # report, never leave the job spinning
+        with session_scope() as db:
+            job = db.get(OnboardingDiscovery, job_id)
+            if job is not None:
+                job.status = "FAILED"
+                job.results = results + [{"status": "FAILED", "management_ip": "-", "enrollable": False,
+                                          "result_note": f"Scan aborted: {type(exc).__name__}"}]
 
 
 @router.get("/discoveries/{job_id}")
@@ -371,7 +339,9 @@ def get_discovery(job_id: str, db: Session = Depends(get_db),
     job = db.get(OnboardingDiscovery, job_id)
     if job is None:
         raise HTTPException(404, "Discovery not found")
-    return _discovery_view(job)
+    return {"id": job.id, "status": job.status, "results": job.results,
+            "site_name": job.site_name, "credential_id": job.credential_id,
+            "device_writes": "LOCKED"}
 
 
 class RegisterDiscovered(BaseModel):
@@ -385,8 +355,6 @@ def register_discovered(job_id: str, body: RegisterDiscovered, request: Request,
     job = db.get(OnboardingDiscovery, job_id)
     if not job:
         raise HTTPException(404, "Discovery not found")
-    if job.status != "SCANNED":
-        raise HTTPException(409, "Finish the read-only discovery before registering devices.")
     _profile(db, job.credential_id, job.device_family)
     if len(body.indices) != len(set(body.indices)):
         raise HTTPException(422, "Duplicate selection indices")
@@ -543,6 +511,52 @@ def device_config(device_id: str, db: Session = Depends(get_db),
         "drafts": [{"id": d.id, "state": d.state, "created_at": d.created_at.isoformat(),
                     "proposed": d.proposed_json} for d in drafts],
         "hardware_writes": "LOCKED",
+    }
+
+
+def _device_acceptance(db: Session, device: InmDevice) -> dict:
+    binding = db.get(OnboardingDeviceCredential, device.id)
+    credential = db.get(OnboardingCredential, binding.credential_id) if binding else None
+    snapshot = db.scalar(select(OnboardingConfigSnapshot).where(
+        OnboardingConfigSnapshot.device_id == device.id
+    ).order_by(OnboardingConfigSnapshot.captured_at.desc(),
+               OnboardingConfigSnapshot.id.desc()))
+    drafts = list(db.scalars(select(OnboardingConfigDraft).where(
+        OnboardingConfigDraft.device_id == device.id
+    ).order_by(OnboardingConfigDraft.created_at.desc()).limit(100)))
+    return build_acceptance(device, credential, binding, snapshot, drafts,
+                            writes_locked=get_settings().device_write_lock)
+
+
+@router.get("/devices/{device_id}/acceptance")
+def device_acceptance_report(device_id: str, db: Session = Depends(get_db),
+                             admin: User = Depends(require_role("admin"))):
+    """Auditable no-network-I/O evidence report. NOT hardware certification."""
+    device = db.get(InmDevice, device_id)
+    if not device or device.source_type != "REAL" or device.vendor != "Aruba":
+        raise HTTPException(404, "Real Aruba device not found")
+    return _device_acceptance(db, device)
+
+
+@router.get("/acceptance")
+def fleet_acceptance_report(db: Session = Depends(get_db),
+                            admin: User = Depends(require_role("admin"))):
+    """Pilot acceptance summary, limited to 250 devices to bound database work."""
+    devices = list(db.scalars(select(InmDevice).where(
+        InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba"
+    ).order_by(InmDevice.last_observed_at.desc()).limit(250)))
+    reports = [_device_acceptance(db, d) for d in devices]
+    return {
+        "device_count": len(reports),
+        "limit": 250,
+        "hardware_certified": 0,
+        "device_writes": "LOCKED" if get_settings().device_write_lock else "UNSAFE",
+        "stages": {stage: sum(r["stage"] == stage for r in reports)
+                   for stage in ("MANUAL_REGISTERED", "REST_DISCOVERED",
+                                 "BASELINE_CAPTURED", "DRAFTED")},
+        "devices": [{k: r[k] for k in ("device_id", "family", "reported_model",
+                   "recognized_pilot_model", "inventory_evidence", "stage",
+                   "hardware_certified")} for r in reports],
     }
 
 

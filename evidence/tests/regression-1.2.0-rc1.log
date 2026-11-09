@@ -1,0 +1,1088 @@
+........................................................................ [ 18%]
+........................................................................ [ 36%]
+........................................................................ [ 54%]
+........................................................................ [ 72%]
+........................................................................ [ 90%]
+.....................................                                    [100%]
+==================================== PASSES ====================================
+___________________________ test_disabled_by_default ___________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_status_lists_models_and_admin_can_choose _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________ test_unreachable_ollama_gives_friendly_error_and_releases_lock ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_______________________ test_busy_assistant_returns_429 ________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___________________ test_model_never_sees_client_identities ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_unmeasured_metrics_are_declared_to_the_model _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________________ test_explain_includes_score_breakdown _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_ask_runs_only_the_chosen_allowlisted_tool ________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_ test_ask_refuses_anything_outside_the_allowlist[{"tool": "run_sql", "args": {"query": "DROP TABLE users"}}] _
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_______ test_ask_refuses_anything_outside_the_allowlist[not json at all] _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______ test_ask_refuses_anything_outside_the_allowlist[{"tool": "none"}] _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_ test_ask_refuses_anything_outside_the_allowlist[{"tool": "../../etc/passwd"}] _
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________ test_ask_refuses_anything_outside_the_allowlist[[]] ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________ test_ask_out_of_range_arguments_fall_back_to_defaults _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________________ test_ask_validates_question_and_role _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________________ test_ai_use_is_audited_without_question_text _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____ test_think_is_disabled_by_default_and_dropped_if_the_model_rejects_it _____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___ test_reasoning_model_that_exhausts_its_budget_is_retried_with_more_room ____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________________ test_auth_required ______________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________________ test_login_bad_password_and_lockout ______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___________________ test_demo_dashboard_is_labeled_simulated ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________________ test_offline_ap_alert_ack_resolve_flow ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________ test_viewer_gets_masked_client_identifiers_and_no_admin_access ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________________ test_client_search_and_quality_filter _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___________________ test_site_creation_blocked_in_demo_mode ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_live_poll_failure_raises_alert_and_marks_site ______________
+------------------------------ Captured log call -------------------------------
+WARNING  sims.collector:collector.py:229 Poll failed for site Lab: Login rejected (HTTP 401). bad credentials
+_______________________ test_delete_ap_and_site_cleanup ________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________________________ test_secrets_never_logged ___________________________
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST https://10.0.0.1:4343/rest/login "HTTP/1.1 200 OK"
+INFO     sims.aruba:client.py:162 Logged in to Aruba VC 10.0.0.1
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     sims.aruba.monitoring:monitoring.py:88 rf-summary unavailable for 10.190.2.71: 'show ap arm rf-summary' failed: Command not supported
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     sims.aruba.monitoring:monitoring.py:97 system-status unavailable for 10.190.2.71: 'show ap debug system-status' failed: Command not supported
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     sims.aruba.monitoring:monitoring.py:88 rf-summary unavailable for 10.190.2.72: 'show ap arm rf-summary' failed: Command not supported
+INFO     httpx:_client.py:1025 [redacted log line containing a secret-like token]
+INFO     sims.aruba.monitoring:monitoring.py:97 system-status unavailable for 10.190.2.72: 'show ap debug system-status' failed: Command not supported
+INFO     httpx:_client.py:1025 HTTP Request: POST https://10.0.0.1:4343/rest/logout "HTTP/1.1 200 OK"
+_____________ test_planning_blocked_by_default_and_for_demo_sites ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_demo_site_config_is_readable_but_not_writable ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________________________________ test_rbac ___________________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body0] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body1] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body2] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body3] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body4] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_ssid_input_validation[body5] _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________________ test_new_ssid_requires_passphrase_for_psk ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________ test_create_ssid_plan_confirm_apply_verify_rollback ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________ test_modify_existing_ssid_vlan_and_rollback_restores_previous _________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_device_rejection_marks_failed ______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_readback_mismatch_is_reported_not_hidden _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________________ test_expired_plan_cannot_be_applied ______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________________ test_rename_ap_keeps_identity _________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________________________ test_move_ap_between_sites __________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_move_warns_when_ap_not_in_destination_cluster ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___________________ test_overview_history_detail_and_masking ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_config_roundtrip_validation_audit_and_effect _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_corrupt_stored_config_falls_back_to_defaults _______________
+------------------------------ Captured log call -------------------------------
+WARNING  sims.experience:config.py:111 Stored experience configuration is invalid; using defaults.
+_______________________ test_policy_validation_and_rbac ________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_upload_list_delete_and_limits ______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________________ test_plan_needs_a_reachable_public_url ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________________ test_plan_hides_token_and_stage_only _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________ test_downgrade_same_version_and_duplicate_classes_refused ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________ test_apply_posts_os_upgrade_without_reboot_and_opens_download _________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_failed_device_response_leaves_link_closed ________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________________ test_upgrade_blocked_when_changes_disabled __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________________ test_firmware_changes_cannot_be_rolled_back __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________ test_cert_plan_is_display_safe_and_encrypted_at_rest _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+__________ test_cert_plan_rejects_bad_input_and_needs_ipv4_public_url __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________ test_cert_apply_end_to_end_verified_and_secrets_wiped _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/config/changes/1/apply "HTTP/1.1 200 OK"
+___________ test_cert_apply_unverified_when_ap_keeps_old_certificate ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_cert_apply_fails_when_ap_never_downloads _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+________________ test_cert_apply_reports_ssh_failure_and_wipes _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________________ test_cancelled_cert_plan_is_wiped _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________ test_check_endpoint_reports_disabled_and_returns_fingerprint _________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________________ test_enable_endpoint_gates_and_confirmation __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+____________________________ test_enable_end_to_end ____________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________________ test_enable_reports_when_rest_never_comes_up _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+___________________ test_enable_requires_admin_and_live_site ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+______________ test_legacy_only_ssh_server_falls_back_to_ssh_rsa _______________
+------------------------------ Captured log call -------------------------------
+ERROR    paramiko.transport:transport.py:1944 Exception (client): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1944 Exception (server): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+WARNING  sims.aruba.ssh:ssh.py:81 SSH to 127.0.0.1 needed legacy algorithms (ssh-rsa / SHA-1); host key is still pinned.
+____________ test_legacy_fallback_still_enforces_pinned_fingerprint ____________
+------------------------------ Captured log call -------------------------------
+ERROR    paramiko.transport:transport.py:1944 Exception (client): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+ERROR    paramiko.transport:transport.py:1944 Exception (server): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+WARNING  sims.aruba.ssh:ssh.py:81 SSH to 127.0.0.1 needed legacy algorithms (ssh-rsa / SHA-1); host key is still pinned.
+_______________ test_server_accepting_neither_gives_manual_steps _______________
+------------------------------ Captured log call -------------------------------
+ERROR    paramiko.transport:transport.py:1944 Exception (client): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+ERROR    paramiko.transport:transport.py:1944 Exception (server): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+ERROR    paramiko.transport:transport.py:1944 Exception (client): Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942 
+ERROR    paramiko.transport:transport.py:1944 Exception (server): Incompatible ssh peer (no acceptable kex algorithm)
+---------------------------- Captured log teardown -----------------------------
+ERROR    paramiko.transport:transport.py:1942 Traceback (most recent call last):
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2236, in run
+ERROR    paramiko.transport:transport.py:1942     self._handler_table[ptype](m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2356, in _negotiate_keys
+ERROR    paramiko.transport:transport.py:1942     self._parse_kex_init(m)
+ERROR    paramiko.transport:transport.py:1942     ~~~~~~~~~~~~~~~~~~~~^^^
+ERROR    paramiko.transport:transport.py:1942   File "/home/claude/nigelebrown/networkmanager3/.venv/lib/python3.13/site-packages/paramiko/transport.py", line 2585, in _parse_kex_init
+ERROR    paramiko.transport:transport.py:1942     raise IncompatiblePeer(
+ERROR    paramiko.transport:transport.py:1942     ^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942         "Incompatible ssh peer (no acceptable kex algorithm)"
+ERROR    paramiko.transport:transport.py:1942         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR    paramiko.transport:transport.py:1942     )  # noqa
+___________________ test_channel_summary_rows_and_noise_sign ___________________
+------------------------------ Captured log setup ------------------------------
+ERROR    paramiko.transport:transport.py:1942     ^
+ERROR    paramiko.transport:transport.py:1942 paramiko.ssh_exception.IncompatiblePeer: Incompatible ssh peer (no acceptable kex algorithm)
+ERROR    paramiko.transport:transport.py:1942
+_______________ test_legacy_apply_requires_independent_approval ________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________________ test_legacy_apply_blocked_by_emergency_stop __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_____________ test_ingest_exactly_one_logical_result_on_redelivery _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________ test_ingest_failure_rolls_back_then_retry_applies_once ____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________________ test_lease_one_winner_per_slot ________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_bulk_import_adds_real_aps_and_switches_to_inventory ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______ test_repeat_import_updates_existing_identity_without_duplicates ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_duplicate_rows_refused_without_persisting_first_row ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______ test_cross_family_conflict_refused_before_any_new_record_created _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________ test_bulk_inventory_only_not_telemetry_or_live_probe _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________________ test_bulk_limit_and_role_enforced _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_live_mode_shows_no_demo_and_demo_toggle_round_trip ____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________________ test_viewer_cannot_toggle_demo ________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________ test_collection_plan_success_failure_dedupe_and_experience __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________ test_syslog_attribution_levels_and_corrections ________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_vault_compliance_change_gate_and_integration _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______________ test_change_plan_two_person_concurrency_and_gate _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________ test_optimization_is_recommend_or_shadow_only _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________________ test_replacement_and_successor_starts_off ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________ test_learning_feedback_outcome_and_training_refusal ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_adapters_reports_topology_and_printers __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_worker_path_matches_original_scheduler __________________
+------------------------------ Captured log call -------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+_________ test_credential_library_encrypts_and_never_discloses_secret __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________ test_credential_rotation_updates_one_shared_profile ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___ test_admin_discovery_two_devices_reuses_profile_then_captures_and_drafts ___
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____ test_discovery_refuses_unauthorized_or_oversized_target_before_probe _____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________ test_read_only_profile_test_failure_keeps_credentials_secret _________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________ test_operator_cannot_list_or_use_shared_credential_library __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_disabled_profile_is_not_available_to_discover ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____ test_full_slash24_discovery_runs_in_background_and_reports_progress ______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________ test_original_sims_routes_survive_integration _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________ test_original_dashboard_and_sites_remain_readable_in_demo ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________ test_legacy_sims_hardware_write_paths_remain_locked ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________________ test_cx_probe_uses_single_rest_prefix _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________________ test_full_pipeline_and_alert_lifecycle ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______ test_unreachable_threshold_override_and_maintenance_suppression ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________ test_central_managed_switch_is_detected_and_writes_refused __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_ test_manual_device_reports_missing_evidence_without_claiming_hardware_certified _
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______ test_real_rest_baseline_records_observed_and_unverified_separately ______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______ test_acceptance_endpoints_enforce_admin_role_and_real_inventory ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________ test_inheritance_api_and_baseline_gated_draft _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______________ test_scope_validation_rbac_and_revision_conflict _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________________ test_expand_only_printer_schema_exists ____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________ test_register_and_update_without_duplicate_or_device_write __________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______ test_meter_samples_report_counter_reset_instead_of_negative_pages _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______ test_sheets_and_impressions_separate_and_large_counters_supported _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_low_toner_alerts_only_for_known_measurements _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___ test_consumable_cycle_actual_cost_is_based_on_meter_and_flagged_as_proxy ___
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______ test_counter_reset_on_closed_cycle_does_not_create_negative_cost _______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_maintenance_service_history_and_rule_analysis ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___ test_role_and_site_safety_only_admin_can_view_or_modify_printer_records ____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_snmp_probe_default_off_does_not_expose_credentials ____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________________ test_invalid_negative_supply_or_meter_rejected ________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________ test_switch_certify_apply_readback_and_rollback_paths _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________ test_uncertified_and_locked_hardware_paths_never_touch_devices ________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________________ test_instant_certify_and_apply_rf_and_ssid __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________ test_vault_capture_schedule_and_replacement_restore ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_per_device_automatic_optimization_end_to_end _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______________ test_template_inheritance_deploys_and_reconciles _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______________ test_manual_real_ap_and_cx_inventory_and_metrics _______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______ test_duplicate_real_identity_is_upserted_but_cross_family_rejected ______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________ test_negative_readings_and_unapproved_metric_rejected _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+________ test_site_scoped_operator_cannot_read_manual_global_inventory _________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________ test_direct_probe_requires_allowlisted_private_target _____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____ test_readonly_probe_stores_real_evidence_with_no_configuration_write _____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______ test_failed_aruba_instant_auth_returns_safe_502_and_persists_audit ______
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____ test_failed_cx_rest_connection_returns_502_without_leaking_credentials ____
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_device_write_routes_refused_and_audited _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_viewer_denied_privileged_actions_and_denial_audited ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_auditor_reads_audit_but_cannot_operate __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_site_scoped_user_sees_only_granted_site _________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+______________ test_forced_password_change_blocks_everything_else ______________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_logout_revokes_token_and_session_fields_are_audited ___________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________________________ test_request_id_echoed ____________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________ test_audit_hash_chain_detects_modification_and_deletion ____________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________________ test_audit_export_is_csv_with_hashes _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_________________ test_later_phase_routes_return_explicit_501 __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+____________________ test_every_legacy_route_still_mounted _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+__________________________ test_openapi_documents_v1 ___________________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________________ test_legacy_backups_never_restorable _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_______________________ test_demo_artifacts_are_labelled _______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+___________________ test_ai_context_has_no_client_identities ___________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+_____________________ test_websocket_requires_valid_token ______________________
+------------------------------ Captured log setup ------------------------------
+WARNING  sims:main.py:76 DEMO MODE: all data shown is SIMULATED.
+WARNING  sims:main.py:79 DEVICE WRITE LOCK: every device write path is disabled (Phase 1/2).
+=========================== short test summary info ============================
+PASSED backend/tests/test_ai.py::test_disabled_by_default
+PASSED backend/tests/test_ai.py::test_remote_ollama_refused_unless_explicitly_allowed
+PASSED backend/tests/test_ai.py::test_status_lists_models_and_admin_can_choose
+PASSED backend/tests/test_ai.py::test_unreachable_ollama_gives_friendly_error_and_releases_lock
+PASSED backend/tests/test_ai.py::test_busy_assistant_returns_429
+PASSED backend/tests/test_ai.py::test_model_never_sees_client_identities
+PASSED backend/tests/test_ai.py::test_unmeasured_metrics_are_declared_to_the_model
+PASSED backend/tests/test_ai.py::test_explain_includes_score_breakdown
+PASSED backend/tests/test_ai.py::test_ask_runs_only_the_chosen_allowlisted_tool
+PASSED backend/tests/test_ai.py::test_ask_refuses_anything_outside_the_allowlist[{"tool": "run_sql", "args": {"query": "DROP TABLE users"}}]
+PASSED backend/tests/test_ai.py::test_ask_refuses_anything_outside_the_allowlist[not json at all]
+PASSED backend/tests/test_ai.py::test_ask_refuses_anything_outside_the_allowlist[{"tool": "none"}]
+PASSED backend/tests/test_ai.py::test_ask_refuses_anything_outside_the_allowlist[{"tool": "../../etc/passwd"}]
+PASSED backend/tests/test_ai.py::test_ask_refuses_anything_outside_the_allowlist[[]]
+PASSED backend/tests/test_ai.py::test_ask_out_of_range_arguments_fall_back_to_defaults
+PASSED backend/tests/test_ai.py::test_ask_validates_question_and_role
+PASSED backend/tests/test_ai.py::test_ai_use_is_audited_without_question_text
+PASSED backend/tests/test_ai.py::test_think_is_disabled_by_default_and_dropped_if_the_model_rejects_it
+PASSED backend/tests/test_ai.py::test_reasoning_model_that_exhausts_its_budget_is_retried_with_more_room
+PASSED backend/tests/test_api.py::test_auth_required
+PASSED backend/tests/test_api.py::test_login_bad_password_and_lockout
+PASSED backend/tests/test_api.py::test_demo_dashboard_is_labeled_simulated
+PASSED backend/tests/test_api.py::test_offline_ap_alert_ack_resolve_flow
+PASSED backend/tests/test_api.py::test_viewer_gets_masked_client_identifiers_and_no_admin_access
+PASSED backend/tests/test_api.py::test_client_search_and_quality_filter
+PASSED backend/tests/test_api.py::test_site_creation_blocked_in_demo_mode
+PASSED backend/tests/test_api.py::test_site_creation_validates_and_encrypts_in_live_mode
+PASSED backend/tests/test_api.py::test_live_poll_with_mocked_aruba
+PASSED backend/tests/test_api.py::test_live_poll_failure_raises_alert_and_marks_site
+PASSED backend/tests/test_api.py::test_ap_missing_from_poll_goes_down
+PASSED backend/tests/test_api.py::test_delete_ap_and_site_cleanup
+PASSED backend/tests/test_aruba_client.py::test_snapshot_collection
+PASSED backend/tests/test_aruba_client.py::test_login_failure_raises_auth_error
+PASSED backend/tests/test_aruba_client.py::test_expired_session_is_retried_once
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[configure terminal]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[reload]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[write memory]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[show aps; reload]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[show aps | include x]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[show aps\nreload]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[wlan ssid-profile x]
+PASSED backend/tests/test_aruba_client.py::test_non_readonly_or_unsafe_commands_are_blocked[copy flash tftp]
+PASSED backend/tests/test_aruba_client.py::test_connection_error_is_wrapped
+PASSED backend/tests/test_aruba_client.py::test_secrets_never_logged
+PASSED backend/tests/test_config.py::test_client_refuses_config_post_when_disabled_or_endpoint_unknown
+PASSED backend/tests/test_config.py::test_planning_blocked_by_default_and_for_demo_sites
+PASSED backend/tests/test_config.py::test_demo_site_config_is_readable_but_not_writable
+PASSED backend/tests/test_config.py::test_rbac
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body0]
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body1]
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body2]
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body3]
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body4]
+PASSED backend/tests/test_config.py::test_ssid_input_validation[body5]
+PASSED backend/tests/test_config.py::test_new_ssid_requires_passphrase_for_psk
+PASSED backend/tests/test_config.py::test_create_ssid_plan_confirm_apply_verify_rollback
+PASSED backend/tests/test_config.py::test_modify_existing_ssid_vlan_and_rollback_restores_previous
+PASSED backend/tests/test_config.py::test_device_rejection_marks_failed
+PASSED backend/tests/test_config.py::test_readback_mismatch_is_reported_not_hidden
+PASSED backend/tests/test_config.py::test_expired_plan_cannot_be_applied
+PASSED backend/tests/test_config.py::test_rename_ap_keeps_identity
+PASSED backend/tests/test_config.py::test_move_ap_between_sites
+PASSED backend/tests/test_config.py::test_move_warns_when_ap_not_in_destination_cluster
+PASSED backend/tests/test_config.py::test_redact_and_parse
+PASSED backend/tests/test_experience.py::test_lerp_both_directions_and_clamping
+PASSED backend/tests/test_experience.py::test_client_score_uses_only_what_was_measured
+PASSED backend/tests/test_experience.py::test_nothing_measured_means_no_score_not_zero
+PASSED backend/tests/test_experience.py::test_too_little_coverage_gives_no_score
+PASSED backend/tests/test_experience.py::test_rssi_used_only_when_snr_missing
+PASSED backend/tests/test_experience.py::test_stability_needs_observation_time_and_counts_disconnects
+PASSED backend/tests/test_experience.py::test_bands_and_thresholds_are_configurable
+PASSED backend/tests/test_experience.py::test_ap_score_offline_and_partial
+PASSED backend/tests/test_experience.py::test_summarize
+PASSED backend/tests/test_experience.py::test_events_inferred_from_polls
+PASSED backend/tests/test_experience.py::test_unreadable_client_list_does_not_invent_disconnects
+PASSED backend/tests/test_experience.py::test_scores_are_stored_and_samples_carry_them
+PASSED backend/tests/test_experience.py::test_poor_experience_alert_needs_sustained_streak_and_auto_resolves
+PASSED backend/tests/test_experience.py::test_excessive_disconnects_alert
+PASSED backend/tests/test_experience.py::test_reboot_and_utilization_and_firmware_rules_fire_only_with_data
+PASSED backend/tests/test_experience.py::test_overview_history_detail_and_masking
+PASSED backend/tests/test_experience.py::test_config_roundtrip_validation_audit_and_effect
+PASSED backend/tests/test_experience.py::test_corrupt_stored_config_falls_back_to_defaults
+PASSED backend/tests/test_firmware.py::test_evaluate[8.10.0.21-8.10.0.21-8.10.0.21-minimum-compliant]
+PASSED backend/tests/test_firmware.py::test_evaluate[8.10.0.21-8.10.0.21-8.10.0.30-minimum-outdated]
+PASSED backend/tests/test_firmware.py::test_evaluate[8.13.3.1-8.10.0.21-minimum-compliant]
+PASSED backend/tests/test_firmware.py::test_evaluate[8.13.3.1-8.10.0.21-exact-newer]
+PASSED backend/tests/test_firmware.py::test_evaluate[8.10.0.9-8.10.0.21-minimum-outdated]
+PASSED backend/tests/test_firmware.py::test_evaluate[None-8.10.0.21-minimum-unknown]
+PASSED backend/tests/test_firmware.py::test_evaluate[8.10.0.21-None-minimum-unknown]
+PASSED backend/tests/test_firmware.py::test_evaluate[garbage-8.10.0.21-minimum-unknown]
+PASSED backend/tests/test_firmware.py::test_policy_validation_and_rbac
+PASSED backend/tests/test_firmware.py::test_noncompliance_alert_raised_and_resolved
+PASSED backend/tests/test_firmware.py::test_site_override_beats_global_target
+PASSED backend/tests/test_firmware.py::test_parse_name
+PASSED backend/tests/test_firmware.py::test_upload_list_delete_and_limits
+PASSED backend/tests/test_firmware.py::test_image_path_refuses_traversal[../x]
+PASSED backend/tests/test_firmware.py::test_image_path_refuses_traversal[a/b]
+PASSED backend/tests/test_firmware.py::test_image_path_refuses_traversal[.hidden]
+PASSED backend/tests/test_firmware.py::test_image_path_refuses_traversal[..\\x]
+PASSED backend/tests/test_firmware.py::test_plan_needs_a_reachable_public_url
+PASSED backend/tests/test_firmware.py::test_plan_hides_token_and_stage_only
+PASSED backend/tests/test_firmware.py::test_downgrade_same_version_and_duplicate_classes_refused
+PASSED backend/tests/test_firmware.py::test_apply_posts_os_upgrade_without_reboot_and_opens_download
+PASSED backend/tests/test_firmware.py::test_failed_device_response_leaves_link_closed
+PASSED backend/tests/test_firmware.py::test_upgrade_blocked_when_changes_disabled
+PASSED backend/tests/test_firmware.py::test_firmware_changes_cannot_be_rolled_back
+PASSED backend/tests/test_firmware.py::test_bundle_ok_rsa_and_ec
+PASSED backend/tests/test_firmware.py::test_bundle_rejections
+PASSED backend/tests/test_firmware.py::test_bundle_warns_when_name_does_not_match_or_expiring_soon
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[0]
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[1]
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[511]
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[512]
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[513]
+PASSED backend/tests/test_firmware.py::test_tftp_serves_exact_bytes_once[1300]
+PASSED backend/tests/test_firmware.py::test_tftp_refuses_other_files_and_other_clients
+PASSED backend/tests/test_firmware.py::test_tftp_reports_port_in_use
+PASSED backend/tests/test_firmware.py::test_cert_plan_is_display_safe_and_encrypted_at_rest
+PASSED backend/tests/test_firmware.py::test_cert_plan_rejects_bad_input_and_needs_ipv4_public_url
+PASSED backend/tests/test_firmware.py::test_cert_apply_end_to_end_verified_and_secrets_wiped
+PASSED backend/tests/test_firmware.py::test_cert_apply_unverified_when_ap_keeps_old_certificate
+PASSED backend/tests/test_firmware.py::test_cert_apply_fails_when_ap_never_downloads
+PASSED backend/tests/test_firmware.py::test_cert_apply_reports_ssh_failure_and_wipes
+PASSED backend/tests/test_firmware.py::test_cancelled_cert_plan_is_wiped
+PASSED backend/tests/test_firmware.py::test_copy_command_inputs_are_validated
+PASSED backend/tests/test_firmware.py::test_copy_command_is_scrubbed_and_pinned
+PASSED backend/tests/test_migrations.py::test_fresh_database_gets_all_tables_at_head
+PASSED backend/tests/test_migrations.py::test_pre_migration_database_is_upgraded_in_place_without_losing_data
+PASSED backend/tests/test_migrations.py::test_expand_only_management_0004_to_head_preserves_existing_site
+PASSED backend/tests/test_parsers.py::test_text_table_ap_parsing
+PASSED backend/tests/test_parsers.py::test_structured_json_rows
+PASSED backend/tests/test_parsers.py::test_client_parsing_and_quality
+PASSED backend/tests/test_parsers.py::test_quality_from_snr_thresholds
+PASSED backend/tests/test_parsers.py::test_version_and_uptime
+PASSED backend/tests/test_parsers.py::test_empty_output_returns_no_rows
+PASSED backend/tests/test_parsers.py::test_header_underline_is_not_an_ap_and_master_ip_is_cleaned
+PASSED backend/tests/test_parsers.py::test_normalize_model
+PASSED backend/tests/test_rest_enable.py::test_scan_host_key_sends_no_credentials
+PASSED backend/tests/test_rest_enable.py::test_blocked_when_config_changes_disabled
+PASSED backend/tests/test_rest_enable.py::test_fingerprint_mismatch_aborts_before_password
+PASSED backend/tests/test_rest_enable.py::test_runs_only_the_fixed_commands
+PASSED backend/tests/test_rest_enable.py::test_device_rejection_and_bad_login
+PASSED backend/tests/test_rest_enable.py::test_login_distinguishes_rest_disabled_from_bad_credentials
+PASSED backend/tests/test_rest_enable.py::test_check_endpoint_reports_disabled_and_returns_fingerprint
+PASSED backend/tests/test_rest_enable.py::test_enable_endpoint_gates_and_confirmation
+PASSED backend/tests/test_rest_enable.py::test_enable_end_to_end
+PASSED backend/tests/test_rest_enable.py::test_enable_reports_when_rest_never_comes_up
+PASSED backend/tests/test_rest_enable.py::test_enable_requires_admin_and_live_site
+PASSED backend/tests/test_rest_enable.py::test_modern_ssh_server_uses_modern_algorithms
+PASSED backend/tests/test_rest_enable.py::test_legacy_only_ssh_server_falls_back_to_ssh_rsa
+PASSED backend/tests/test_rest_enable.py::test_legacy_fallback_still_enforces_pinned_fingerprint
+PASSED backend/tests/test_rest_enable.py::test_server_accepting_neither_gives_manual_steps
+PASSED backend/tests/test_telemetry.py::test_channel_summary_rows_and_noise_sign
+PASSED backend/tests/test_telemetry.py::test_radios_use_their_own_current_channel
+PASSED backend/tests/test_telemetry.py::test_radio_without_a_row_for_its_channel_has_no_measurements
+PASSED backend/tests/test_telemetry.py::test_unusable_rf_output_gives_none[None]
+PASSED backend/tests/test_telemetry.py::test_unusable_rf_output_gives_none[]
+PASSED backend/tests/test_telemetry.py::test_unusable_rf_output_gives_none[garbage]
+PASSED backend/tests/test_telemetry.py::test_unusable_rf_output_gives_none[Channel Summary\n---\n]
+PASSED backend/tests/test_telemetry.py::test_system_status_uses_latest_sample_not_peak
+PASSED backend/tests/test_telemetry.py::test_uptime_formats[5 mins 3 secs-303]
+PASSED backend/tests/test_telemetry.py::test_uptime_formats[1 day 2 hours 3 mins 4 secs-93784]
+PASSED backend/tests/test_telemetry.py::test_uptime_formats[42 secs-42]
+PASSED backend/tests/test_telemetry.py::test_missing_sections_stay_unavailable
+PASSED backend/tests/test_telemetry.py::test_snapshot_gets_telemetry_per_ap_targeted_at_that_ap
+PASSED backend/tests/test_telemetry.py::test_one_failing_ap_does_not_affect_others
+PASSED backend/tests/test_telemetry.py::test_unsupported_cluster_stops_after_repeated_failures
+PASSED backend/tests/test_telemetry.py::test_telemetry_can_be_disabled
+PASSED backend/tests/test_telemetry.py::test_utilization_and_reboot_flow_into_samples_and_alerts
+PASSED backend/tests/test_telemetry.py::test_iap_ip_must_be_an_ip_address
+PASSED backend/tests/test_unified_write_approval.py::test_legacy_apply_requires_independent_approval
+PASSED backend/tests/test_unified_write_approval.py::test_legacy_apply_blocked_by_emergency_stop
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[SIMS_FERNET_KEY]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[SIMS_DATABASE_URL]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[SIMS_ADMIN_PASSWORD]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[SIMS_JWT_SECRET]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[INM_TELEMETRY_DATABASE_URL]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[MGMT_DB_PASSWORD]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[TS_DB_PASSWORD]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[INM_NATS_URL]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[INM_NATS_USER]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[INM_NATS_API_PASSWORD]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_refuses_platform_secret_env[INM_NATS_WORKER_PASSWORD]
+PASSED tests/unit/test_ai_service_isolation.py::test_ai_allows_only_dedicated_service_token
+PASSED tests/unit/test_capability_deployment.py::test_mode_and_write_controls_come_from_env_with_safe_defaults
+PASSED tests/unit/test_capability_deployment.py::test_worker_can_collect_only_from_allowlisted_cidrs_and_persists_data
+PASSED tests/unit/test_capability_deployment.py::test_installer_supports_live_mode_and_refuses_demo_password
+PASSED tests/unit/test_capability_deployment.py::test_release_manifest_head_matches_latest_migration
+PASSED tests/unit/test_capability_domain.py::test_plan_validation_rejects_bad_families_intervals_and_windows
+PASSED tests/unit/test_capability_domain.py::test_dedupe_key_is_per_device_family_window_and_stable
+PASSED tests/unit/test_capability_domain.py::test_backoff_is_bounded_and_failures_never_become_success
+PASSED tests/unit/test_capability_domain.py::test_freshness_and_experience_coverage_never_zero_fill
+PASSED tests/unit/test_capability_domain.py::test_normalize_cx_and_unknown_lines
+PASSED tests/unit/test_capability_domain.py::test_attribution_levels_verified_correlated_unknown
+PASSED tests/unit/test_capability_domain.py::test_vault_roundtrip_and_tamper_detection
+PASSED tests/unit/test_capability_domain.py::test_restore_compatibility_rejects_wrong_model_firmware_and_redacted
+PASSED tests/unit/test_capability_domain.py::test_rf_policy_rejects_80mhz_excluded_dfs_and_invalid
+PASSED tests/unit/test_capability_domain.py::test_switch_policy_protects_uplinks_and_family_mismatch
+PASSED tests/unit/test_capability_domain.py::test_two_person_rule_approval_expiry_and_gate_denies_while_locked
+PASSED tests/unit/test_capability_domain.py::test_replacement_plan_blocks_incompatible_and_requires_lab
+PASSED tests/unit/test_capability_domain.py::test_outcome_requires_evidence_and_reports_direction
+PASSED tests/unit/test_capability_domain.py::test_temporal_split_has_no_leakage_and_training_needs_labels
+PASSED tests/unit/test_capability_domain.py::test_insufficient_evidence_disclosed_on_recommendation
+PASSED tests/unit/test_capability_domain.py::test_default_is_recommend_only_never_inherited
+PASSED tests/unit/test_capability_domain.py::test_enrollment_validation_rejects_all_settings_80mhz_spoof_and_switches
+PASSED tests/unit/test_capability_domain.py::test_feature_flag_off_denies_even_a_fully_armed_device
+PASSED tests/unit/test_capability_domain.py::test_every_guard_must_pass
+PASSED tests/unit/test_capability_domain.py::test_shadow_simulation_cooldown_and_stop_without_writes
+PASSED tests/unit/test_capability_domain.py::test_adapter_registry_unsupported_and_writes_central
+PASSED tests/unit/test_capability_domain.py::test_executive_summary_no_zero_fill_and_signed_export
+PASSED tests/unit/test_capability_domain.py::test_counter_rollover_vs_reset
+PASSED tests/unit/test_capability_domain.py::test_supply_forecast_needs_evidence_and_ignores_estimates
+PASSED tests/unit/test_capability_domain.py::test_noc_health_down_device_is_poor_and_no_data_is_none
+PASSED tests/unit/test_capability_domain.py::test_best_practice_unknown_without_config_and_scores_good_vs_bad
+PASSED tests/unit/test_centos_release_guard.py::test_checked_in_locked_release_is_accepted
+PASSED tests/unit/test_centos_release_guard.py::test_incorrect_release_refuses_to_proceed[manifest0-1.0.0-phase1]
+PASSED tests/unit/test_centos_release_guard.py::test_incorrect_release_refuses_to_proceed[manifest1-1.0.0-phase1]
+PASSED tests/unit/test_centos_release_guard.py::test_incorrect_release_refuses_to_proceed[manifest2-1.0.0-phase1]
+PASSED tests/unit/test_centos_release_guard.py::test_incorrect_release_refuses_to_proceed[manifest3-1.0.0-phase1]
+PASSED tests/unit/test_centos_release_guard.py::test_malformed_release_json_refuses_to_proceed
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_32_and_25_stay_exact
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_8_too_broad
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_hosts_and_subnets_are_not_enumerated
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_normalizes_misaligned_cidr
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_pagination_and_final_block_of_full_9
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_private_9_is_plannable_but_not_implicitly_authorized
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_requested_public_cidr_is_supported_for_definition
+PASSED tests/unit/test_discovery_cidr9.py::CIDR9Tests::test_validation_bounds_and_ipv6
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[__init__.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[adapters.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[alert_rules.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[attribution.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[best_practices.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[change_control.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[collection.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[events.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[learning.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[model.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[noc.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[optimization_policy.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[phase2_acceptance.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[phase4_analysis.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[ports.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[printer_intelligence.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[replacement.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[reporting.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[template_inheritance.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_domain_imports_no_framework_orm_bus_or_vendor[vault.py]
+PASSED tests/unit/test_domain_and_architecture.py::test_application_layer_does_not_import_frameworks
+PASSED tests/unit/test_domain_and_architecture.py::test_envelope_round_trip_and_required_fields
+PASSED tests/unit/test_domain_and_architecture.py::test_tampered_envelope_is_rejected
+PASSED tests/unit/test_domain_and_architecture.py::test_additive_optional_field_from_newer_producer_is_tolerated
+PASSED tests/unit/test_domain_and_architecture.py::test_unknown_major_schema_version_rejected
+PASSED tests/unit/test_domain_and_architecture.py::test_unknown_event_type_and_source_type_refused
+PASSED tests/unit/test_domain_and_architecture.py::test_demo_and_real_devices_never_share_identity
+PASSED tests/unit/test_domain_and_architecture.py::test_write_capability_requires_certification
+PASSED tests/unit/test_injected_engine.py::test_injected_sqlite_engine_is_used_and_migratable
+PASSED tests/unit/test_injected_engine.py::test_engine_injection_wins_over_url_engine_construction
+PASSED tests/unit/test_lan_backend_rebuild.py::test_lan_script_builds_backend_owner_service_before_api
+PASSED tests/unit/test_lan_backend_rebuild.py::test_lan_mode_does_not_reset_password_or_erase_data
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0004-MIGRATE]
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0005-MIGRATE]
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0006-MIGRATE]
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0007-MIGRATE]
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0008-MIGRATE]
+PASSED tests/unit/test_lan_schema_guard.py::test_expected_or_previous_schema_accepted[0009-CURRENT]
+PASSED tests/unit/test_lan_schema_guard.py::test_unsupported_schema_refused_without_migration[0003-t001]
+PASSED tests/unit/test_lan_schema_guard.py::test_unsupported_schema_refused_without_migration[9999-t001]
+PASSED tests/unit/test_lan_schema_guard.py::test_unsupported_schema_refused_without_migration[0004-unexpected]
+PASSED tests/unit/test_lan_schema_guard.py::test_unsupported_schema_refused_without_migration[None-t001]
+PASSED tests/unit/test_lan_schema_guard.py::test_missing_expand_only_and_write_lock_refused
+PASSED tests/unit/test_lan_schema_guard.py::test_one_click_lan_script_runs_schema_gate_before_binding_api
+PASSED tests/unit/test_loki_startup_gate.py::test_loki_warmup_is_retried_until_ready
+PASSED tests/unit/test_loki_startup_gate.py::test_persistent_loki_failure_never_reported_as_ready
+PASSED tests/unit/test_loki_startup_gate.py::test_loki_not_configured_is_not_faked_as_ready
+PASSED tests/unit/test_nats_config_env_safety.py::test_ci_generated_nats_credentials_are_parser_safe
+PASSED tests/unit/test_nats_config_env_safety.py::test_centos_installer_nats_credentials_start_with_letter_and_remain_random
+PASSED tests/unit/test_phase2_acceptance.py::test_supported_models_are_normalized_without_claiming_firmware_certification
+PASSED tests/unit/test_phase2_acceptance.py::test_instant_snapshot_does_not_infer_radios_or_channel_width
+PASSED tests/unit/test_phase2_acceptance.py::test_cx_partial_snapshot_does_not_infer_vlan_assignment
+PASSED tests/unit/test_phase2_acceptance.py::test_unsafe_device_write_profile_is_not_pilot_eligible
+PASSED tests/unit/test_phase3_inheritance.py::test_global_site_device_order_union_vlan_and_port_override
+PASSED tests/unit/test_phase3_inheritance.py::test_ap_20_40_widths_inherit_by_ssid_identity_without_secret_fields
+PASSED tests/unit/test_pipeline_units.py::test_ingest_exactly_one_logical_result_on_redelivery
+PASSED tests/unit/test_pipeline_units.py::test_ingest_failure_rolls_back_then_retry_applies_once
+PASSED tests/unit/test_pipeline_units.py::test_telemetry_absent_values_are_not_zero
+PASSED tests/unit/test_pipeline_units.py::test_lease_one_winner_per_slot
+PASSED tests/unit/test_pipeline_units.py::test_health_is_measured_never_assumed
+PASSED tests/unit/test_pipeline_units.py::test_schema_gate[accepted-0]
+PASSED tests/unit/test_pipeline_units.py::test_schema_gate[unknown_management-3]
+PASSED tests/unit/test_pipeline_units.py::test_schema_gate[unknown_telemetry-3]
+PASSED tests/unit/test_pipeline_units.py::test_schema_gate[missing-3]
+PASSED tests/unit/test_pipeline_units.py::test_schema_gate_refuses_release_without_declaration
+PASSED tests/unit/test_pipeline_units.py::test_ws_hub_scope_and_privileged_topic_filtering
+PASSED tests/unit/test_pipeline_units.py::test_ws_hub_replay_and_resync
+PASSED tests/unit/test_printer_analytics.py::test_actual_counter_delta_not_equivalent_to_declared_yield
+PASSED tests/unit/test_printer_analytics.py::test_reset_and_missing_readings_do_not_create_fake_usage
+PASSED tests/unit/test_printer_analytics.py::test_zero_and_open_cycle_have_no_per_page_cost
+PASSED tests/unit/test_printer_analytics.py::test_refill_added_volume_is_not_treated_as_consumed_volume
+PASSED tests/unit/test_printer_analytics.py::test_measured_ink_volume_available_separately_from_refill_proxy
+PASSED tests/unit/test_printer_analytics.py::test_sheets_are_not_relabelled_impressions
+PASSED tests/unit/test_printer_analytics.py::test_model_comparison_requires_three_valid_cycles
+PASSED tests/unit/test_printer_analytics.py::test_low_supply_does_not_infer_missing_or_bad_value
+PASSED tests/unit/test_printer_analytics.py::test_snmpv3_acl_needs_explicit_private_narrow_ranges
+PASSED tests/unit/test_printer_analytics.py::test_printer_marker_life_count_requires_reported_unit
+PASSED tests/unit/test_scoped_lan_demo_dispatch.py::test_dispatch_occurs_before_docker_teardown
+PASSED tests/unit/test_scoped_lan_demo_dispatch.py::test_lan_script_preserves_password_and_rejects_open_networks
+PASSED tests/unit/test_scoped_lan_demo_dispatch.py::test_guided_workflow_is_routed_and_visible_to_admin
+PASSED tests/contract/test_bulk_device_import.py::test_bulk_import_adds_real_aps_and_switches_to_inventory
+PASSED tests/contract/test_bulk_device_import.py::test_repeat_import_updates_existing_identity_without_duplicates
+PASSED tests/contract/test_bulk_device_import.py::test_duplicate_rows_refused_without_persisting_first_row
+PASSED tests/contract/test_bulk_device_import.py::test_cross_family_conflict_refused_before_any_new_record_created
+PASSED tests/contract/test_bulk_device_import.py::test_bulk_inventory_only_not_telemetry_or_live_probe
+PASSED tests/contract/test_bulk_device_import.py::test_bulk_limit_and_role_enforced
+PASSED tests/contract/test_capability_completion.py::test_live_mode_shows_no_demo_and_demo_toggle_round_trip
+PASSED tests/contract/test_capability_completion.py::test_viewer_cannot_toggle_demo
+PASSED tests/contract/test_capability_completion.py::test_collection_plan_success_failure_dedupe_and_experience
+PASSED tests/contract/test_capability_completion.py::test_syslog_attribution_levels_and_corrections
+PASSED tests/contract/test_capability_completion.py::test_vault_compliance_change_gate_and_integration
+PASSED tests/contract/test_capability_completion.py::test_change_plan_two_person_concurrency_and_gate
+PASSED tests/contract/test_capability_completion.py::test_optimization_is_recommend_or_shadow_only
+PASSED tests/contract/test_capability_completion.py::test_replacement_and_successor_starts_off
+PASSED tests/contract/test_capability_completion.py::test_learning_feedback_outcome_and_training_refusal
+PASSED tests/contract/test_capability_completion.py::test_adapters_reports_topology_and_printers
+PASSED tests/contract/test_demo_parity.py::test_worker_path_matches_original_scheduler
+PASSED tests/contract/test_guided_onboarding.py::test_credential_library_encrypts_and_never_discloses_secret
+PASSED tests/contract/test_guided_onboarding.py::test_credential_rotation_updates_one_shared_profile
+PASSED tests/contract/test_guided_onboarding.py::test_admin_discovery_two_devices_reuses_profile_then_captures_and_drafts
+PASSED tests/contract/test_guided_onboarding.py::test_discovery_refuses_unauthorized_or_oversized_target_before_probe
+PASSED tests/contract/test_guided_onboarding.py::test_read_only_profile_test_failure_keeps_credentials_secret
+PASSED tests/contract/test_guided_onboarding.py::test_operator_cannot_list_or_use_shared_credential_library
+PASSED tests/contract/test_guided_onboarding.py::test_disabled_profile_is_not_available_to_discover
+PASSED tests/contract/test_guided_onboarding.py::test_full_slash24_discovery_runs_in_background_and_reports_progress
+PASSED tests/contract/test_legacy_sims_feature_parity.py::test_original_sims_routes_survive_integration
+PASSED tests/contract/test_legacy_sims_feature_parity.py::test_original_sims_screens_survive_react_router_integration
+PASSED tests/contract/test_legacy_sims_feature_parity.py::test_original_dashboard_and_sites_remain_readable_in_demo
+PASSED tests/contract/test_legacy_sims_feature_parity.py::test_legacy_sims_hardware_write_paths_remain_locked
+PASSED tests/contract/test_monitoring_pipeline.py::test_cx_probe_uses_single_rest_prefix
+PASSED tests/contract/test_monitoring_pipeline.py::test_full_pipeline_and_alert_lifecycle
+PASSED tests/contract/test_monitoring_pipeline.py::test_unreachable_threshold_override_and_maintenance_suppression
+PASSED tests/contract/test_monitoring_pipeline.py::test_central_managed_switch_is_detected_and_writes_refused
+PASSED tests/contract/test_phase2_acceptance.py::test_manual_device_reports_missing_evidence_without_claiming_hardware_certified
+PASSED tests/contract/test_phase2_acceptance.py::test_real_rest_baseline_records_observed_and_unverified_separately
+PASSED tests/contract/test_phase2_acceptance.py::test_acceptance_endpoints_enforce_admin_role_and_real_inventory
+PASSED tests/contract/test_phase3_templates.py::test_inheritance_api_and_baseline_gated_draft
+PASSED tests/contract/test_phase3_templates.py::test_scope_validation_rbac_and_revision_conflict
+PASSED tests/contract/test_printer_intelligence.py::test_expand_only_printer_schema_exists
+PASSED tests/contract/test_printer_intelligence.py::test_register_and_update_without_duplicate_or_device_write
+PASSED tests/contract/test_printer_intelligence.py::test_meter_samples_report_counter_reset_instead_of_negative_pages
+PASSED tests/contract/test_printer_intelligence.py::test_sheets_and_impressions_separate_and_large_counters_supported
+PASSED tests/contract/test_printer_intelligence.py::test_low_toner_alerts_only_for_known_measurements
+PASSED tests/contract/test_printer_intelligence.py::test_consumable_cycle_actual_cost_is_based_on_meter_and_flagged_as_proxy
+PASSED tests/contract/test_printer_intelligence.py::test_counter_reset_on_closed_cycle_does_not_create_negative_cost
+PASSED tests/contract/test_printer_intelligence.py::test_maintenance_service_history_and_rule_analysis
+PASSED tests/contract/test_printer_intelligence.py::test_role_and_site_safety_only_admin_can_view_or_modify_printer_records
+PASSED tests/contract/test_printer_intelligence.py::test_snmp_probe_default_off_does_not_expose_credentials
+PASSED tests/contract/test_printer_intelligence.py::test_invalid_negative_supply_or_meter_rejected
+PASSED tests/contract/test_production_read_write.py::test_switch_certify_apply_readback_and_rollback_paths
+PASSED tests/contract/test_production_read_write.py::test_uncertified_and_locked_hardware_paths_never_touch_devices
+PASSED tests/contract/test_production_read_write.py::test_instant_certify_and_apply_rf_and_ssid
+PASSED tests/contract/test_production_read_write.py::test_vault_capture_schedule_and_replacement_restore
+PASSED tests/contract/test_production_read_write.py::test_per_device_automatic_optimization_end_to_end
+PASSED tests/contract/test_production_read_write.py::test_template_inheritance_deploys_and_reconciles
+PASSED tests/contract/test_quick_device_intake.py::test_manual_real_ap_and_cx_inventory_and_metrics
+PASSED tests/contract/test_quick_device_intake.py::test_duplicate_real_identity_is_upserted_but_cross_family_rejected
+PASSED tests/contract/test_quick_device_intake.py::test_negative_readings_and_unapproved_metric_rejected
+PASSED tests/contract/test_quick_device_intake.py::test_site_scoped_operator_cannot_read_manual_global_inventory
+PASSED tests/contract/test_quick_device_intake.py::test_direct_probe_requires_allowlisted_private_target
+PASSED tests/contract/test_quick_device_intake.py::test_readonly_probe_stores_real_evidence_with_no_configuration_write
+PASSED tests/contract/test_quick_device_intake.py::test_demo_simple_login_rejected_outside_localhost_locked_demo
+PASSED tests/contract/test_quick_device_intake.py::test_failed_aruba_instant_auth_returns_safe_502_and_persists_audit
+PASSED tests/contract/test_quick_device_intake.py::test_failed_cx_rest_connection_returns_502_without_leaking_credentials
+PASSED tests/contract/test_quick_device_intake.py::test_demo123_password_is_preserved_with_explicit_restricted_lan
+PASSED tests/contract/test_quick_device_intake.py::test_lan_nginx_acl_mount_is_present
+PASSED tests/contract/test_security_and_contracts.py::test_device_write_routes_refused_and_audited
+PASSED tests/contract/test_security_and_contracts.py::test_write_lock_cannot_be_combined_with_writes
+PASSED tests/contract/test_security_and_contracts.py::test_demo_profile_refuses_live_mode
+PASSED tests/contract/test_security_and_contracts.py::test_aruba_client_refuses_writes_under_lock
+PASSED tests/contract/test_security_and_contracts.py::test_viewer_denied_privileged_actions_and_denial_audited
+PASSED tests/contract/test_security_and_contracts.py::test_auditor_reads_audit_but_cannot_operate
+PASSED tests/contract/test_security_and_contracts.py::test_site_scoped_user_sees_only_granted_site
+PASSED tests/contract/test_security_and_contracts.py::test_forced_password_change_blocks_everything_else
+PASSED tests/contract/test_security_and_contracts.py::test_logout_revokes_token_and_session_fields_are_audited
+PASSED tests/contract/test_security_and_contracts.py::test_request_id_echoed
+PASSED tests/contract/test_security_and_contracts.py::test_audit_hash_chain_detects_modification_and_deletion
+PASSED tests/contract/test_security_and_contracts.py::test_audit_export_is_csv_with_hashes
+PASSED tests/contract/test_security_and_contracts.py::test_later_phase_routes_return_explicit_501
+PASSED tests/contract/test_security_and_contracts.py::test_every_legacy_route_still_mounted
+PASSED tests/contract/test_security_and_contracts.py::test_openapi_documents_v1
+PASSED tests/contract/test_security_and_contracts.py::test_legacy_backups_never_restorable
+PASSED tests/contract/test_security_and_contracts.py::test_migration_marks_preexisting_backups_not_restorable
+PASSED tests/contract/test_security_and_contracts.py::test_demo_artifacts_are_labelled
+PASSED tests/contract/test_security_and_contracts.py::test_ai_service_requires_token_and_labels_rules
+PASSED tests/contract/test_security_and_contracts.py::test_ai_gateway_forwards_only_two_ollama_calls
+PASSED tests/contract/test_security_and_contracts.py::test_ai_service_refuses_platform_secrets
+PASSED tests/contract/test_security_and_contracts.py::test_ai_context_has_no_client_identities
+PASSED tests/contract/test_security_and_contracts.py::test_websocket_requires_valid_token
+397 passed in 214.29s (0:03:34)

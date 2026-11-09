@@ -11,6 +11,9 @@ os.environ.setdefault("SIMS_JWT_SECRET", "t" * 48)
 os.environ.setdefault("SIMS_FERNET_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("SIMS_ADMIN_PASSWORD", "correct-horse-battery")
 os.environ["SIMS_DISABLE_SCHEDULER"] = "true"
+# This suite regresses the legacy SIMS device protocol paths; the two-person approval now required in front
+# of them is covered by backend/tests/test_unified_write_approval.py.
+os.environ["SIMS_REQUIRE_INDEPENDENT_APPROVAL"] = "false"
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

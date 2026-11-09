@@ -41,6 +41,23 @@ For each package create domain contracts, migration and compatibility proof (whe
 - Evidence register updated with actual observed results, build SHA and tester.
 - Vendor specific behaviour checked against supplied Instant AOS 8.10 guide or CX 10.14 OpenAPI; capability not assumed from unrelated models.
 
+## Owner directive (2026-11-09 06:33) — Phase 9 per-device optimization re-enabled; supersedes the earlier "no automatic optimization" limitation
+
+Automatic optimization exists again, but only as **per-device opt-in** (`DEVICE_OPT_IN`) and only when ALL hold:
+the platform flag `INM_AUTOMATIC_OPTIMIZATION=true` (default **false**; with it false the API refuses
+DEVICE_OPT_IN enrollment and the optimizer denies everything), a device-ID/serial-bound enrollment approved by
+an independent approver, operation/value scope (20/40 MHz only, never 80), expiry, daily limit, cooldown,
+write certification of the operation for that model/firmware, a fresh measured metric, no global write lock
+and no emergency stop. Every automatic change runs through `execute_plan` (verified backup, checkpoint,
+readback, automatic rollback) and is rolled back if the outcome degrades. Never inherited from site, model,
+group or template. Implementation: `backend/infrastructure/optimizer.py`; release notes
+`docs/RELEASE_1.2.0_PRODUCTION_READINESS.md`.
+
+Hardware writes: the engine (`backend/infrastructure/change_executor.py`) only writes to HARDWARE when device
+writes are enabled, the write lock is off and each operation is CERTIFIED_WRITE for that adapter + model family +
+firmware train + HARDWARE environment. Protocol-emulator (EMULATED) certification never certifies hardware.
+Do not record PASS for a hardware requirement on emulator evidence; use PARTIAL (emulator) + BLOCKED (hardware).
+
 ## Device optimization authorization — mandatory product rule
 
 **Automatic optimization is OFF by default, with no implicit site, model, group, organization or template inheritance.** Monitoring, rule/ML analysis, and recommendations may run without writing. Only explicitly selected individual devices may be configured for automatic optimization, using a device-ID/serial-bound enrollment, named requester and independent approver, approved operation/value constraints, expiry, schedule, cooldown and immediate disable action. Multi-select is merely a batch *proposal* producing separate approvals per device; newly discovered, transferred and replacement devices begin OFF.
