@@ -166,8 +166,29 @@ bash scripts/allow-readonly-device-range.sh 10.103.5.20/32,10.103.5.21/32
 ```
 
 Replace those two sample IPs with your actual management addresses.
-This helper permits only private IPv4 targets and at most a /24 range;
-the default allowlist is empty, so device polling is disabled until configured.
+This helper permits only private IPv4 /24–/32 targets and now supports
+both localhost demos and existing **approved CIDR-restricted LAN demos**. It
+preserves earlier approved target scopes and leaves `admin / demo123!` unchanged.
+The default target allowlist is empty, so read-only device access is blocked
+until an administrator explicitly approves a target.
+
+For the initial guided AP-505 test at **10.192.57.55**, use:
+
+```bash
+cd /root/NetworkManager3
+git pull --ff-only origin main
+bash scripts/allow-readonly-device-range.sh 10.192.57.55/32
+```
+
+Then refresh **Inventory → Add device — 7-step wizard** and in Step 4
+choose **Test credentials (read only)** followed by **Discover test IP only**.
+The selected discovery target becomes `10.192.57.55/32`.
+
+To approve other APs in that subnet for subsequent small-batch testing,
+an administrator may approve `10.192.57.0/24`, but **the active scan is
+still limited to eight IP addresses per request**. Enter /29 or narrower
+target ranges; a full /24 sweep is not implemented. The system does not
+turn on live background polling and never performs device configuration writes.
 
 Then visit **Inventory → Add device → Read directly from device (REST API)**.
 Supply management IPv4, model, serial, name, site and a read-only device username/password.
