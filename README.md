@@ -70,6 +70,10 @@ build packages come from approved registries; **application source comes only fr
 Release `1.0.0-phase1`. DEMO profile only. **All device writes are locked.** Lineage: SIMS Wi-Fi Manager (frozen at
 git tag `sims-baseline`).
 
+## Development baseline: missing capabilities
+
+The governing master design is [Architecture & Phased Build](docs/ARCHITECTURE_AND_PHASED_BUILD.md), with the mandatory [Capability Completion Design](docs/CAPABILITY_COMPLETION_DESIGN.md). The latter translates known outstanding requirements into 18 gap IDs, 12 work packages, explicit data/API contracts, operational workflows and 16 new acceptance scenarios. **Most of those capabilities are planned and are not part of the current runtime.** Real network-device writes remain locked, and model/firmware-dependent functions must be verified on physical equipment before certification.
+
 ## Install on CentOS Stream 9 (one command)
 
 ```bash
