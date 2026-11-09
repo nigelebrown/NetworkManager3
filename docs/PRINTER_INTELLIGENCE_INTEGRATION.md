@@ -1,4 +1,4 @@
-# JCF Intelligent Network Management — Printer Intelligence
+# Intelligent Network Manager — Printer Intelligence
 
 Source requirements: *Printer Intelligence, Efficiency & Predictive Maintenance Module* (2026-11-07),
 supplied by the project sponsor. This document records implementation in the
