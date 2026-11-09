@@ -80,6 +80,7 @@ def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
             if rf:
                 got_any = True
                 d["radios"] = rf["radios"]
+                d["rf_channels"] = rf["channels"]
                 for r in rf["radios"]:
                     key = {"5GHz": "util_5g_percent", "2.4GHz": "util_2g_percent"}.get(r.get("band"))
                     if key and r.get("util_percent") is not None:
