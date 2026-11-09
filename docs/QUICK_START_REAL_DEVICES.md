@@ -184,11 +184,23 @@ Then refresh **Inventory → Add device — 7-step wizard** and in Step 4
 choose **Test credentials (read only)** followed by **Discover test IP only**.
 The selected discovery target becomes `10.192.57.55/32`.
 
-To approve other APs in that subnet for subsequent small-batch testing,
-an administrator may approve `10.192.57.0/24`, but **the active scan is
-still limited to eight IP addresses per request**. Enter /29 or narrower
-target ranges; a full /24 sweep is not implemented. The system does not
-turn on live background polling and never performs device configuration writes.
+To discover an **entire approved private /24** (254 usable host IPs),
+an administrator can approve `10.192.57.0/24` using the same script, then
+enter `10.192.57.0/24` in wizard Step 3 and press **Scan approved range**.
+The application creates a persistent discovery ID, processes **four IPs per
+HTTP request** (maximum eight per batch), displays live progress and supports
+**Pause after current batch** / **Resume** by discovery ID. This avoids
+one long request and does not create an unrestricted network scanner.
+
+The server checks **all target IPs** against the approved private management
+allowlist before any traffic. A /23 or any larger prefix is not accepted by
+the live discovery endpoint. The separate /9 planner does not perform scans.
+The system does not enable background polling or device configuration writes.
+
+A failed AP at `10.192.57.55` with `ArubaConnectionError` remains a
+connectivity/API-service issue. A broader scan alone cannot resolve it; check
+network reachability, TCP 4343, Aruba Instant REST enablement and supported
+firmware while keeping certificate verification enforced.
 
 Then visit **Inventory → Add device → Read directly from device (REST API)**.
 Supply management IPv4, model, serial, name, site and a read-only device username/password.
