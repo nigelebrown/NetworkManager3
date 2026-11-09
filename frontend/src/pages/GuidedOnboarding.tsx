@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Card } from "../components/ui";
+import DeviceRestBootstrap from "../components/DeviceRestBootstrap";
 import { useLoad } from "../components/useLoad";
 import { Notice, PageHeader, Pill, ago, btn, btn2, btnDanger, inputCls, statusTone, useAction } from "../components/viz";
 import { getSession } from "../services/api";
@@ -130,12 +131,15 @@ function CredentialStep({ w, run }: { w: Workflow; run: Run }) {
 function DiscoverStep({ w, run, reload }: { w: Workflow; run: Run; reload: () => Promise<void> }) {
   const [scope, setScope] = useState("");
   const [sel, setSel] = useState<number[]>([]);
+  const [restTarget, setRestTarget] = useState("");
   const d = w.discovery;
   const act = useAction();
   return <Card title="3–4 · Discover, identify and register">
     <div className="flex flex-wrap items-end gap-2">
       <label className="text-sm">Management IP or CIDR (up to /24)<input aria-label="Discovery scope" className={inputCls} value={scope} onChange={e => setScope(e.target.value)} placeholder="10.10.20.0/24" /></label>
       <button className={btn} disabled={!scope.trim()} onClick={() => run(() => wf.discover(w.id, scope.trim()), "Discovery started.")}>Discover</button>
+      {w.credential_id && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(scope.trim()) &&
+        <button className={btn2} onClick={() => setRestTarget(scope.trim())}>Check REST on this IP</button>}
     </div>
     {d && <div className="mt-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-sm"><Pill value={d.status} tone={statusTone(d.status === "SCANNED" ? "PASS" : d.status)} />
@@ -151,10 +155,20 @@ function DiscoverStep({ w, run, reload }: { w: Workflow; run: Run; reload: () =>
           <td>{r.enrollable && r.status === "FOUND" && <input type="checkbox" aria-label={`Select ${r.management_ip}`} checked={sel.includes(i)} onChange={e => setSel(s => e.target.checked ? [...s, i] : s.filter(x => x !== i))} />}</td>
           <td className="font-mono text-xs">{r.management_ip}</td><td><Pill value={r.status} tone={r.status === "FOUND" ? "good" : r.status === "DUPLICATE" ? "fair" : "poor"} /></td>
           <td>{r.hostname}</td><td>{r.model} {r.firmware}</td><td className="font-mono text-xs">{r.serial_number}</td>
-          <td className="text-xs text-slate-400">{r.existing_device_id ? "Already in inventory — will be updated, not duplicated. " : ""}{r.result_note}</td></tr>)}</tbody></table>
+          <td className="text-xs text-slate-400">{r.existing_device_id ? "Already in inventory — will be updated, not duplicated. " : ""}{r.result_note}
+            {!r.enrollable && r.status !== "FOUND" && <button className="ml-2 text-sky-300 underline"
+              onClick={() => setRestTarget(r.management_ip)}>Check / enable REST</button>}
+          </td></tr>)}</tbody></table>
       <button className={btn} disabled={!sel.length || d.status !== "SCANNED"} onClick={() => run(() => wf.register(w.id, sel), "Devices registered.")}>Register selected ({sel.length})</button>
       <Notice error={act.error} message={act.message} />
     </div>}
+    {restTarget && w.credential_id && <DeviceRestBootstrap
+      key={`${w.credential_id}-${restTarget}`} credentialId={w.credential_id} address={restTarget}
+      family={w.device_family} onEnabled={async () => {
+        const scan = d?.scope || scope.trim() || restTarget;
+        await wf.discover(w.id, scan);
+        await reload(); setRestTarget("");
+      }} />}
   </Card>;
 }
 

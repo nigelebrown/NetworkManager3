@@ -192,6 +192,128 @@ def test_credential(profile_id: str, body: TargetCheck, request: Request,
             **read_only()}
 
 
+# ---- REST API prerequisites: authenticated, explicit SSH bootstrap for new hardware ---------
+class RestTarget(BaseModel):
+    management_ip: ipaddress.IPv4Address
+
+
+class RestEnable(RestTarget):
+    host_key_sha256: str = Field(min_length=16, max_length=120)
+    confirm_text: str = Field(min_length=1, max_length=100)
+    vrf: Literal["default", "mgmt"] = "default"
+
+
+def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tuple[str, str]:
+    """Check REST service availability without requiring metric parsers or changing device state."""
+    password = decrypt_secret(profile.password_enc)
+    try:
+        if profile.device_family == "access_point":
+            from ..aruba.errors import ArubaAuthError, ArubaRestDisabledError
+            with ArubaClient(ArubaTarget(str(ip), 4343, profile.username, password),
+                             timeout=min(8.0, get_settings().aruba_timeout_seconds),
+                             verify=get_settings().tls_verify_arg) as client:
+                client.login()
+        else:
+            from ..infrastructure.writers.aruba_cx import CxSession
+            with CxSession(str(ip), profile.username, password, timeout=8.0,
+                           verify=get_settings().tls_verify_arg) as client:
+                client.open()
+        return "ENABLED", "REST API responds and the saved credentials were accepted."
+    except Exception as exc:
+        from ..aruba.errors import ArubaAuthError, ArubaRestDisabledError
+        from ..infrastructure.writers import WriterError
+        if isinstance(exc, ArubaRestDisabledError) or (isinstance(exc, WriterError) and exc.category == "REST_DISABLED"):
+            return "DISABLED", "REST endpoint did not respond as an enabled API; SSH bootstrap may be necessary."
+        if isinstance(exc, ArubaAuthError) or (isinstance(exc, WriterError) and exc.category == "AUTH_REJECTED"):
+            return "AUTH_REJECTED", "REST endpoint answered but the saved credentials were rejected."
+        if isinstance(exc, WriterError) and exc.category == "UNSUPPORTED_API":
+            return "UNSUPPORTED_API", "REST endpoint is present but firmware/API is unsupported by the adapter."
+        if isinstance(exc, (ArubaError, WriterError, httpx.HTTPError, OSError)):
+            return "UNREACHABLE", "REST is unavailable or unreachable; test SSH before attempting enablement."
+        raise
+
+
+@router.post("/credentials/{profile_id}/rest-api/check")
+def check_credential_rest(profile_id: str, body: RestTarget, request: Request, db: Session = Depends(get_db),
+                          admin: User = Depends(require_role("admin"))):
+    """Read-only check, including the unauthenticated SSH fingerprint if REST is unavailable."""
+    from ..aruba import ssh
+    profile = _profile(db, profile_id)
+    _permit_probe(body.management_ip)
+    if get_settings().mode != "live":
+        raise HTTPException(423, "REST readiness checks require live mode and an explicitly allowed management IP.")
+    state, detail = _rest_status(profile, body.management_ip)
+    ip = str(body.management_ip)
+    result = {"management_ip": ip, "family": profile.device_family, "state": state, "detail": detail,
+              "rest_enabled": state in ("ENABLED", "AUTH_REJECTED", "UNSUPPORTED_API"),
+              "write_unlock_required": not get_settings().device_writes_permitted,
+              "untrusted_device_certificates_accepted": not get_settings().aruba_verify_tls,
+              "confirm_phrase": f"ENABLE REST API {ip}",
+              "commands": list(ssh.ENABLE_REST_COMMANDS) if profile.device_family == "access_point" else
+                  ["configure terminal", "https-server vrf <selected VRF>", "end", "write memory"]}
+    if state in ("DISABLED", "UNREACHABLE"):
+        try:
+            result["ssh"] = ssh.scan_host_key(ip)
+        except ArubaError:
+            result["ssh"] = {"error": "SSH port 22 unavailable or negotiation failed; use device console to enable REST."}
+    audit(db, "onboarding_rest_preflight", username=admin.username, target=ip,
+          detail=f"profile={profile.id} family={profile.device_family} state={state}", request=request)
+    return result
+
+
+@router.post("/credentials/{profile_id}/rest-api/enable")
+def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, db: Session = Depends(get_db),
+                           admin: User = Depends(require_role("admin"))):
+    """Explicit config change: confirm IP + pinned SSH key + write lock, then verify REST availability."""
+    from ..aruba import ssh
+    from ..aruba.rest_enablement import enable_cx_rest_api, cx_commands, CX_ROLLBACK
+    profile = _profile(db, profile_id)
+    _permit_probe(body.management_ip)
+    ip = str(body.management_ip)
+    if get_settings().mode != "live" or not get_settings().device_writes_permitted:
+        raise HTTPException(423, "REST bootstrap is a device configuration change. Enable live mode and "
+                              "explicitly unlock configuration changes for this authorized test device.")
+    if body.confirm_text.strip() != f"ENABLE REST API {ip}":
+        raise HTTPException(422, f"Type exactly ENABLE REST API {ip} to confirm this device change.")
+    if profile.device_family == "access_point" and body.vrf != "default":
+        raise HTTPException(422, "Aruba Instant APs do not use the AOS-CX VRF selection.")
+    if not body.host_key_sha256.startswith("SHA256:"):
+        raise HTTPException(422, "Confirm the SHA256 SSH fingerprint obtained from the preflight check.")
+    state, _ = _rest_status(profile, body.management_ip)
+    if state != "DISABLED" and state != "UNREACHABLE":
+        raise HTTPException(409, f"REST bootstrap not appropriate: current state is {state}.")
+    password = decrypt_secret(profile.password_enc)
+    try:
+        if profile.device_family == "access_point":
+            steps = ssh.enable_rest_api(ip, profile.username, password, body.host_key_sha256)
+            rollback = ssh.ROLLBACK_TEXT
+        else:
+            steps = enable_cx_rest_api(ip, profile.username, password, body.host_key_sha256, vrf=body.vrf)
+            rollback = f"On the CX CLI: configure terminal / {CX_ROLLBACK[body.vrf]} / end / write memory"
+    except ArubaError as exc:
+        audit(db, "onboarding_rest_enable_failed", username=admin.username, target=ip,
+              detail=f"family={profile.device_family} error={type(exc).__name__}", request=request, success=False)
+        raise HTTPException(502, f"SSH REST bootstrap failed ({type(exc).__name__}); no success was recorded.") from None
+    import time
+    final = "UNREACHABLE"
+    for attempt in range(5):
+        final, _ = _rest_status(profile, body.management_ip)
+        if final == "ENABLED":
+            break
+        if final in ("AUTH_REJECTED", "UNSUPPORTED_API"):
+            break
+        if attempt < 4:
+            time.sleep(2)
+    ok = final == "ENABLED"
+    audit(db, "onboarding_rest_enabled" if ok else "onboarding_rest_verify_failed", username=admin.username,
+          target=ip, detail=f"family={profile.device_family} state={final} vrf={body.vrf}",
+          request=request, success=ok)
+    return {"ok": ok, "rest_enabled": final == "ENABLED", "status": final,
+            "message": "REST enabled, credentials verified; rescan this IP to continue onboarding." if ok else
+                       "The SSH commands were sent, but REST could not be verified. Recheck credentials and reachability.",
+            "steps": steps, "rollback": rollback, "management_ip": ip}
+
+
 class DiscoveryRequest(BaseModel):
     credential_id: str
     scope: str = Field(min_length=1, max_length=48)
@@ -266,9 +388,9 @@ def discover_devices(body: DiscoveryRequest, request: Request,
                 "result_note": "API identity read; existing device" if existing else "API identity read",
             })
         except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
-            found.append({"management_ip": str(address), "status": "FAILED",
-                          "result_note": f"Read-only REST probe failed ({type(exc).__name__}).",
-                          "enrollable": False})
+            status, note = _discovery_failure(exc)
+            found.append({"management_ip": str(address), "status": status,
+                          "result_note": note, "enrollable": False})
     job = OnboardingDiscovery(credential_id=profile.id, site_name=body.site_name.strip(),
                              scope=body.scope, device_family=profile.device_family,
                              results=found, created_by=admin.username, status="SCANNED")
@@ -280,6 +402,15 @@ def discover_devices(body: DiscoveryRequest, request: Request,
     return {"id": job.id, "status": job.status, "results": job.results,
             "site_name": job.site_name, "credential_id": job.credential_id,
             **read_only()}
+
+
+def _discovery_failure(exc: Exception) -> tuple[str, str]:
+    from ..aruba.errors import ArubaRestDisabledError
+    if isinstance(exc, ArubaRestDisabledError) or (
+        isinstance(exc, RuntimeError) and str(exc).startswith("REST_DISABLED:")
+    ):
+        return "REST_DISABLED", "REST API appears disabled. Check SSH identity and enable REST through onboarding."
+    return "FAILED", f"REST probe failed ({type(exc).__name__}); use Check / enable REST for diagnostics."
 
 
 def _tcp_open(ip: str, port: int, timeout: float = 1.0) -> bool:
@@ -299,12 +430,13 @@ def _identify(profile_id: str, ip: str) -> dict:
         port = 4343 if profile.device_family == "access_point" else 443
         if not _tcp_open(ip, port):
             return {"management_ip": ip, "status": "NO_RESPONSE", "enrollable": False,
-                    "result_note": f"TCP {port} closed or filtered"}
+                    "result_note": f"TCP {port} closed or filtered; REST may be disabled, check SSH port 22"}
         try:
             observed = _probe(profile, ipaddress.IPv4Address(ip))
         except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
-            return {"management_ip": ip, "status": "FAILED", "enrollable": False,
-                    "result_note": f"Read-only REST probe failed ({type(exc).__name__})."}
+            status, note = _discovery_failure(exc)
+            return {"management_ip": ip, "status": status, "enrollable": False,
+                    "result_note": note}
         serial = str(observed.get("serial_number") or "").strip()
         if serial.startswith("UNKNOWN-"):
             serial = ""

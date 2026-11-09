@@ -303,7 +303,7 @@ def _view(db: Session, w: OnboardingWorkflow) -> dict:
             "credential_id": w.credential_id,
             "steps": [{"step": s, "status": "done" if i < idx or w.step == "DONE" else "current" if i == idx else "pending"}
                       for i, s in enumerate(STEPS)],
-            "discovery": None if disc is None else {"id": disc.id, "status": disc.status, "results": disc.results,
+            "discovery": None if disc is None else {"id": disc.id, "status": disc.status, "scope": disc.scope, "results": disc.results,
                                                     "progress": DJ.progress(disc) if disc.targets else None},
             "devices": devices, "plans": plan_rows, "plan_progress": _progress(plan_rows),
             "template_scope": w.template_scope, "outcome": w.outcome, "history": w.history,

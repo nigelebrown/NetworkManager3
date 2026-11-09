@@ -40,6 +40,19 @@ export type FleetAcceptance = {
     stage: string; hardware_certified: boolean}[];
 };
 
+export type RestPreflight = {
+  management_ip: string; family: "access_point" | "switch";
+  state: "ENABLED" | "DISABLED" | "AUTH_REJECTED" | "UNSUPPORTED_API" | "UNREACHABLE";
+  detail: string; rest_enabled: boolean; write_unlock_required: boolean;
+  untrusted_device_certificates_accepted: boolean; confirm_phrase: string;
+  commands: string[];
+  ssh?: { fingerprint?: string; key_type?: string; legacy_algorithms?: boolean; error?: string };
+};
+export type RestBootstrapResult = {
+  ok: boolean; rest_enabled: boolean; status: string; message: string;
+  steps: { command: string; ok: boolean }[]; rollback: string; management_ip: string;
+};
+
 export type ConfigData = {
   device_id: string; credential_id: string | null; hardware_writes: string;
   baseline: {
@@ -66,6 +79,11 @@ export const onboardingApi = {
     request<CredentialProfile>(`/v1/onboarding/credentials/${enc(id)}/rotate`, opts(body)),
   disableCredential: (id: string) =>
     request<CredentialProfile>(`/v1/onboarding/credentials/${enc(id)}/disable`, opts({})),
+  checkRestApi: (id: string, ip: string) =>
+    request<RestPreflight>(`/v1/onboarding/credentials/${enc(id)}/rest-api/check`, opts({ management_ip: ip })),
+  enableRestApi: (id: string, body: { management_ip: string; host_key_sha256: string;
+    confirm_text: string; vrf: "default" | "mgmt" }) =>
+    request<RestBootstrapResult>(`/v1/onboarding/credentials/${enc(id)}/rest-api/enable`, opts(body)),
   testCredential: (id: string, ip: string) =>
     request<{ status: string; model: string | null; hostname: string | null }>(
       `/v1/onboarding/credentials/${enc(id)}/test`, opts({ management_ip: ip })),

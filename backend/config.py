@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     session_minutes: int = 60
 
     aruba_timeout_seconds: float = 10.0
-    aruba_verify_tls: bool = True
+    aruba_verify_tls: bool = False
     aruba_ca_bundle: str = ""
 
     poll_interval_seconds: int = 60
@@ -86,7 +86,11 @@ class Settings(BaseSettings):
 
     @property
     def tls_verify_arg(self) -> bool | str:
-        """Value for httpx `verify=`: CA bundle path, True, or False (explicit dev opt-out)."""
+        """Aruba-management HTTPS only: self-signed certificates accepted by default.
+
+        Other service TLS and SSH fingerprint checks are NOT affected. Set
+        SIMS_ARUBA_VERIFY_TLS=true with a CA bundle to re-enable validation.
+        """
         if not self.aruba_verify_tls:
             return False
         return self.aruba_ca_bundle or True

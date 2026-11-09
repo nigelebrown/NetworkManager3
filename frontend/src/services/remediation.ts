@@ -18,7 +18,7 @@ export type Workflow = {
   id: string; title: string; state: string; step: string; mode: string | null;
   site: { id: string | null; name: string | null }; device_family: "switch" | "access_point";
   credential_id: string | null; steps: WfStep[];
-  discovery: { id: string; status: string; results: FoundRow[]; progress: Progress | null } | null;
+  discovery: { id: string; status: string; scope: string; results: FoundRow[]; progress: Progress | null } | null;
   devices: WfDevice[]; plans: WfPlan[]; plan_progress: Record<string, number>;
   template_scope: { group_id?: string | null }; outcome: Record<string, any>;
   history: { at: string; actor: string; step: string; detail: string }[];
