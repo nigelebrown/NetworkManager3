@@ -13,7 +13,8 @@ export type FoundDevice = {
 };
 export type DiscoveryJob = {
   id: string; status: string; results: FoundDevice[];
-  site_name: string; credential_id: string; device_writes: "LOCKED";
+  site_name: string; scope?: string; credential_id: string; device_writes: "LOCKED";
+  total_targets?: number; completed_targets?: number; found_count?: number; failed_count?: number;
 };
 export type Registered = {
   registered: { device_id: string; hostname: string; serial_number: string; config_status: string }[];
@@ -48,6 +49,10 @@ export const onboardingApi = {
       `/v1/onboarding/credentials/${enc(id)}/test`, opts({ management_ip: ip })),
   discover: (body: { credential_id: string; scope: string; site_name: string }) =>
     request<DiscoveryJob>("/v1/onboarding/discover", opts(body)),
+  startDiscovery: (body: { credential_id: string; scope: string; site_name: string }) =>
+    request<DiscoveryJob>("/v1/onboarding/discoveries/start", opts(body)),
+  nextDiscoveryBatch: (id: string, offset: number, batch_size = 4) =>
+    request<DiscoveryJob>(`/v1/onboarding/discoveries/${enc(id)}/next`, opts({ offset, batch_size })),
   discovery: (id: string) => request<DiscoveryJob>(`/v1/onboarding/discoveries/${enc(id)}`),
   register: (id: string, indices: number[]) =>
     request<Registered>(`/v1/onboarding/discoveries/${enc(id)}/register`, opts({ indices })),
