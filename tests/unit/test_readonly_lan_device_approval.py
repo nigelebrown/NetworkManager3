@@ -36,5 +36,7 @@ def test_wizard_has_single_ip_discovery_and_retains_small_scan_safety():
     api = (ROOT / "backend/api/onboarding_workflow.py").read_text()
     assert "Discover test IP only" in ui
     assert 'onClick={() => scan(testIp.trim() + (testIp.includes("/") ? "" : "/32"))}' in ui
-    assert "net.num_addresses > max_addresses" in api\n    assert "max_addresses=256" in api\n    assert "body.batch_size" in api
+    assert "net.num_addresses > max_addresses" in api
+    assert "max_addresses=256" in api
+    assert "body.batch_size" in api
     assert "_permit_probe(ip)" in api
