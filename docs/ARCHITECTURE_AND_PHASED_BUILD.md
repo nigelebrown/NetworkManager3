@@ -4,6 +4,14 @@
 **Audience:** developer, QA engineer, release engineer and executive reviewer.  
 **Scope:** vendor-neutral application with Aruba Instant (AP-505/AP-535) and Aruba CX (6100/6200) as initial devices; Cisco and UniFi are future adapters. All manufacturer capabilities are runtime-probed and hardware-certified.
 
+## Design extension — outstanding capability contracts (2026-11-08)
+
+**This master design incorporates [the capability-completion specification](CAPABILITY_COMPLETION_DESIGN.md) as a normative addendum.** Its GAP-01–GAP-18 requirements, C1–C9 implementation contracts, WP-01–WP-12 development work packages and GAP-T01–GAP-T16 acceptance cases fill in the workflow, data, security and test detail behind the phases below. They are **planned design**, not automatically implemented functionality; the existing source and release manifest determine present runtime capability.
+
+**Immediate usable base (retain rather than rebuild):** Git-only CentOS + Compose skeleton, demo/read-only onboarding, saved credentials, authorized bounded discovery, manual import, real device snapshots, safe configuration drafts, PostgreSQL/TimescaleDB/Loki/NATS and rule-based AI. The repository currently targets management schema `0006`; upgrades from earlier schemas must have a tested backup-first migration path before declaring success.
+
+**Next capability delivery:** scheduled read-only AP/CX polling (WP-02), device/syslog/AAA evidence (WP-03), and the *draft-only* inheritance engine (WP-04). Add AI training data/provenance and outcome-feedback contracts in the base without claiming trained ML. Full config vault, independent approvals, actual writes, replacement and autonomous adjustment remain behind later gates. All real network-device writes stay `LOCKED`.
+
 ## 1. Non-negotiable platform design
 
 - **Presentation:** React + TypeScript; event-driven WebSocket refresh with REST reconciliation on reconnect.
@@ -68,3 +76,17 @@ The application source and deployment scripts are committed to GitHub. The **onl
 For each test record: test ID, phase, feature/contract, environment, preconditions, steps, expected result, observed result, PASS/FAIL/PARTIAL/NOT_RUN, build SHA, tester, UTC timestamp, captured logs, supporting screenshot/trace and decision-maker sign-off.
 
 **Do not proceed to real device configuration until the Phase 4–6 controls have been independently demonstrated.**
+
+## 8. Mandatory capability completion index
+
+| Contract | Governing specification | Build and acceptance gate |
+|---|---|---|
+| Read-only live telemetry, source quality and user experience | [C1](CAPABILITY_COMPLETION_DESIGN.md#c1--inventory--live-telemetry-gap-01-gap-02) | WP-02; GAP-T01/T02 |
+| Syslog, audit, AAA and technician change attribution | [C2](CAPABILITY_COMPLETION_DESIGN.md#c2--syslog-aaa-accounting-and-technician-attribution-gap-03-gap-04) | WP-03; GAP-T03/T04 |
+| Encrypted restorable device configuration and replacement | [C3](CAPABILITY_COMPLETION_DESIGN.md#c3--configuration-vault-and-replacement-gap-05-gap-10) | WP-05/WP-07; GAP-T07/T08 |
+| Template inheritance, approvals and Aruba device policy | [C4](CAPABILITY_COMPLETION_DESIGN.md#c4--template-inheritance-and-approval-controlled-changes-gap-06gap-09) | WP-04/WP-06; GAP-T05/T06 |
+| AI feedback, model learning and bounded optimization | [C5](CAPABILITY_COMPLETION_DESIGN.md#c5--explainable-ai-learning-and-outcome-tracking-gap-11gap-13) | WP-08/WP-09; GAP-T09/T10/T11 |
+| Cisco/UniFi, multi-VM, executive views, isolated AI reviewer | [C6–C8](CAPABILITY_COMPLETION_DESIGN.md) | WP-10/WP-11; GAP-T12–T15 |
+| Printer model and maintenance intelligence | [C9](CAPABILITY_COMPLETION_DESIGN.md#c9--printer-intelligence-completion-remains-a-distinct-bounded-module-gap-18) | WP-12; GAP-T16 |
+
+**Scope and provenance note:** This index covers the known requirements in the repository and project discussion. The separate shared ChatGPT URL could not be retrieved; its undisclosed contents cannot yet be declared reconciled. Never infer completion from a phase heading alone.
