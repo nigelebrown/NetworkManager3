@@ -46,7 +46,7 @@
 | GAP-10 | Device replacement workflow | Inventory and redacted snapshots | Same/compatible model validation, serial remap, staged restore, validation | 7 / DESIGNED_NOT_IMPLEMENTED |
 | GAP-11 | Visible ML learning history | Rule-based Analyze Now; advisory service | Datasets, feature versions, baseline comparison, trained model registry, feedback | 8 / DESIGNED_NOT_IMPLEMENTED |
 | GAP-12 | Measured recommendation effectiveness | Rule recommendation objects | Before/after observation windows, counterfactual/seasonality flags, promotion gate | 8–9 / DESIGNED_NOT_IMPLEMENTED |
-| GAP-13 | Safe bounded automation | No device write permissions | Site policy, scheduled approvals, guardrails, cooldown, emergency stop | 9 / WRITE_LOCKED |
+| GAP-13 | Per-device opt-in automatic optimization | No device write permissions | Default-off device enrollment, explicit device IDs, bounded approved actions, cooldown, expiry, emergency stop; no inherited site-wide auto-enable | 9 / WRITE_LOCKED |
 | GAP-14 | Cisco/UniFi and generic devices | Vendor-neutral adapter boundary | SNMPv3/HTTPS/NETCONF/SSH capability adapters; no false support | 10 / DESIGNED_NOT_IMPLEMENTED |
 | GAP-15 | Distributed multi-VM production | One Compose VM, seven roles | Role separation, TLS/mTLS, HA/DR, migration, durability and recovery tests | 11 / DESIGNED_NOT_IMPLEMENTED |
 | GAP-16 | Auditable reports and executive views | Basic charts; audit/list screens | Site/model/user experience, changes, compliance, signed exports | 11 / DESIGNED_NOT_IMPLEMENTED |
@@ -127,6 +127,65 @@
 
 **Acceptance:** recommendation with insufficient data shows `INSUFFICIENT_EVIDENCE`; every recommendation explains input quality, actor feedback and version; test model leakage/drift; deterioration triggers stop/rollback proposal, not oscillating writes; no ML or AI service has egress to device management network.
 
+### C5a — Per-device automatic optimization policy (GAP-13 — normative)
+
+**Owner requirement: AUTOMATIC OPTIMIZATION MUST BE OFF BY DEFAULT.** Every device may receive monitoring, ML analysis, and non-executing recommendations. Automatic configuration adjustments are permissible only after an administrator deliberately opts in **that specific device**, in addition to completion of the real-device write-certification and audit/backup gates. A site, model, global template, discovered-device batch, newly cloned/replaced device, or future vendor adapter **must not automatically inherit an enabled state**.
+
+#### User workflow — explicit per-device enrollment
+
+1. Open **Devices → Device details → Optimization**, default mode **Observe and recommend (no changes)**. A prominent badge shows `AUTO OFF` for every device, including devices onboarded later.
+2. A separate administrator action **Configure automatic optimization for this device** opens a wizard. Show immutable device ID, serial, site, model, firmware, API capability certification and current configuration hash.
+3. Choose exactly which **operations** may be automated (examples: specified radio channel or power bounds where supported); define permitted values, channel exclusions, maximum 20/40 MHz width, hours/change windows, cooldown, rate budget, quality baseline, adverse-effect stop threshold and policy expiry. **No implicit "all settings" or "all devices" choice.**
+4. Preview a dry run and affected devices; require a named independent policy approver, recorded backup/restore readiness, the version of applicable configuration baseline, and a human-readable scope summary. Only an explicit approval can change status from `OFF` to `ARMED` for the selected device. A vendor capability certification check and global hardware-write lock still apply.
+5. Show `ARMED` or `ACTIVE` on that specific device, expiry date, approver, most recent action and direct **Disable automatic optimization** control. Disabling revokes queued authorization immediately and does not require a second approval.
+6. Optional **Select multiple devices** is an administrative *bulk proposal* only: enumerate every exact device identity in the preview, record a separate device enrollment and approval record per device, and reject unreviewed/undiscovered devices. It never enables future devices by group membership.
+7. On expiry, replacement, device firmware change, credential/certification loss, site transfer, configuration drift, policy edit, quality degradation, backup failure, emergency stop, failed readback or lost audit integrity, pause or revoke automatic execution until the specific device is reviewed again.
+
+#### Authorization & execution boundary
+
+- Separate **three modes** per device: `RECOMMEND_ONLY` (default), `SHADOW` (calculate/compare but do not apply), and `DEVICE_OPT_IN` (eligible for gated automated actions). `DEVICE_OPT_IN` is an intent, not a bypass of the central write lock.
+- Enforce **global emergency stop and `device_write_lock` first**; when either blocks writes, ALL devices remain effectively read-only regardless of recorded enrollment. The GUI must display `Configured for future automation — currently locked` rather than misleadingly claiming active control.
+- Evaluate authorizations on the server **at execution time**, not just when a job is scheduled: exact device UUID/serial and firmware/certification, unexpired enrollment + approver, permitted operation and limits, source/quality freshness, schedule, concurrency lease, expected config hash, required pre-change full-fidelity backup, and safe rollback. Any missing evidence = `DENY`.
+- The isolated AI service proposes a typed change plan and evidence, **never holds device credentials or writes directly**. Only the separately authorized executor may write. A standing *policy approval* may allow individual bounded actions without separate click-through approval only after a dedicated production acceptance gate; until then, require explicit approval for each proposed change. Every action remains audited with before/after, measured result and rollback.
+- Maintain native Aruba ARM/ClientMatch compatibility: do not continuously counteract native automatic RF behavior; use a conflict policy, cool-down and hysteresis. Reject 80 MHz under all optimizer modes. Other vendors require separate certification, not inheritance of Aruba permissions.
+- Distinguish user-configured automation from vendor **native** optimization (for example Aruba ARM). A management-software `AUTO OFF` state does not itself disable native radio optimization on the equipment.
+
+#### Proposed persisted contracts (not yet implemented)
+
+```text
+DeviceOptimizationEnrollment(
+    id, device_id, immutable_serial, vendor_model, firmware_bound,
+    mode=RECOMMEND_ONLY, policy_version, allowed_operation_types[],
+    value_constraints, permitted_windows, min_observation_quality,
+    baseline_config_hash, cooldown_seconds, max_actions_per_day,
+    impact_stop_threshold, valid_from_utc, expires_at_utc,
+    requester_id, independent_approver_id, approved_at_utc,
+    status, last_action_id, revoked_at_utc, revoked_by
+)
+OptimizationExecutionDecision(
+    id, enrollment_id, device_id, recommendation_id, proposed_diff_hash,
+    evaluated_at_utc, global_lock_state, guard_evaluation[],
+    allow_or_deny, denial_reason, backup_id?, audit_event_id
+)
+```
+
+Proposed API endpoints (not yet available): `GET /api/v1/devices/{id}/optimization`, `POST /api/v1/devices/{id}/optimization/preview`, `POST /api/v1/devices/{id}/optimization/enroll`, `POST /api/v1/devices/{id}/optimization/disable`, `GET /api/v1/optimization/enrollments`, `GET /api/v1/optimization/decisions`, `POST /api/v1/optimization/emergency-stop`. Endpoints must enforce scoped RBAC, CSRF/session protection where applicable and immutable audit events. Do not add unrestricted bulk enable or a global "auto on" endpoint.
+
+#### Required acceptance cases (all NOT_RUN until implemented and proved)
+
+| ID | Scenario | Pass criterion |
+|---|---|---|
+| GAP-T17 | Discover/onboard new AP and switch while some other devices are enrolled | Every new device is `RECOMMEND_ONLY`; no inherited automatic write |
+| GAP-T18 | Enroll one AP for bounded automation and leave another AP/switch unselected | Only selected ID can ever become eligible; others get recommendations with **zero writes** |
+| GAP-T19 | Set site/group/model template to automatic and then add an AP | Template cannot enable auto enrollment; explicit separate device approval required |
+| GAP-T20 | Attempt self-approval, expired enrollment or spoofed device ID/serial | Reject and audit every case before adapter access |
+| GAP-T21 | Trip global write lock, kill switch, invalid backup, stale metrics or unauthorized operation | No hardware write, queued action canceled/denied and status visible |
+| GAP-T22 | Change firmware, replace device or transfer site after enrollment | Authorization revoked or paused; successor device remains OFF |
+| GAP-T23 | Permit approved narrow RF operation but request 80 MHz or excluded channel | Deny at policy engine; no driver request |
+| GAP-T24 | Verify successful eligible change, degrade measured experience then re-evaluate | Audited pre/post evidence, cooldown and safe rollback/stop without repeated oscillation |
+
+**Implementation gate:** First ship read-only `RECOMMEND_ONLY`/simulation-only `SHADOW` screens and schema with no hardware-write path. Only after hardware-specific write certification, encrypted pre/post backup verification, approval separation, stable measurement, emergency stop and QA acceptance can any per-device `DEVICE_OPT_IN` action be connected to real hardware. The full device write lock is **unchanged in the current release**.
+
 ### C6 — Future Cisco, Ubiquiti and other device adapters (GAP-14)
 
 - Define shared adapter interface `probe_identity`, `get_capabilities`, `collect`, `read_config_summary`, `read_audit_logs`, `backup_full_config`, `validate_change`, `apply_change`, `readback`, `rollback`, all returning capability/quality/error evidence; unimplemented operations return structured `UNSUPPORTED`.
@@ -198,7 +257,7 @@ Other event types: `device.discovery.started`, `device.discovery.completed`, `de
 | WP-06 | Approval and certified change executor | WP-03/04/05, hardware certification | Named requester≠approver; pre/post backup/readback; lock/rollback | Bad backup, changed hash, stale approval, dual execution → zero unauthorized writes |
 | WP-07 | Compatible device replacement | WP-05/06 | Same-model restore/readback and identity mapping pass | Incorrect model/serial/firmware fails without writes |
 | WP-08 | AI learning timeline + outcome loop | WP-02/03 | From rule recommendation → operator feedback → evidence-based outcome | No training labels → not trained ML; no improvement claims |
-| WP-09 | Shadow then approved optimization | WP-06/08 | Cooldown/rollback/ARM coexistence proved on lab hardware | Worsening score / oscillation → stop and alert |
+| WP-09 | **Per-device opt-in only**: default-off recommendation/shadow views, explicit enrollment/expiry, gated execution | WP-06/08 | Exactly selected devices can become eligible following policy approval and certification; other devices remain recommendation-only | Group inheritance, stale approval, unknown device, global lock, 80 MHz and adverse outcome → **zero unauthorized writes**, stop and audit |
 | WP-10 | Cisco/UniFi adapter scaffolds | WP-02 adapter contracts | Unsupported operations gracefully represented | Unauthorized cross-vendor write always denied |
 | WP-11 | Multi-VM scale out + reporting | Stable earlier contracts | Independent service endpoints, HA recovery and auditable exports | Isolated role/network failure and secret leakage tests |
 | WP-12 | Printer model/maintenance intelligence | Printer P0 | Per-model read-only counters and service evidence | Counter rollover and unmeasured cartridge usage not fabricated |
@@ -225,6 +284,8 @@ Every package should be small enough for one AI-assisted development branch: **c
 | GAP-T14 | Production report scope | Export site-level compliance/audit report | Scope preserved, secrets redacted, checksum and audit present |
 | GAP-T15 | AI reviewer | Attempt access to Aruba IP, config secret or SQL DB | Denied by network/container mounts; audited |
 | GAP-T16 | Printer model fixture | Counter reset, toner lifecycle and maintenance outcome | Unknown vs observed values preserved; no false prediction |
+
+**GAP-T17–GAP-T24 extend GAP-T11 for explicit per-device opt-in.** They are required in WP-09 and have not been run.
 
 **All GAP-T cases are currently `NOT_RUN` unless a separate exact-case evidence record is attached.** Unit/mocked tests are not hardware certification. Log actual environment, tester, version, build SHA, input sample, expected versus observed, screenshot/log and independent sign-off into the existing acceptance register.
 
