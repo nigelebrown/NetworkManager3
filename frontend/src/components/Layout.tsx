@@ -2,19 +2,18 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api, getSession, setSession, type Role, type SystemStatus } from "../services/api";
 import { live, type LiveState } from "../services/live";
+import { ops, type DemoStatus } from "../services/ops";
 
 type Item = { to: string; label: string; roles?: Role[]; tag?: string };
 // Workflow-first navigation (master design K.4). Unfinished modules are reachable and say PLANNED.
 const GROUPS: { title: string; items: Item[] }[] = [
-  { title: "Overview", items: [{ to: "/", label: "Dashboard" }, { to: "/system", label: "System health", roles: ["admin", "auditor"] }] },
+  { title: "Operations", items: [{ to: "/", label: "NOC dashboard" }, { to: "/executive", label: "Executive overview", roles: ["admin", "auditor", "approver", "operator"] }, { to: "/wifi", label: "Wi-Fi dashboard" }, { to: "/system", label: "System health", roles: ["admin", "auditor"] }] },
   { title: "Inventory", items: [{ to: "/onboarding", label: "Add device — 7-step wizard", roles: ["admin"], tag: "START HERE" }, { to: "/onboarding/manual", label: "Manual / CSV import", roles: ["admin"] }, { to: "/discovery", label: "Discovery ranges", roles: ["admin"] }, { to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches" }, { to: "/clients", label: "Clients" }] },
-  { title: "Printers", items: [{ to: "/printers", label: "Printer intelligence", roles: ["admin"] }] },
-  { title: "Observability", items: [{ to: "/experience", label: "Experience" }, { to: "/alerts", label: "Alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
-  { title: "Configuration", items: [{ to: "/config", label: "Configuration", tag: "READ ONLY" }, { to: "/changes", label: "Change control", tag: "LOCKED" }] },
-  { title: "Recovery", items: [{ to: "/recovery", label: "Backups & recovery", roles: ["admin"], tag: "PLANNED" }] },
-  { title: "Intelligence", items: [{ to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI learning", tag: "RULES" }] },
-  { title: "Operations", items: [{ to: "/firmware", label: "Firmware & certificates" }] },
-  { title: "Security", items: [{ to: "/audit", label: "Audit", roles: ["admin", "auditor"] }, { to: "/users", label: "Users", roles: ["admin"] }] },
+  { title: "Monitoring", items: [{ to: "/collection", label: "Live collection", roles: ["admin", "operator"] }, { to: "/experience", label: "User experience" }, { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" }, { to: "/device-alerts", label: "Device alerts & thresholds", tag: "LIVE" }, { to: "/alerts", label: "Wi-Fi alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
+  { title: "Configuration", items: [{ to: "/compliance", label: "Best practice & compliance" }, { to: "/changes", label: "Change workflow", tag: "APPROVAL" }, { to: "/config-templates", label: "Templates & inheritance", roles: ["admin"] }, { to: "/vault", label: "Config vault", roles: ["admin", "auditor", "operator"] }, { to: "/config", label: "SSID & AP config (SIMS)" }, { to: "/replace", label: "Replace device", roles: ["admin"] }, { to: "/certification", label: "Write certification", roles: ["admin", "approver", "auditor"] }] },
+  { title: "Accountability", items: [{ to: "/accountability", label: "Who changed what", roles: ["admin", "auditor", "operator"] }, { to: "/audit", label: "Audit log", roles: ["admin", "auditor"] }] },
+  { title: "Intelligence", items: [{ to: "/learning", label: "AI learning centre" }, { to: "/optimization", label: "RF optimization", tag: "OPT-IN" }, { to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI rules" }] },
+  { title: "Administration", items: [{ to: "/firmware", label: "Firmware & certificates" }, { to: "/printers", label: "Printer intelligence", roles: ["admin"] }, { to: "/platform", label: "Vendors, roles & rules" }, { to: "/recovery", label: "Backups & recovery", roles: ["admin"] }, { to: "/data", label: "Data management (demo)", roles: ["admin"] }, { to: "/users", label: "Users", roles: ["admin"] }] },
 ];
 
 const LIVE_LABEL: Record<LiveState, [string, string]> = {
@@ -26,6 +25,8 @@ export default function Layout() {
   const nav = useNavigate();
   const s = getSession();
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [demo, setDemo] = useState<DemoStatus | null>(null);
+  useEffect(() => { const f = () => ops.demo().then(setDemo).catch(() => {}); f(); const t = setInterval(f, 30000); return () => clearInterval(t); }, []);
   const [open, setOpen] = useState(false);
   const [ls, setLs] = useState<LiveState>(live.state);
   useEffect(() => { api.status().then(setStatus).catch(() => {}); }, []);
@@ -44,9 +45,14 @@ export default function Layout() {
           DEMO MODE — simulated fixtures are marked DEMO. Added real devices are marked MANUAL or REST READ. Device configuration writes remain locked.
         </div>
       )}
+      {!status?.simulated_data && demo?.loaded && (
+        <div className="bg-fuchsia-900/60 px-4 py-1.5 text-center text-xs font-semibold text-fuchsia-100">
+          DEMO DATA LOADED alongside live data — {demo.demo_devices} demo devices are labelled DEMO. <NavLink className="underline" to="/data">Remove demo data</NavLink>
+        </div>
+      )}
       {status?.device_write_lock && (
         <div className="bg-slate-800 px-4 py-1 text-center text-[11px] font-semibold text-slate-300">
-          Device writes are LOCKED in this release (Phase 1 safety gate). Configuration screens can read and plan only.
+          Device configuration writes are LOCKED (write lock on). Monitoring, compliance and change planning work normally; approved changes are evaluated but not applied (including automatic optimization).
         </div>
       )}
       {status && !status.tls_verification && (

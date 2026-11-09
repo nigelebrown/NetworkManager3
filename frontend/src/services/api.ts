@@ -123,6 +123,7 @@ export const configApi = {
   planSsid: (siteId: number, body: SsidInput) => post<Change>(`/config/sites/${siteId}/ssid/plan`, body),
   planRename: (siteId: number, apId: number, newName: string) => post<Change>(`/config/sites/${siteId}/ap-rename/plan`, { ap_id: apId, new_name: newName }),
   apply: (id: number, confirmText: string) => post<ApplyResult>(`/config/changes/${id}/apply`, { confirm_text: confirmText }),
+  approve: (id: number) => post<Change>(`/config/changes/${id}/approve`, {}),
   rollbackPlan: (id: number) => post<Change>(`/config/changes/${id}/rollback-plan`),
   cancel: (id: number) => post<Change>(`/config/changes/${id}/cancel`),
   moveAp: (apId: number, targetSiteId: number) => post<MoveResult>(`/aps/${apId}/move`, { target_site_id: targetSiteId, confirm: true }),

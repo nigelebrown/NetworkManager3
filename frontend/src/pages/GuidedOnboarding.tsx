@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
@@ -17,6 +17,7 @@ const secondary = "rounded border border-slate-700 px-4 py-2 text-sm hover:bg-sl
 export default function GuidedOnboarding() {
   const allowed = getSession()?.role === "admin";
   const profiles = useLoad(onboardingApi.credentials, [], 30000, ["onboarding-credentials"]);
+  const fleetAcceptance = useLoad(onboardingApi.fleetAcceptance, [], 60000, ["devices", "device-config"]);
   const [step, setStep] = useState(0);
   const [family, setFamily] = useState<Family>("access_point");
   const [site, setSite] = useState("");
@@ -33,9 +34,6 @@ export default function GuidedOnboarding() {
   const [captures, setCaptures] = useState<Record<string, string>>({});
   const [resumeId, setResumeId] = useState("");
   const [busy, setBusy] = useState(false);
-  const pauseRequested = useRef(false);
-  const [scanActive, setScanActive] = useState(false);
-  useEffect(() => () => { pauseRequested.current = true; }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const options = useMemo(() =>
@@ -75,41 +73,19 @@ export default function GuidedOnboarding() {
     setTestResult(`Authenticated: ${result.hostname || testIp} (${result.model || "model not reported"})`);
     setNotice("Read-only REST authentication succeeded; no device configuration was modified.");
   });
-  const finishDiscovery = (job: DiscoveryJob) => {
-    setDiscovery(job);
-    setChosen(job.results.map((item, index) => item.enrollable ? index : -1)
-      .filter(index => index >= 0).slice(0, 64));
-    setStep(4);
-    setNotice(`Scan completed: ${job.found_count ?? 0} API responses, ${job.failed_count ?? 0} failed/unavailable addresses. Review before registering.`);
-  };
-  const runBatches = async (initial: DiscoveryJob) => {
-    pauseRequested.current = false;
-    setScanActive(true);
-    let job = initial;
-    setDiscovery(job);
-    setResumeId(job.id);
-    try {
-      while (job.status === "IN_PROGRESS" && !pauseRequested.current) {
-        const offset = job.completed_targets ?? job.results.length;
-        const updated = await onboardingApi.nextDiscoveryBatch(job.id, offset, 4);
-        if ((updated.completed_targets ?? updated.results.length) <= offset && updated.status === "IN_PROGRESS")
-          throw new Error("Discovery did not advance. Reload the saved discovery ID before continuing.");
-        job = updated;
-        setDiscovery(job);
-      }
-      if (job.status === "SCANNED") finishDiscovery(job);
-      else setNotice(`Discovery paused after ${job.completed_targets ?? job.results.length} of ${job.total_targets ?? "?"} targets. Use Resume to continue.`);
-    } finally {
-      setScanActive(false);
-    }
-  };
-  const scan = (targetScope: string = scope) => work(async () => {
+  const scan = () => work(async () => {
     if (!profileId) throw new Error("Select a credential profile before scanning.");
-    const job = await onboardingApi.startDiscovery({
-      credential_id: profileId, scope: targetScope, site_name: site,
-    });
-    setScope(targetScope);
-    await runBatches(job);
+    let result = await onboardingApi.discover({ credential_id: profileId, scope, site_name: site });
+    // /24 scans run in the background: poll progress until the job finishes.
+    while (result.status === "SCANNING") {
+      setTestResult(`Scanning ${scope} in the background… ${result.results.length} device(s) answered so far.`);
+      await new Promise(r => setTimeout(r, 2000));
+      result = await onboardingApi.discovery(result.id);
+    }
+    setTestResult("");
+    setDiscovery(result);
+    setChosen(result.results.map((item, index) => item.enrollable ? index : -1).filter(x => x >= 0));
+    setStep(4);
   });
   const register = () => work(async () => {
     if (!discovery) throw new Error("Run a read-only discovery first.");
@@ -136,17 +112,14 @@ export default function GuidedOnboarding() {
     const job = await onboardingApi.discovery(resumeId.trim());
     setDiscovery(job);
     setSite(job.site_name);
-    setScope(job.scope ?? "");
     setProfileId(job.credential_id);
     const p = (profiles.data ?? []).find(p => p.id === job.credential_id);
     if (p) setFamily(p.device_family);
-    if (job.status === "IN_PROGRESS") {
-      setStep(3);
-      await runBatches(job);
-    } else finishDiscovery(job);
+    setChosen(job.results.map((x, i) => x.enrollable ? i : -1).filter(i => i >= 0));
+    setStep(4);
+    setNotice("Saved discovery restored. Recheck each device before registering.");
   });
   const clear = () => {
-    pauseRequested.current = true;
     setStep(0); setDiscovery(null); setChosen([]); setRegistered(null); setCaptures({});
     setError(null); setNotice(null); setTestResult(""); setProfileId(""); setScope(""); setTestIp("");
   };
@@ -169,6 +142,22 @@ export default function GuidedOnboarding() {
         </div>)}
     </div>
     <ErrorNote error={error ?? profiles.error} />
+    <Card title="Phase 2 pilot — read-only equipment acceptance">
+      <p className="text-sm text-slate-300">
+        {fleetAcceptance.data?.device_count ?? 0} registered real Aruba device(s) in the latest fleet view.
+        Device readiness is evidence-based; no device is declared hardware-certified by the application.
+      </p>
+      <p className="mt-1 text-xs text-amber-300">
+        Hardware certification: 0 verified by application · Actual device writes: LOCKED
+      </p>
+      {fleetAcceptance.data && <p className="mt-2 text-xs text-slate-400">
+        Manual: {fleetAcceptance.data.stages.MANUAL_REGISTERED ?? 0} ·
+        REST discovered: {fleetAcceptance.data.stages.REST_DISCOVERED ?? 0} ·
+        Baseline imported: {fleetAcceptance.data.stages.BASELINE_CAPTURED ?? 0} ·
+        Drafted: {fleetAcceptance.data.stages.DRAFTED ?? 0}
+      </p>}
+    </Card>
+
     {notice && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-200">{notice}</p>}
     {step === 0 && <Card title="1. Select the device family and its physical location">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -244,13 +233,13 @@ export default function GuidedOnboarding() {
       <label className="block text-sm">Individual IPv4 or CIDR
         <input className={input} required value={scope} onChange={e => {
           setScope(e.target.value); setTestResult("");
-        }} placeholder="e.g. 10.103.10.25 or 10.103.10.24/29" />
+        }} placeholder="e.g. 10.103.10.25, 10.103.10.24/29 or 10.103.10.0/24" />
       </label>
       <p className="mt-3 text-sm text-slate-300">
-        A single approved private /24 (254 usable hosts) or a smaller CIDR can be scanned. Work is processed four hosts at a time, with saved progress and pause/resume support. Every target must be authorized by the server administrator.
+        A scan covers up to a full /24 (256 addresses). Up to 8 addresses are probed immediately; larger ranges run as a background job with live progress (TCP reachability sweep, then read-only REST identity). The server administrator must approve the target range in the private management allowlist; every address is checked before the first connection.
       </p>
       <p className="mt-2 text-xs text-slate-400">
-        Larger CIDRs, including /9, can be previewed in <Link className="text-sky-400 underline" to="/discovery">Discovery ranges</Link>, but are not live-scannable in one job. Public ranges are not scanned.
+        Larger CIDRs, including /9, can be previewed in <Link className="text-sky-400 underline" to="/discovery">Discovery ranges</Link>, then broken into authorized small scan batches. Public ranges are not scanned.
       </p>
     </Card>}
 
@@ -262,30 +251,11 @@ export default function GuidedOnboarding() {
       </label>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className={secondary} disabled={busy || !testIp} onClick={test}>Test credentials (read only)</button>
-        <button className={primary} disabled={busy} onClick={() => scan()}>{busy ? "Discovering authorized IPs…" : "Scan approved range"}</button>
-        {scanActive && <button className={secondary} type="button" onClick={() => { pauseRequested.current = true; }}>
-          Pause after current batch
-        </button>}
-        {testIp.trim() && <button className={secondary} disabled={busy}
-          onClick={() => scan(testIp.trim() + (testIp.includes("/") ? "" : "/32"))}>
-          Discover test IP only
-        </button>}
+        <button className={primary} disabled={busy} onClick={scan}>{busy ? "Discovering authorized IPs…" : "Scan approved range"}</button>
       </div>
       {testResult && <p className="mt-3 text-sm text-emerald-300">{testResult}</p>}
-      {discovery && discovery.status === "IN_PROGRESS" && <div className="mt-3 space-y-2" role="status">
-        <div className="text-sm">Discovery ID: <code>{discovery.id}</code> ·
-          {discovery.completed_targets ?? discovery.results.length} / {discovery.total_targets ?? "?"} IPs checked
-          {" · "}{discovery.found_count ?? 0} found · {discovery.failed_count ?? 0} failed
-        </div>
-        <progress className="w-full" max={discovery.total_targets || 1}
-          value={discovery.completed_targets ?? discovery.results.length} />
-        <p className="text-xs text-slate-400">Progress is saved after each batch. Pause or resume using the saved discovery ID.</p>
-      </div>}
-      <p className="mt-2 text-sm text-amber-300">
-        An authorized /24 may take time when many devices are unavailable. Discovery runs in bounded four-address batches; hardware writes remain locked.
-      </p>
       <p className="mt-2 text-xs text-slate-400">
-        Discovery reads supported device identity via REST. An unsuccessful address is reported individually. There is no SSH configuration, port sweep or device-write operation.
+        Discovery reads supported device identity via REST. An unsuccessful address is reported individually. Discovery only checks TCP reachability on the management port and reads identity; it never logs in over SSH or writes configuration.
       </p>
     </Card>}
 
@@ -296,7 +266,7 @@ export default function GuidedOnboarding() {
           <thead className="text-slate-400"><tr>{["Add", "Address", "Device", "Model", "Serial", "Already exists", "Result"].map(h => <th key={h} className="px-2 py-2">{h}</th>)}</tr></thead>
           <tbody>{discovery.results.map((d, i) => <tr key={i} className="border-t border-slate-800">
             <td className="px-2 py-2"><input aria-label={`Select device ${d.management_ip}`}
-              type="checkbox" checked={chosen.includes(i)} disabled={!d.enrollable || (!chosen.includes(i) && chosen.length >= 64)}
+              type="checkbox" checked={chosen.includes(i)} disabled={!d.enrollable}
               onChange={e => setChosen(prev => e.target.checked ? [...prev, i] : prev.filter(x => x !== i))}/></td>
             <td className="px-2 py-2 font-mono">{d.management_ip}</td>
             <td className="px-2 py-2">{d.hostname || "—"}</td><td className="px-2 py-2">{d.model || "—"}</td>

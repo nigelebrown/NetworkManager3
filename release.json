@@ -1,11 +1,11 @@
 {
   "product": "Intelligent Network Manager",
-  "version": "1.0.0-phase1",
-  "phase": 1,
-  "management_schema_head": "0006",
+  "version": "1.2.0-rc1",
+  "phase": "5-11 software complete (hardware certification pending)",
+  "management_schema_head": "0009",
   "telemetry_schema_head": "t001",
   "accepts_management_schemas": [
-    "0006"
+    "0009"
   ],
   "accepts_telemetry_schemas": [
     "t001"
@@ -53,5 +53,76 @@
       "range preview is not unrestricted network scan",
       "real model validation required"
     ]
+  },
+  "configuration_inheritance": {
+    "status": "GLOBAL_SITE_DEVICE_DRAFT_ONLY",
+    "schema_revision": "0007",
+    "device_writes": "LOCKED",
+    "features": [
+      "global base templates by device family and optional model",
+      "physical site templates",
+      "per-device overrides",
+      "deterministic merged preview with provenance",
+      "save inherited app-only configuration draft"
+    ],
+    "not_certified": [
+      "hardware configuration apply",
+      "configuration restore",
+      "safe device rollback",
+      "automatic group sync"
+    ]
+  },
+  "phase4_monitoring": {
+    "status": "RECORDED_TELEMETRY_RULES_ONLY",
+    "device_writes": "LOCKED",
+    "features": [
+      "source-qualified telemetry overview",
+      "sustained utilization rules",
+      "analyze now with deduplication",
+      "advisory acknowledgement and dismissal"
+    ],
+    "not_yet_certified": [
+      "scheduled Aruba device polling",
+      "trained ML model",
+      "autonomous RF optimization",
+      "configuration apply"
+    ]
+  },
+  "upgradable_management_schemas": [
+    "0004",
+    "0005",
+    "0006",
+    "0007",
+    "0008"
+  ],
+  "capability_completion": {
+    "status": "SOFTWARE_COMPLETE_HARDWARE_UNVERIFIED",
+    "schema_revision": "0008",
+    "device_writes": "LOCKED",
+    "work_packages": {
+      "WP-02": "scheduled read-only collection plans, leases, dedupe, bounded retry/DLQ, freshness",
+      "WP-03": "syslog normalization, AAA session evidence, VERIFIED/CORRELATED/UNKNOWN attribution",
+      "WP-04": "draft-only inheritance (phase 3) \u2014 unchanged",
+      "WP-05": "envelope-encrypted signed config vault, tamper detection, restore-compatibility validation",
+      "WP-06": "typed change plans, 20/40 MHz RF policy, two-person approval, execution gate (always DENY while locked)",
+      "WP-07": "replacement planning to LAB_VALIDATION_REQUIRED; no restore endpoint",
+      "WP-08": "feedback, outcome evaluation, temporal-split model training, independent promotion",
+      "WP-09": "per-device opt-in enrollment, SHADOW simulation, emergency stop; default AUTO OFF",
+      "WP-10": "adapter registry for Aruba Instant/CX, Cisco IOS-XE and UniFi scaffolds; structured UNSUPPORTED",
+      "WP-11": "executive summary and signed, redacted exports",
+      "WP-12": "Printer-MIB packs, counter rollover classification, statistical supply forecast"
+    },
+    "not_certified": [
+      "any hardware configuration write",
+      "production restore",
+      "automatic optimization on real hardware",
+      "Cisco/UniFi collection",
+      "multi-VM HA failover"
+    ]
+  },
+  "automatic_optimization": "NOT_PROVIDED_BY_OWNER_POLICY",
+  "install_modes": {
+    "live": "INM_MODE=live INM_PROFILE=lab-readonly \u2014 production, real devices, read-only collection",
+    "demo": "simulated sites only (evaluation)"
   }
 }

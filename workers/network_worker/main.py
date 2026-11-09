@@ -79,7 +79,9 @@ class Worker:
             raise SystemExit(f"Telemetry schema is {store.schema_revision()!r}, expected {TELEMETRY_HEAD!r}: run the installer")
         if self.s.mode == "demo":
             with session_scope() as db:
-                ensure_demo_sites(db)
+                from backend.infrastructure.demo_dataset import demo_allowed_at_startup
+                if demo_allowed_at_startup(db):  # an explicit "Remove demo data" is respected across restarts
+                    ensure_demo_sites(db)
 
     async def connect_bus(self) -> None:
         while not self.stop.is_set():
@@ -111,6 +113,38 @@ class Worker:
     def _beat(self, detail: dict) -> None:
         with session_scope() as db:
             HeartbeatRepo(db).beat("network_worker", self.instance, self.inm.version, detail)
+
+    # ------------------------------------------------------------------ WP-02 scheduled read-only collection
+    async def collection_loop(self) -> None:
+        """Run due read-only collection plans. Dedupe keys make replicas/restarts safe; failures are
+        recorded and retried with bounded backoff, never converted to zero readings."""
+        if os.environ.get("INM_SCHEDULED_COLLECTION", "true").lower() in ("0", "false", "no"):
+            log.info("scheduled collection disabled by INM_SCHEDULED_COLLECTION")
+            return
+        from backend.infrastructure.collection_runner import run_due
+        while not self.stop.is_set():
+            try:
+                def _run():
+                    with session_scope() as db:
+                        return run_due(db, store=telemetry_store(), worker=self.instance)
+                summary = await asyncio.to_thread(_run)
+                self.stats["collection"] = summary
+            except Exception as exc:  # never crash the worker on one bad plan
+                log.warning("collection cycle failed: %s", type(exc).__name__)
+                self.stats["last_error"] = f"collection: {type(exc).__name__}"
+            await self._sleep(30)
+
+    async def jobs_loop(self) -> None:
+        """Scheduled vault captures (5 min), optimizer (5 min, only if the feature is on), analysis (hourly)."""
+        from backend.infrastructure import scheduled_jobs as J
+        tick = 0
+        while not self.stop.is_set():
+            await asyncio.to_thread(J.safe(J.vault_captures))
+            await asyncio.to_thread(J.safe(J.optimizer))
+            if tick % 12 == 0:
+                await asyncio.to_thread(J.safe(J.scheduled_analysis))
+            tick += 1
+            await self._sleep(300)
 
     # ------------------------------------------------------------------ polling + publishing
     async def poll_loop(self) -> None:
@@ -306,7 +340,8 @@ class Worker:
         hb = asyncio.create_task(self.heartbeat_loop())
         await self.connect_bus()
         await self.synthetic_responder()
-        tasks = [hb, asyncio.create_task(self.poll_loop()), asyncio.create_task(self.ingest_loop())]
+        tasks = [hb, asyncio.create_task(self.poll_loop()), asyncio.create_task(self.ingest_loop()),
+                 asyncio.create_task(self.collection_loop()), asyncio.create_task(self.jobs_loop())]
         await self.stop.wait()
         log.info("shutting down")
         # Threads running blocking DB calls cannot be cancelled; never let shutdown hang past the grace period.
