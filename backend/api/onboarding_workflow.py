@@ -194,19 +194,132 @@ class DiscoveryRequest(BaseModel):
     site_name: str = Field(min_length=1, max_length=100)
 
 
-def _targets(scope: str) -> list[ipaddress.IPv4Address]:
+def _targets(scope: str, *, max_addresses: int = 8) -> list[ipaddress.IPv4Address]:
+    """Validate the *entire* requested range before sending any probe.
+
+    Legacy /discover remains limited to eight addresses; the resumable /24
+    workflow uses the same validation with a 256-address planning cap.
+    A permitted /24 is never permission to probe an unrelated network.
+    """
     try:
         net = ipaddress.ip_network(scope.strip(), strict=False)
     except ValueError:
         raise HTTPException(422, "Enter an IPv4 address or an authorized CIDR.")
     if not isinstance(net, ipaddress.IPv4Network):
         raise HTTPException(422, "Only IPv4 management targets are supported")
-    if net.num_addresses > 8:
-        raise HTTPException(422, "Scan at most 8 IP addresses per request (e.g. /29 or narrower). Larger /9 plans must be divided into approved small scan batches.")
+    if net.num_addresses > max_addresses:
+        raise HTTPException(422, f"One live discovery supports at most {max_addresses} IPv4 addresses; larger ranges are planning-only.")
     ips = list(net.hosts()) if net.prefixlen < 31 else list(net)
     for ip in ips:
-        _permit_probe(ip)  # check ALL destinations before initiating traffic
+        _permit_probe(ip)  # reject any unapproved target before contacting a host
     return ips
+
+
+def _discovery_view(job: OnboardingDiscovery) -> dict:
+    network = ipaddress.ip_network(job.scope, strict=False)
+    total = network.num_addresses - (2 if network.prefixlen <= 30 else 0)
+    results = job.results or []
+    return {
+        "id": job.id, "status": job.status, "results": results,
+        "site_name": job.site_name, "scope": job.scope,
+        "credential_id": job.credential_id, "device_writes": "LOCKED",
+        "total_targets": total, "completed_targets": len(results),
+        "found_count": sum(r.get("status") == "FOUND" for r in results),
+        "failed_count": sum(r.get("status") == "FAILED" for r in results),
+    }
+
+
+@router.post("/discoveries/start", status_code=201)
+def start_subnet_discovery(body: DiscoveryRequest, request: Request,
+                           db: Session = Depends(get_db),
+                           admin: User = Depends(require_role("admin"))):
+    """Create a resumable /24-or-narrower job; NO network traffic on creation."""
+    _locked()
+    profile = _profile(db, body.credential_id)
+    targets = _targets(body.scope, max_addresses=256)
+    job = OnboardingDiscovery(
+        credential_id=profile.id, site_name=body.site_name.strip(),
+        scope=body.scope.strip(), device_family=profile.device_family,
+        results=[], created_by=admin.username, status="IN_PROGRESS",
+    )
+    db.add(job)
+    db.flush()
+    audit(db, "onboarding_discovery_started", username=admin.username, target=job.id,
+          detail=f"authorized targets={len(targets)}, /24 maximum, device writes locked",
+          request=request)
+    db.commit()
+    return _discovery_view(job)
+
+
+class DiscoveryBatchInput(BaseModel):
+    offset: int = Field(ge=0, le=254)
+    batch_size: int = Field(default=4, ge=1, le=8)
+
+
+@router.post("/discoveries/{job_id}/next")
+def scan_next_batch(job_id: str, body: DiscoveryBatchInput, request: Request,
+                    db: Session = Depends(get_db),
+                    admin: User = Depends(require_role("admin"))):
+    """Run one bounded read-only batch, then persist progress atomically.
+
+    SELECT FOR UPDATE serializes concurrent requests on PostgreSQL. Offset
+    checking makes a repeated request after a lost response idempotent.
+    No background worker is required: the browser advances batches and can
+    stop requesting more at any time.
+    """
+    _locked()
+    job = db.scalar(select(OnboardingDiscovery).where(
+        OnboardingDiscovery.id == job_id).with_for_update())
+    if job is None:
+        raise HTTPException(404, "Discovery not found")
+    if job.created_by != admin.username:
+        raise HTTPException(403, "Only the initiating administrator may continue this discovery")
+    profile = _profile(db, job.credential_id, job.device_family)
+    targets = _targets(job.scope, max_addresses=256)
+    done = len(job.results or [])
+    if job.status == "SCANNED" or body.offset < done:
+        return _discovery_view(job)  # completed/retried request: no duplicate probes
+    if body.offset != done:
+        raise HTTPException(409, "Discovery offset changed. Reload the job to resume safely.")
+    if job.status != "IN_PROGRESS":
+        raise HTTPException(409, "Discovery is not in a resumable state")
+    found = list(job.results or [])
+    for address in targets[done:done + body.batch_size]:
+        try:
+            observed = _probe(profile, address)
+            serial = str(observed.get("serial_number") or "").strip()
+            if serial.startswith("UNKNOWN-"):
+                serial = ""
+            existing = db.scalar(select(InmDevice).where(
+                InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba",
+                func.lower(InmDevice.serial_number) == serial.lower())) if serial else None
+            found.append({
+                "management_ip": str(address), "status": "FOUND",
+                "family": profile.device_family,
+                "hostname": str(observed.get("hostname") or address)[:100],
+                "model": str(observed.get("model") or "Unknown")[:64],
+                "serial_number": serial[:64],
+                "firmware": str(observed.get("firmware") or "")[:64] or None,
+                "existing_device_id": existing.id if existing else None,
+                "enrollable": bool(serial),
+                "result_note": "API identity read; existing device" if existing else "API identity read",
+            })
+        except (ArubaError, httpx.HTTPError, ValueError, RuntimeError, OSError) as exc:
+            found.append({
+                "management_ip": str(address), "status": "FAILED",
+                "result_note": f"Read-only REST probe failed ({type(exc).__name__}).",
+                "enrollable": False,
+            })
+    job.results = found  # assign a new list so SQLAlchemy persists JSON changes
+    if len(found) == len(targets):
+        job.status = "SCANNED"
+    db.flush()
+    audit(db, "onboarding_discovery_batch", username=admin.username, target=job.id,
+          detail=f"completed={len(found)}/{len(targets)}, found={sum(r['status']=='FOUND' for r in found)}, writes locked",
+          request=request)
+    db.commit()
+    return _discovery_view(job)
+
 
 
 @router.post("/discover", status_code=201)
@@ -249,9 +362,7 @@ def discover_devices(body: DiscoveryRequest, request: Request,
     audit(db, "onboarding_discovery_finished", username=admin.username, target=job.id,
           detail=f"profile={profile.id}, targets={len(addresses)}, found={sum(x['status']=='FOUND' for x in found)}, writes locked",
           request=request)
-    return {"id": job.id, "status": job.status, "results": job.results,
-            "site_name": job.site_name, "credential_id": job.credential_id,
-            "device_writes": "LOCKED"}
+    return _discovery_view(job)
 
 
 @router.get("/discoveries/{job_id}")
@@ -260,9 +371,7 @@ def get_discovery(job_id: str, db: Session = Depends(get_db),
     job = db.get(OnboardingDiscovery, job_id)
     if job is None:
         raise HTTPException(404, "Discovery not found")
-    return {"id": job.id, "status": job.status, "results": job.results,
-            "site_name": job.site_name, "credential_id": job.credential_id,
-            "device_writes": "LOCKED"}
+    return _discovery_view(job)
 
 
 class RegisterDiscovered(BaseModel):
@@ -276,6 +385,8 @@ def register_discovered(job_id: str, body: RegisterDiscovered, request: Request,
     job = db.get(OnboardingDiscovery, job_id)
     if not job:
         raise HTTPException(404, "Discovery not found")
+    if job.status != "SCANNED":
+        raise HTTPException(409, "Finish the read-only discovery before registering devices.")
     _profile(db, job.credential_id, job.device_family)
     if len(body.indices) != len(set(body.indices)):
         raise HTTPException(422, "Duplicate selection indices")
