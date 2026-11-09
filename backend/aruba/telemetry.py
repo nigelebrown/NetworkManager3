@@ -52,6 +52,8 @@ def parse_channel_summary(text: str) -> list[dict[str, Any]]:
             "util_pct": _pct(_num(util[0])),
             "rx_pct": _pct(_num(util[1])),
             "tx_pct": _pct(_num(util[2])),
+            "ext_channel_util_pct": _pct(_num(util[3])) if len(util) > 3 else None,
+            "quality_percent": _pct(_num(util[4])) if len(util) > 4 else None,
         })
     return rows
 
@@ -100,6 +102,7 @@ def parse_rf_summary(text: str | None) -> dict[str, Any] | None:
         if row:
             for k_out, k_in in (("noise_floor_dbm", "noise_floor_dbm"), ("util_percent", "util_pct"),
                                 ("rx_percent", "rx_pct"), ("tx_percent", "tx_pct"),
+                                ("quality_percent", "quality_percent"),
                                 ("retry", "retry"), ("phy_err", "phy_err"), ("mac_err", "mac_err")):
                 if row[k_in] is not None:
                     r[k_out] = row[k_in]
