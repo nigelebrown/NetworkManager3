@@ -24,10 +24,24 @@ case "$ORIGIN" in
   github-networkmanager3:nigelebrown/NetworkManager3.git|git@github.com:nigelebrown/NetworkManager3.git|https://github.com/nigelebrown/NetworkManager3.git) ;;
   *) die "Unexpected repository origin: $ORIGIN" ;;
 esac
+LAN_EXISTING_BIND=""
+LAN_EXISTING_CIDR=""
 if [[ -f "$ENV" ]]; then
-  read_value() { sed -n "s/^$1=//p" "$ENV" | head -1; }
+  read_value() { sed -n "s/^$1=//p" "$ENV" | tail -n1; }
   [[ "$(read_value INM_PROFILE)" == demo ]] || die "Existing installation is not a demo: refusing to modify it."
-  [[ "$(read_value INM_WEB_BIND)" == 127.0.0.1 ]] || die "Weak demo credentials require INM_WEB_BIND=127.0.0.1. Stop: do not expose on LAN."
+  CURRENT_BIND="$(read_value INM_WEB_BIND)"
+  if [[ "$CURRENT_BIND" != 127.0.0.1 ]]; then
+    # A demo may be exposed to an approved private LAN ONLY when an explicit,
+    # narrow Nginx access policy already exists. Never silently allow 0.0.0.0.
+    [[ "$(read_value SIMS_ADMIN_PASSWORD)" == 'demo123!' &&
+       "$(read_value INM_DEMO_SIMPLE_LOGIN)" == true &&
+       "$(read_value INM_LAN_DEMO_ACK)" == true ]] \
+      || die "Non-loopback demo is missing the approved scoped-LAN configuration. Use scripts/enable-lan-demo.sh with your private server IP and approved /24-or-narrower client CIDR."
+    LAN_EXISTING_BIND="$CURRENT_BIND"
+    LAN_EXISTING_CIDR="$(read_value INM_LAN_CLIENT_CIDR)"
+    [[ -n "$LAN_EXISTING_CIDR" ]] \
+      || die "Approved LAN client CIDR is missing. Refusing weak password on an unrestricted network."
+  fi
   [[ "$(read_value INM_VERSION)" == "$(tr -d '[:space:]' < "$ROOT/VERSION")" ]] \
     || die "Installed version differs; use the approved tagged update workflow, not demo rebuild."
 fi
@@ -55,6 +69,20 @@ print(f"[inm-demo-reload] Verified release {version}: device writes LOCKED")
 PY
 then
   die "Release manifest missing, invalid, mismatched, or device writes not LOCKED."
+fi
+
+# An existing APPROVED LAN demo uses its own restricted upgrade path. This
+# preserves admin/demo123!, the private interface binding, Nginx allow/deny,
+# existing database volumes and the device write lock. It MUST NOT execute the
+# loopback-only Docker tear-down sequence below.
+if [[ -n "$LAN_EXISTING_BIND" ]]; then
+  say "Existing private LAN demo found; using the approved LAN update path."
+  say "Preserving admin / demo123!, network ACL and all Docker data volumes."
+  bash "$ROOT/scripts/enable-lan-demo.sh" "$LAN_EXISTING_BIND" "$LAN_EXISTING_CIDR" \
+    || die "Scoped LAN demo update failed. No global Docker cleanup was run."
+  say "Guided onboarding is available at https://$LAN_EXISTING_BIND:8443/onboarding"
+  say "Inventory → Add device (guided onboarding), or /onboarding/manual for CSV/manual entry."
+  exit 0
 fi
 
 # Never take a working demo offline until the target checkout passes the

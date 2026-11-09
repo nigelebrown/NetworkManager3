@@ -109,9 +109,35 @@ to an isolated/trusted management VLAN, never expose port 8443 on the
 internet, and do not store operational credentials in its demo account.
 This permission is temporary and must not be reused for production.
 
-The older `scripts/rebuild-demo.sh` is intentionally loopback-only; after
-switching to LAN mode, use approved Git release updates rather than
-running that localhost-specific demo reload command against the LAN instance.
+The single-command `scripts/rebuild-demo.sh` now detects an **existing
+approved LAN demo** and delegates to `scripts/enable-lan-demo.sh`, which
+retains the restricted private IP, CIDR-based Nginx access control and
+`admin / demo123!` password. It refuses unrestricted binds and does not
+weaken the global device-write lock. It updates the API and React web image
+and migrates the management schema if necessary without deleting volumes.
+
+To update an approved existing LAN demo directly from Git:
+
+```bash
+cd /root/NetworkManager3
+git pull --ff-only origin main
+bash scripts/rebuild-demo.sh
+```
+
+Once it completes, open `https://<SERVER_LAN_IP>:8443/onboarding` and
+select **Inventory → Add device — 7-step wizard**. For manual registration
+or a CSV upload, select **Manual / CSV import** in the Inventory menu.
+
+If you see a refusal about an unapproved LAN binding, inspect only the
+nonsecret settings with:
+
+```bash
+grep -E '^(INM_PROFILE|INM_WEB_BIND|INM_LAN_CLIENT_CIDR|INM_LAN_DEMO_ACK|INM_DEMO_SIMPLE_LOGIN)=' /etc/inm/inm.env
+ip -4 -br addr
+```
+
+Do **not** set `INM_WEB_BIND=0.0.0.0` or disable the CIDR allowlist just
+to keep the temporary demo password.
 
 ## C. Add a real AP or switch immediately — no network connection required
 
