@@ -72,9 +72,10 @@ export default function GuidedOnboarding() {
     setTestResult(`Authenticated: ${result.hostname || testIp} (${result.model || "model not reported"})`);
     setNotice("Read-only REST authentication succeeded; no device configuration was modified.");
   });
-  const scan = () => work(async () => {
+  const scan = (targetScope: string = scope) => work(async () => {
     if (!profileId) throw new Error("Select a credential profile before scanning.");
-    const result = await onboardingApi.discover({ credential_id: profileId, scope, site_name: site });
+    const result = await onboardingApi.discover({ credential_id: profileId, scope: targetScope, site_name: site });
+    setScope(targetScope);
     setDiscovery(result);
     setChosen(result.results.map((item, index) => item.enrollable ? index : -1).filter(x => x >= 0));
     setStep(4);
@@ -227,9 +228,17 @@ export default function GuidedOnboarding() {
       </label>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className={secondary} disabled={busy || !testIp} onClick={test}>Test credentials (read only)</button>
-        <button className={primary} disabled={busy} onClick={scan}>{busy ? "Discovering authorized IPs…" : "Scan approved range"}</button>
+        <button className={primary} disabled={busy} onClick={() => scan()}>{busy ? "Discovering authorized IPs…" : "Scan approved range"}</button>
+        {testIp.trim() && <button className={secondary} disabled={busy}
+          onClick={() => scan(testIp.trim() + (testIp.includes("/") ? "" : "/32"))}>
+          Discover test IP only
+        </button>}
       </div>
       {testResult && <p className="mt-3 text-sm text-emerald-300">{testResult}</p>}
+      <p className="mt-2 text-sm text-amber-300">
+        Live discovery is limited to 8 addresses per scan. An approved /24 is a management allowlist, not a single scan request.
+        For your first AP, use "Discover test IP only" to scan one address, then review it before registration.
+      </p>
       <p className="mt-2 text-xs text-slate-400">
         Discovery reads supported device identity via REST. An unsuccessful address is reported individually. There is no SSH configuration, port sweep or device-write operation.
       </p>
