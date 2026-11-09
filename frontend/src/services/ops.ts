@@ -10,11 +10,13 @@ export interface NocTile {
   device_id: string; hostname: string | null; site: string | null; family: string; model: string | null;
   firmware: string | null; status: string; source_type: "REAL" | "DEMO"; freshness: string; health: Health;
   metrics: Record<string, number | null>; last_failure: string | null;
+  state: "ONLINE" | "DEGRADED" | "STALE" | "OFFLINE" | "UNKNOWN"; state_reason: string; last_persisted_at: string | null;
 }
 export interface Noc {
   generated_at: string; devices: NocTile[];
   summary: { devices: number; up: number; down: number; unknown: number; fresh: number; stale_or_gap: number;
-    never_polled: number; clients: number; active_alerts: number; health_bands: Record<string, number> };
+    never_polled: number; clients: number; active_alerts: number; health_bands: Record<string, number>;
+    states: Record<string, number> };
   collection_last_hour: Record<string, number>; worst_experience: NocTile[];
   events: { at: string; device_id: string | null; severity: string; message: string; config_change: boolean }[];
   alerts: { id: number; severity: string; message: string; created_at: string; simulated: boolean }[];
@@ -169,7 +171,7 @@ export interface Step { step: string; ok: boolean; at: string; op?: Record<strin
   category?: string; message?: string; artifact?: string; authority?: string; detail?: string; matches_pre_change?: boolean }
 export interface ExecResult { decision: string; outcome?: string; steps?: Step[]; denial_reason?: string | null;
   device_writes: number; environment?: string; guards?: { guard: string; pass: boolean }[] }
-export interface InmAlert { id: string; device_id: string; rule_id: string; severity: string; message: string; value: number | null;
+export interface InmAlert { id: string; device_id: string; rule_id: string; severity: string; message: string; value: number | null; entity?: string | null; correlation_id?: string | null;
   threshold: number | null; state: string; suppressed: boolean; opened_at: string; last_seen_at: string; resolved_at: string | null;
   acked_by: string | null; source_type: string }
 

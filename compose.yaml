@@ -27,10 +27,14 @@ x-hardening: &hardening
   logging: *logging
 
 x-app-env: &app-env
-  SIMS_MODE: demo
+  # INM_MODE=live + INM_PROFILE=lab-readonly is the production profile (install.sh --mode live).
+  SIMS_MODE: ${INM_MODE:-demo}
   SIMS_INM_PROFILE: ${INM_PROFILE:-demo}
-  SIMS_DEVICE_WRITE_LOCK: "true"
-  SIMS_ALLOW_CONFIG_CHANGES: "false"
+  # Manual configuration changes (SIMS SSID/rename/REST-enable paths) stay off unless the owner sets BOTH
+  # INM_DEVICE_WRITE_LOCK=false and INM_ALLOW_CONFIG_CHANGES=true. Automatic optimization is OFF by default
+  # (INM_AUTOMATIC_OPTIMIZATION=false) and, when enabled, applies only to devices individually opted in.
+  SIMS_DEVICE_WRITE_LOCK: ${INM_DEVICE_WRITE_LOCK:-true}
+  SIMS_ALLOW_CONFIG_CHANGES: ${INM_ALLOW_CONFIG_CHANGES:-false}
   SIMS_AUTO_MIGRATE: "false"
   SIMS_FORCE_INITIAL_PASSWORD_CHANGE: "true"
   SIMS_POLL_INTERVAL_SECONDS: ${INM_POLL_INTERVAL_SECONDS:-60}
@@ -203,8 +207,8 @@ services:
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       SIMS_CORS_ORIGINS: ""
     volumes: ["app-data:/data"]
-    # Egress available only to API for opt-in, CIDR-allowlisted, read-only probes.
-    # Worker remains entirely on its internal Docker network with no external route.
+    # Egress for opt-in, CIDR-allowlisted, read-only probes. The worker has the same allowlisted
+    # egress (network `devices`) for scheduled read-only collection.
     networks: [frontend, backend, ai, edge]
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -246,7 +250,14 @@ services:
       SIMS_ROLE: worker
       INM_NATS_USER: inm_worker
       INM_NATS_PASSWORD: ${INM_NATS_WORKER_PASSWORD:?}
-    networks: [backend]
+      # WP-02 scheduled READ-ONLY collection: the same private-CIDR allowlist the API probe enforces.
+      # Empty = no device is ever contacted (plans record TARGET_NOT_ALLOWED, never fabricated data).
+      INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
+      INM_SCHEDULED_COLLECTION: ${INM_SCHEDULED_COLLECTION:-true}
+    volumes: ["app-data:/data"]
+    # `devices` gives egress for allowlisted read-only polls; the code-level CIDR allowlist and the
+    # absence of any write path in the collector are the controls. No published ports.
+    networks: [backend, devices]
     depends_on:
       migrate: { condition: service_completed_successfully }
       loki: { condition: service_started }
@@ -260,6 +271,7 @@ services:
 
 networks:
   edge: {}
+  devices: {}
   frontend: { internal: true }
   backend: { internal: true }
   ai: { internal: true }

@@ -36,7 +36,9 @@ def env(live):
     assert live.post("/api/v1/demo-data/load", headers=adm).status_code == 200
     appr = make_user(live, adm, "cab.approver", "approver")
     devs = live.get("/api/v1/devices", headers=adm).json()
-    sw = next(d for d in devs if d["source_type"] == "DEMO" and d["family"] == "switch")
+    # the write tests use ports 1/1/20-22 and a same-model replacement: take a 24-port CX 6100 (two exist in the
+    # demo set; the emulators model each model's real port count)
+    sw = next(d for d in devs if d["source_type"] == "DEMO" and d["family"] == "switch" and "24G" in (d.get("model") or ""))
     ap = next(d for d in devs if d["source_type"] == "DEMO" and d["family"] == "access_point")
     return live, adm, appr, sw, ap
 
@@ -84,7 +86,7 @@ def test_switch_certify_apply_readback_and_rollback_paths(env):
     ex = c.post(f"/api/v1/changes/plans/{p['id']}/execute", headers=adm).json()
     assert ex["decision"] == "ALLOW" and ex["outcome"] == "APPLIED_VERIFIED" and ex["environment"] == "EMULATED"
     names = [s["step"] for s in ex["steps"]]
-    assert names[:4] == ["connect", "management_authority", "pre_change_backup_verified", "checkpoint"]
+    assert names[:5] == ["connect", "management_authority", "pre_change_backup_verified", "out_of_band_check", "checkpoint"]
     assert names.count("apply_readback") == 2 and names[-2:] == ["save", "post_change_backup"]
     assert all(s["ok"] for s in ex["steps"])
     again = c.post(f"/api/v1/changes/plans/{p['id']}/execute", headers=adm).json()
@@ -211,6 +213,9 @@ def test_per_device_automatic_optimization_end_to_end(env, monkeypatch):
               and c.get(f"/api/v1/devices/{d['id']}/optimization", headers=adm).json()["enrollment"] is None)
     other = next(d for d in c.get("/api/v1/devices", headers=adm).json()
                  if d["source_type"] == "DEMO" and d["family"] == "access_point" and d["id"] != ap["id"])
+    # the optimizer baselines on the newest vault artifact: capture the AP's real configuration first (otherwise the
+    # 6-hour-old demo fixture differs from the device and execution correctly stops as STALE_APPROVAL)
+    assert c.post(f"/api/v1/vault/devices/{ap['id']}/capture-from-device", headers=adm).status_code == 201
     exp = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     body = {"serial": ap["serial_number"], "mode": "DEVICE_OPT_IN", "allowed_operation_types": ["ap.radio.channel"],
             "value_constraints": {"allowed_widths_mhz": [20, 40]}, "cooldown_seconds": 3600, "max_actions_per_day": 2,
@@ -263,7 +268,7 @@ def test_template_inheritance_deploys_and_reconciles(env):
     devs = c.get("/api/v1/devices", headers=adm).json()
     sw = next(d for d in devs if d["source_type"] == "DEMO" and d["family"] == "switch"
               and c.get(f"/api/v1/config-templates/devices/{d['id']}/preview", headers=adm).json()["templates"])
-    certify(c, adm, appr, sw, test_port="1/1/20")
+    certify(c, adm, appr, sw, test_port="1/1/10")      # 1/1/10 exists on every demo model (12/24/48 ports)
     assert c.post(f"/api/v1/config-templates/devices/{sw['id']}/deploy-plan", headers=adm).status_code in (201, 409)
     cap = c.post(f"/api/v1/vault/devices/{sw['id']}/capture-from-device", headers=adm)
     assert cap.status_code == 201

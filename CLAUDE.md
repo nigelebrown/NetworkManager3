@@ -67,3 +67,19 @@ Read `docs/CAPABILITY_COMPLETION_DESIGN.md` §C5a (GAP-13). A global write lock 
 ## Prohibited shortcuts
 
 Do not fabricate successful device tests, hardware capabilities, backups, ML improvements or deployment results. Do not embed device credentials or personal information in Git. Do not enable live network-device writes in Phase 1. Do not silently bypass TLS, alter the approved RF channel restrictions, or allow AI to execute configuration changes directly.
+
+
+## 1.2.0-rc2 software remediation (branch `release/software-remediation`)
+
+Report: `docs/RELEASE_1.2.0_RC2_SOFTWARE_REMEDIATION.md`. Key invariants added in rc2 — keep them:
+* Telemetry identity includes `entity_type/entity_id` (migration t002); never collapse ports/radios/clients.
+* Scheduled collection and changes emit events through `infrastructure/outbox.py` in the same transaction; a run is
+  SUCCEEDED only after the persisted count is verified. Correlation id = run id (collection) / plan id (changes).
+* Device state comes only from `domain/collection.operational_state()` (collector, NOC, Device 360, API agree).
+* All CX access goes through `CxSession` (form login, CSRF, version negotiation, redaction). Never credentials in URLs.
+* `execute_plan` compares the LIVE pre-change backup with the approved baseline; mismatch = STALE_APPROVAL, zero
+  writes, plan back to PENDING_APPROVAL.
+* The capability registry is contract-tested against the writers' OPERATIONS; unbuilt features are listed as
+  NOT_IMPLEMENTED in `/api/v1/system/features`.
+* Tests: `tests/fullstack/` (native distributed stack, `INM_FS=1`), `tests/e2e/run_isolated.sh` (browser suites on a
+  fresh stack each), `scripts/reconcile_register_1_2_0_rc2.py`, `scripts/capability_matrix.py`.

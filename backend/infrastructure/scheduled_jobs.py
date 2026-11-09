@@ -49,3 +49,38 @@ def safe(fn):
             return None
     run.__name__ = fn.__name__
     return run
+
+
+def outbox_relay() -> dict:
+    """Standalone (no NATS) retry of PENDING outbox events through the in-process ingest (E2E-03/10)."""
+    from . import outbox
+    if outbox.mode() != "inprocess":
+        return {"skipped": "jetstream mode: the worker relays"}
+    with session_scope() as db:
+        return outbox.relay(db)
+
+
+def discovery(owner: str | None = None) -> dict:
+    """Run durable discovery jobs (E2E-07). Safe on several processes: jobs are leased."""
+    import socket
+    import time
+    import uuid
+    from ..api.onboarding_workflow import _identify
+    from . import discovery_jobs as DJ
+    return DJ.tick(session_scope, owner or f"scheduler-{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}", _identify, sleep=time.sleep)
+
+
+def recovery_sweep() -> int:
+    """Flag executions that died mid-change (stale journal heartbeat) for recovery (E2E-14)."""
+    from . import recovery
+    with session_scope() as db:
+        return recovery.sweep(db)
+
+
+def notifications() -> dict | None:
+    """Alert notifications: enqueue, escalate unacknowledged alerts, deliver with retry (E2E-20)."""
+    if not _on("INM_NOTIFICATIONS"):
+        return None
+    from .notifications import sweep
+    with session_scope() as db:
+        return sweep(db)

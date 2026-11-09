@@ -1,6 +1,8 @@
 """Phase 3: process-driven global -> site -> device templates, application-side only."""
 from __future__ import annotations
 
+from ..infrastructure.posture import read_only, write_posture
+
 from datetime import datetime, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -23,9 +25,10 @@ router = APIRouter(prefix="/api/v1/config-templates", tags=["phase3-inheritance"
 class TemplateInput(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     family: Literal["access_point", "switch"]
-    scope: Literal["global", "site", "device"]
+    scope: Literal["global", "group", "site", "device"]
     site_id: str | None = None
     device_id: str | None = None
+    group_id: str | None = None
     model_contains: str | None = Field(default=None, max_length=64)
     priority: int = Field(default=100, ge=0, le=1000)
     config: dict
@@ -33,10 +36,10 @@ class TemplateInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_scope(self):
-        if (self.scope == "global" and (self.site_id or self.device_id)
-            or self.scope == "site" and (not self.site_id or self.device_id)
-            or self.scope == "device" and (not self.device_id or self.site_id)):
-            raise ValueError("Global: neither target; site: only site_id; device: only device_id.")
+        targets = {k for k in ("site_id", "device_id", "group_id") if getattr(self, k)}
+        need = {"global": set(), "group": {"group_id"}, "site": {"site_id"}, "device": {"device_id"}}[self.scope]
+        if targets != need:
+            raise ValueError("Global: no target; group: only group_id; site: only site_id; device: only device_id.")
         if any(ord(ch) < 32 for ch in self.name):
             raise ValueError("Template name must be printable.")
         return self
@@ -56,31 +59,85 @@ def _locked():
 
 
 def _validate(doc: dict, family: str) -> dict:
-    from ..api.onboarding_workflow import _safe_draft
-    if family == "switch" and doc.get("ssids"):
-        raise HTTPException(422, "SSID configuration belongs to APs, not switches.")
-    if family == "access_point" and doc.get("interfaces"):
-        raise HTTPException(422, "Interface configuration belongs to switches, not APs.")
-    safe = _safe_draft(doc)
-    for key, identity in (("ssids", "profile"), ("interfaces", "name")):
-        rows = safe.get(key, [])
-        seen = [str(x.get(identity, "")).strip().casefold() for x in rows]
-        if any(not x for x in seen) or len(seen) != len(set(seen)):
-            raise HTTPException(422, f"{key} require unique, nonempty {identity}.")
-    vlans = safe.get("vlans", [])
-    if any(type(v) is not int for v in vlans) or len(vlans) != len(set(vlans)):
-        raise HTTPException(422, "VLAN IDs must be unique integers.")
-    for port in safe.get("interfaces", []):
-        if any(type(x) is not int or x < 1 or x > 4094 for x in port.get("trunk_vlans", [])):
-            raise HTTPException(422, "Trunk VLANs must be integers from 1 to 4094.")
-        if port.get("admin_state") not in (None, "up", "down"):
-            raise HTTPException(422, "Interface admin state must be up or down.")
-    return safe
+    from ..domain import desired_state as DS
+    if len(__import__("json").dumps(doc)) > 60000:
+        raise HTTPException(422, "Template exceeds 60 KB.")
+    try:
+        return DS.validate_doc(doc, family)
+    except DS.TemplateError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+def _groups_of(db: Session, device_id: str) -> frozenset:
+    from ..database.models_remediation import DeviceGroupMember
+    return frozenset(m.group_id for m in db.scalars(select(DeviceGroupMember).where(
+        DeviceGroupMember.device_id == device_id)))
+
+
+def _applicable(db: Session, device: InmDevice) -> list:
+    from ..domain.template_inheritance import matches
+    groups = _groups_of(db, device.id)
+    return [t for t in db.scalars(select(InmConfigTemplate).where(
+        InmConfigTemplate.enabled.is_(True), InmConfigTemplate.family == device.family).limit(500))
+        if matches(t, device, groups)]
+
+
+def _installed_facts(device: InmDevice, text: str) -> dict:
+    """Structured facts from the captured configuration: CX JSON (vault capture) or CLI text (pasted)."""
+    from ..domain import best_practices as BP
+    from ..domain import desired_state as DS
+    if device.family == "access_point":
+        return DS.instant_facts(text)
+    try:
+        cfg = __import__("json").loads(text)
+        if isinstance(cfg, dict):
+            return DS.cx_facts(cfg)
+    except ValueError:
+        pass
+    old = BP.installed_facts("switch", BP.normalize_config(text))
+    ports = {p: {"vlan_mode": "access" if p in old["access_vlans"] else ("native-untagged" if p in old["trunks"] else None),
+                 "access_vlan": old["access_vlans"].get(p), "trunk_vlans": old["trunks"].get(p, []),
+                 "admin_state": old["admin"].get(p, "up")} for p in old["admin"]}
+    return {"vlans": old["vlans"], "ports": ports, "ntp": [], "syslog": [], "dns": [], "dns_domain": None}
+
+
+def intent_and_ops(db: Session, device: InmDevice) -> dict:
+    """Merged intent (global -> group -> site -> device), the latest full-fidelity vault capture, and the typed
+    operations needed to make the device match. Shared by preview, deploy-plan, workflows and batch deploys."""
+    from ..database.models_phases import ConfigArtifact
+    from ..domain import desired_state as DS
+    from ..domain import vault as V
+    from ..infrastructure.phase_services import LocalObjectStore, vault_master_key
+    chosen = _applicable(db, device)
+    eff = DS.merge(chosen)
+    art = db.scalar(select(ConfigArtifact).where(ConfigArtifact.device_id == device.id,
+                                                 ConfigArtifact.fidelity == V.FIDELITY_FULL)
+                    .order_by(ConfigArtifact.created_at.desc()).limit(1))
+    out = {"device_id": device.id, "templates": eff["templates"], "effective": {k: v for k, v in eff.items()
+           if k not in ("templates", "provenance")}, "provenance": eff["provenance"], "artifact_id": art.id if art else None,
+           "operations": None, "reason": None}
+    if not chosen:
+        out["reason"] = "No template applies to this device."
+        return out
+    if art is None:
+        out["reason"] = "Capture the device's current configuration first (vault)."
+        return out
+    text = V.open_sealed(LocalObjectStore().get(art.object_path), wrapped_key=art.wrapped_key, manifest=art.manifest,
+                         signature=art.signature, master_key=vault_master_key()).decode(errors="replace")
+    facts = _installed_facts(device, text)
+    try:
+        out["operations"] = DS.reconcile(device.family, eff, facts, ports=sorted(facts.get("ports", {})) or None)
+    except DS.TemplateError as exc:
+        raise HTTPException(422, str(exc)) from None
+    out["artifact_sha256"] = art.plaintext_sha256
+    out["port_roles"] = {p: w.get("_role") for p, w in DS.port_intent(eff, sorted(facts.get("ports", {}))).items()
+                         if w.get("_role")} if device.family == "switch" else {}
+    return out
 
 
 def _public(t):
     return dict(id=t.id, name=t.name, family=t.family, scope=t.scope,
-                site_id=t.site_id, device_id=t.device_id,
+                site_id=t.site_id, device_id=t.device_id, group_id=t.group_id,
                 model_contains=t.model_contains, priority=t.priority,
                 config=t.config_json, enabled=t.enabled, revision=t.revision)
 
@@ -115,9 +172,14 @@ def create_template(body: TemplateInput, request: Request,
             raise HTTPException(422, "Select an existing real physical site.")
     if body.scope == "device" and _real(db, body.device_id or "").family != body.family:
         raise HTTPException(422, "Selected device does not match template family.")
+    if body.scope == "group":
+        from ..database.models_remediation import DeviceGroup
+        g = db.get(DeviceGroup, body.group_id)
+        if g is None or g.family != body.family:
+            raise HTTPException(422, "Select an existing device group of the same family.")
     t = InmConfigTemplate(
         name=body.name.strip(), family=body.family, scope=body.scope,
-        site_id=body.site_id, device_id=body.device_id,
+        site_id=body.site_id, device_id=body.device_id, group_id=body.group_id,
         model_contains=body.model_contains.strip() if body.model_contains else None,
         priority=body.priority, config_json=doc, enabled=body.enabled, created_by=user.username)
     db.add(t); db.flush()
@@ -158,7 +220,18 @@ def preview_device(device_id: str, db: Session = Depends(get_db),
     entries = list(db.scalars(select(InmConfigTemplate).where(
         InmConfigTemplate.enabled.is_(True),
         InmConfigTemplate.family == device.family).limit(500)))
-    return preview(device, entries)
+    return preview(device, entries, _groups_of(db, device.id))
+
+
+@router.get("/devices/{device_id}/plan-preview")
+def plan_preview(device_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("operator"))):
+    """Effective intent, per-port roles and the exact operations a deploy plan would contain (no plan created)."""
+    from ..infrastructure.change_executor import certification_map
+    device = _real(db, device_id)
+    out = intent_and_ops(db, device)
+    certs = certification_map(db, device)
+    out["certification"] = {o["op"]: certs.get(o["op"], "UNCERTIFIED") for o in out["operations"] or []}
+    return out
 
 
 @router.post("/devices/{device_id}/draft", status_code=201)
@@ -174,7 +247,7 @@ def save_inherited_draft(device_id: str, request: Request, db: Session = Depends
     entries = list(db.scalars(select(InmConfigTemplate).where(
         InmConfigTemplate.enabled.is_(True),
         InmConfigTemplate.family == device.family).limit(500)))
-    current = preview(device, entries)
+    current = preview(device, entries, _groups_of(db, device.id))
     if not current["templates"]:
         raise HTTPException(409, "No applicable global, site or device templates.")
     draft = OnboardingConfigDraft(
@@ -187,75 +260,43 @@ def save_inherited_draft(device_id: str, request: Request, db: Session = Depends
           request=request)
     db.commit()
     return {"draft_id": draft.id, "state": "DRAFT", "baseline_id": baseline.id,
-            "template_count": len(current["templates"]), "hardware_writes": "LOCKED"}
+            "template_count": len(current["templates"]), "hardware_writes": write_posture()["hardware_writes"]}
 
 
 @router.post("/devices/{device_id}/deploy-plan", status_code=201)
 def deploy_plan(device_id: str, request: Request, db: Session = Depends(get_db),
-                user: User = Depends(require_role("operator"))):
+                user: User = Depends(require_role("operator")), workflow_id: str | None = None,
+                batch_id: str | None = None):
     """Turn the inherited intended configuration into an approvable CHANGE PLAN containing only the
     operations needed to make the installed configuration match (C04/C05/C08)."""
-    from ..database.models_phases import ChangePlan, ConfigArtifact
-    from ..domain import best_practices as BP
+    from ..database.models_phases import ChangePlan
     from ..domain import change_control as CC
-    from ..domain import vault as V
     from ..infrastructure.change_executor import certification_map
-    from ..infrastructure.phase_services import LocalObjectStore, vault_master_key
     from ._phase_common import real_device
     device = real_device(db, device_id)
-    entries = list(db.scalars(select(InmConfigTemplate).where(
-        InmConfigTemplate.enabled.is_(True), InmConfigTemplate.family == device.family).limit(500)))
-    intended = preview(device, entries)
-    if not intended["templates"]:
-        raise HTTPException(409, "No template applies to this device.")
-    art = db.scalar(select(ConfigArtifact).where(ConfigArtifact.device_id == device.id,
-                                                 ConfigArtifact.fidelity == V.FIDELITY_FULL)
-                    .order_by(ConfigArtifact.created_at.desc()).limit(1))
-    if art is None:
-        raise HTTPException(409, "Capture the device's current configuration (Config vault → Capture from device) first.")
-    text = V.open_sealed(LocalObjectStore().get(art.object_path), wrapped_key=art.wrapped_key, manifest=art.manifest,
-                         signature=art.signature, master_key=vault_master_key()).decode(errors="replace")
-    have = BP.installed_facts(device.family, BP.normalize_config(text))
-    eff = intended["effective"]
-    ops: list[dict] = []
-    if device.family == "switch":
-        for v in eff.get("vlans", []):
-            vid = v if isinstance(v, int) else v.get("id")
-            if vid not in have["vlans"]:
-                ops.append({"op": "switch.vlan.define", "value": vid})
-        for port in eff.get("interfaces", []):
-            if port.get("access_vlan") is not None and have["access_vlans"].get(port["name"]) != port["access_vlan"]:
-                ops.append({"op": "switch.port.access_vlan", "port": port["name"], "value": port["access_vlan"]})
-            if port.get("trunk_vlans") and have["trunks"].get(port["name"]) != sorted(port["trunk_vlans"]):
-                ops.append({"op": "switch.port.trunk_vlans", "port": port["name"], "value": port["trunk_vlans"]})
-            if port.get("admin_state") in ("up", "down") and have["admin"].get(port["name"], "up") != port["admin_state"]:
-                ops.append({"op": "switch.port.admin_state", "port": port["name"], "value": port["admin_state"]})
-    else:
-        installed_vlan = {s["profile"]: s.get("vlan") for s in __import__(
-            "backend.aruba.configuration", fromlist=["parse_running_config"]).parse_running_config(text)["ssids"]}
-        widths = set()
-        for s in eff.get("ssids", []):
-            prof = s.get("profile") or s.get("essid")
-            if s.get("vlan") is not None and installed_vlan.get(prof) != s["vlan"]:
-                ops.append({"op": "ap.ssid.vlan", "ssid": prof, "value": s["vlan"]})
-            if s.get("channel_width_mhz") in (20, 40):
-                widths.add(s["channel_width_mhz"])
-        if len(widths) == 1 and have["channel_widths"] != sorted(widths):
-            ops.append({"op": "ap.radio.width", "value": widths.pop()})
+    out = intent_and_ops(db, device)
+    if out["operations"] is None:
+        raise HTTPException(409, out["reason"])
+    ops = out["operations"]
     if not ops:
-        return {"in_compliance": True, "plan_id": None, "templates": intended["templates"]}
+        return {"in_compliance": True, "plan_id": None, "templates": out["templates"], "operations": []}
     try:
         ops = [CC.validate_operation(o, family=device.family) for o in ops]
     except CC.PolicyViolation as exc:
         raise HTTPException(422, f"Template produces an invalid operation: {exc}") from None
     certs = certification_map(db, device)
-    p = ChangePlan(device_id=device.id, title=f"Apply templates: {', '.join(t['name'] for t in intended['templates'])}"[:200],
-                   operations=ops, capability_report=[{"op": o["op"], "capability": certs.get(o["op"], "UNCERTIFIED")} for o in ops],
-                   plan_hash=CC.plan_hash(device.id, ops, art.plaintext_sha256), expected_config_hash=art.plaintext_sha256,
-                   firmware_at_request=device.firmware, rollback_plan={"strategy": "DEVICE_CHECKPOINT"},
+    title = f"Apply templates: {', '.join(t['name'] for t in out['templates'])}"
+    p = ChangePlan(device_id=device.id, title=title[:200], operations=ops,
+                   capability_report=[{"op": o["op"], "capability": certs.get(o["op"], "UNCERTIFIED")} for o in ops],
+                   plan_hash=CC.plan_hash(device.id, ops, out["artifact_sha256"]),
+                   expected_config_hash=out["artifact_sha256"], firmware_at_request=device.firmware,
+                   rollback_plan={"strategy": "DEVICE_CHECKPOINT" if device.family == "switch" else "INVERSE_OPERATIONS",
+                                  "workflow_id": workflow_id, "batch_id": batch_id},
                    state="PENDING_APPROVAL", requester=user.username, source="TEMPLATE")
     db.add(p)
     db.flush()
     audit(db, "template_deploy_plan_created", username=user.username, target=device.id,
-          detail=f"plan={p.id} ops={len(ops)} templates={[t['name'] for t in intended['templates']]}", request=request)
-    return {"in_compliance": False, "plan_id": p.id, "operations": ops, "templates": intended["templates"]}
+          detail=f"plan={p.id} ops={len(ops)} templates={[t['name'] for t in out['templates']]}"
+                 + (f" workflow={workflow_id}" if workflow_id else "") + (f" batch={batch_id}" if batch_id else ""),
+          request=request)
+    return {"in_compliance": False, "plan_id": p.id, "operations": ops, "templates": out["templates"]}

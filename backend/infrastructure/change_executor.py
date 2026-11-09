@@ -18,9 +18,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -75,8 +78,12 @@ def writer_for(db: Session, device: InmDevice):
         from .writers.emulator import CxEmulator, InstantEmulator
         emu = _EMULATORS.get(device.id)
         if emu is None:
-            emu = CxEmulator(model=device.model or "CX 6200F", firmware=device.firmware or "10.14.1020") \
-                if device.family == "switch" else InstantEmulator()
+            import re as _re
+            pm = _re.search(r"(\d{2})G", device.model or "")
+            emu = CxEmulator(model=device.model or "CX 6200F", firmware=device.firmware or "10.14.1020",
+                             ports=int(pm.group(1)) if pm else 48) \
+                if device.family == "switch" else InstantEmulator(model=device.model or "AP-505",
+                                                                  firmware=device.firmware or "8.10.0.0")
             _EMULATORS[device.id] = emu
         return emu.writer(), "EMULATED"
     import ipaddress
@@ -161,24 +168,121 @@ def _artifact_bytes(db: Session, artifact_id: str, device: InmDevice) -> bytes:
 
 # ---- lease ---------------------------------------------------------------------------------------
 def _lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> bool:
+    """Acquire a durable, exclusive lease *before* device I/O.
+
+    Insert-on-conflict / conditional UPDATE are atomic at the database level. A second caller may not
+    treat an ORM dirty attribute or an uncommitted stale read as proof that it owns the device.
+    Every invocation must have a unique, per-execution holder token (not the username or hostname).
+    """
+    from sqlalchemy.exc import OperationalError
     now = datetime.now(timezone.utc)
-    job = f"device-write:{device_id}"
-    row = db.get(JobLease, job)
-    if row is None:
-        db.add(JobLease(job=job, holder=holder, expires_at=now + timedelta(seconds=ttl)))
-        db.flush()
+    key = f"device-write:{device_id}"
+    until = now + timedelta(seconds=ttl)
+    dialect = db.bind.dialect.name
+    if dialect not in ("sqlite", "postgresql"):
+        raise WriterError("LEASE_UNSUPPORTED", f"No atomic lease strategy certified for {dialect}.")
+    try:
+        ins = (sqlite_insert if dialect == "sqlite" else pg_insert)(JobLease).values(
+            job=key, holder=holder, expires_at=until).on_conflict_do_nothing(index_elements=["job"])
+        created = db.execute(ins).rowcount == 1
+        if not created:
+            claimed = db.execute(update(JobLease).where(
+                JobLease.job == key, JobLease.expires_at <= now,
+            ).values(holder=holder, expires_at=until).execution_options(synchronize_session=False))
+            if claimed.rowcount != 1:
+                db.rollback()
+                return False
+        db.commit()  # ownership must be visible to other workers before ANY network call
         return True
-    exp = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
-    if exp > now and row.holder != holder:
-        return False
-    row.holder, row.expires_at = holder, now + timedelta(seconds=ttl)
-    return True
+    except OperationalError:
+        db.rollback()
+        return False  # fail closed if database cannot establish exclusive ownership
 
 
-def _release(db: Session, device_id: str) -> None:
-    row = db.get(JobLease, f"device-write:{device_id}")
-    if row is not None:
-        row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+def _renew_lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> None:
+    """Fenced heartbeat: old holder must stop if its lease expired or a successor took ownership."""
+    now = datetime.now(timezone.utc)
+    result = db.execute(update(JobLease).where(
+        JobLease.job == f"device-write:{device_id}", JobLease.holder == holder,
+        JobLease.expires_at > now,
+    ).values(expires_at=now + timedelta(seconds=ttl)).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        db.rollback()
+        raise WriterError("LEASE_LOST", "Configuration ownership expired or was taken over; stop device operations.")
+    db.commit()
+
+
+def _release(db: Session, device_id: str, holder: str) -> None:
+    """Never release a lease owned by a newer recovery, certification, or change worker."""
+    db.execute(update(JobLease).where(JobLease.job == f"device-write:{device_id}",
+                                      JobLease.holder == holder).values(
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+    db.flush()
+
+
+# ---- secrets and the durable recovery journal (E2E-14) ---------------------------------------------
+def _with_secret(db: Session, op: dict) -> dict:
+    """Return a copy of op with the referenced secret resolved IN MEMORY ONLY (never persisted or logged)."""
+    if not op.get("secret_ref"):
+        return op
+    from ..database.models_onboarding import OnboardingCredential
+    from ..security.crypto import decrypt_secret
+    prof = db.get(OnboardingCredential, op["secret_ref"])
+    if prof is None or not prof.enabled:
+        raise WriterError("PRECONDITION", "secret_ref does not name an enabled credential profile.")
+    return {**op, "_secret": decrypt_secret(prof.password_enc)}
+
+
+def _journal_open(db: Session, execution_id: str, plan_id: str, device_id: str, env: str, strategy: str,
+                  payload: dict, owner: str) -> str:
+    """Written and COMMITTED before the first device write, together with the EXECUTING plan state and the
+    execution row, so a crash of this process leaves a durable, encrypted record of how to undo the change."""
+    from ..database.models_remediation import ChangeRecoveryJournal
+    from ..security.crypto import encrypt_secret
+    row = ChangeRecoveryJournal(execution_id=execution_id, plan_id=plan_id, device_id=device_id,
+                                environment=env, state="OPEN", strategy=strategy,
+                                payload_enc=encrypt_secret(json.dumps(payload, default=str)),
+                                last_step="checkpoint", owner=owner, heartbeat_at=datetime.now(timezone.utc))
+    db.add(row)
+    db.commit()
+    return row.id
+
+
+def _journal_update(db: Session, journal_id: str | None, *, step: str | None = None, state: str | None = None,
+                    notes: str | None = None, commit: bool = True) -> None:
+    if not journal_id:
+        return
+    from ..database.models_remediation import ChangeRecoveryJournal
+    row = db.get(ChangeRecoveryJournal, journal_id)
+    if row is None:
+        return
+    now = datetime.now(timezone.utc)
+    row.heartbeat_at = row.updated_at = now
+    if step:
+        row.last_step = step[:48]
+    if state:
+        row.state = state
+    if notes:
+        row.notes = notes[:500]
+    if commit:
+        db.commit()
+
+
+def _emit_change_event(db: Session, plan: ChangePlan, device: InmDevice, ex, env: str, outcome: str, actor: str) -> None:
+    """change.executed through the same outbox -> ingest -> ledger -> Loki -> UI path, correlated by plan id."""
+    from . import outbox
+    from ..domain.events import new_event
+    import uuid as _uuid
+    ev = new_event("change.executed", source_service="change-executor", actor_id=actor[:64], actor_type="human",
+                   source_type="DEMO" if device.source_type == "DEMO" else "REAL",
+                   event_id=str(_uuid.uuid5(_uuid.UUID(plan.id), f"exec:{ex.id}")), correlation_id=plan.id,
+                   site_id=device.site_id, device_id=device.id,
+                   payload={"plan_id": plan.id, "execution_id": ex.id, "outcome": outcome, "environment": env,
+                            "operations": [o["op"] for o in plan.operations],
+                            "summary": f"{device.hostname or device.serial_number}: change {outcome}"})
+    outbox.enqueue(db, ev)
+    if outbox.mode() == "inprocess":
+        outbox.relay(db, event_ids=[ev.event_id])
 
 
 # ---- execution -----------------------------------------------------------------------------------
@@ -199,7 +303,7 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                                      current_config_hash=latest.plaintext_sha256 if latest else None,
                                      approved_firmware=plan.firmware_at_request, current_firmware=device.firmware)
     lock = get_settings().device_write_lock or not get_settings().allow_config_changes
-    holder = f"{actor}:{plan.id}"
+    holder = uuid.uuid4().hex  # unique per execution; never reuse a shared username/plan identifier
     leased = _lease(db, device.id, holder)
     gate = CC.execution_gate(write_lock=lock if env == "HARDWARE" else False,
                              emergency_stop=control(db).emergency_stop, plan_state=plan.state,
@@ -213,7 +317,7 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
     db.add(dec)
     if gate["decision"] != "ALLOW":
         if leased:
-            _release(db, device.id)
+            _release(db, device.id, holder)
         db.flush()
         return {"decision": "DENY", "decision_id": dec.id, "denial_reason": dec.denial_reason, "guards": dec.guards,
                 "device_writes": 0, "adapter_called": False, "environment": env}
@@ -221,15 +325,18 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
     res = db.execute(update(ChangePlan).where(ChangePlan.id == plan.id, ChangePlan.state == "APPROVED")
                      .values(state="EXECUTING").execution_options(synchronize_session=False))
     if res.rowcount != 1:
-        _release(db, device.id)
+        _release(db, device.id, holder)
         return {"decision": "DENY", "denial_reason": "Plan is already executing or executed.", "device_writes": 0,
                 "adapter_called": False, "environment": env}
     db.flush()
     ex = ChangeExecution(plan_id=plan.id, device_id=device.id, environment=env, outcome="ABORTED", steps=[],
-                         executed_by=actor)
+                         executed_by=actor, correlation_id=plan.id)
     db.add(ex)
+    db.flush()
     writes = 0
     outcome = "ABORTED"
+    journal_id = None
+    stale_hash = None
     try:
         if writer is None:
             writer, env2 = writer_for(db, device)
@@ -254,11 +361,35 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                             source="EMULATOR" if env == "EMULATED" else "DEVICE_READ")
         ex.pre_artifact_id = art.id
         step("pre_change_backup_verified", True, artifact=art.id, sha256=art.plaintext_sha256)
+        # Out-of-band check (P6-06): the LIVE configuration must still be the one the approver reviewed. A vault
+        # comparison alone misses edits made after the last scheduled capture.
+        if plan.expected_config_hash:
+            same = art.plaintext_sha256 == plan.expected_config_hash
+            if not same:
+                base = db.scalar(select(ConfigArtifact).where(
+                    ConfigArtifact.device_id == device.id, ConfigArtifact.plaintext_sha256 == plan.expected_config_hash)
+                    .order_by(ConfigArtifact.created_at.desc()).limit(1))
+                if base is not None:      # tolerate volatile metadata: compare the normalized configuration
+                    same = _norm(_artifact_bytes(db, base.id, device), device.family) == _norm(pre, device.family)
+            step("out_of_band_check", same, approved_sha256=plan.expected_config_hash, observed_sha256=art.plaintext_sha256)
+            if not same:
+                stale_hash = art.plaintext_sha256
+                raise WriterError("STALE_APPROVAL", "The device configuration changed after approval (out-of-band). "
+                                  "No change was written; the plan needs renewed review against the current configuration.")
         cp = writer.checkpoint()
         ex.checkpoint = cp[:80]
         step("checkpoint", True, checkpoint=cp[:80])
+        prior = writer.export_checkpoint() if hasattr(writer, "export_checkpoint") else {}
+        ex.steps = list(steps)
+        journal_id = _journal_open(db, ex.id, plan.id, device.id, env,
+                                   "INVERSE_OPERATIONS" if prior else "DEVICE_CHECKPOINT",
+                                   {"checkpoint": cp, "pre_artifact_id": art.id, "writer_checkpoint": prior,
+                                    "operations": plan.operations}, holder)
+        step("recovery_journal", True, journal=journal_id)
         try:
             for op in plan.operations:
+                _renew_lease(db, device.id, holder)
+                _journal_update(db, journal_id, step=f"apply:{op['op']}")
                 if op["op"] == "config.restore":
                     content = _artifact_bytes(db, op["artifact_id"], device)
                     writer.restore(content)
@@ -269,7 +400,8 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                     if not verified:
                         raise WriterError("READBACK_MISMATCH", "Restored configuration differs from the artifact.")
                     continue
-                sent = writer.apply(op)
+                writer.apply(_with_secret(db, op))
+                sent = writer.render(op)            # masked render is recorded, never the secret-bearing payload
                 writes += 1
                 verified, observed = writer.readback(op)
                 step("apply_readback", verified, op=op, sent=sent, readback=observed)
@@ -278,6 +410,7 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
         except WriterError as exc:
             step("failure", False, category=exc.category, message=str(exc)[:300])
             try:
+                _renew_lease(db, device.id, holder)
                 writer.rollback(cp)
                 after = writer.backup()
                 restored = _norm(after, device.family) == _norm(pre, device.family)
@@ -287,6 +420,7 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                 step("rollback", False, category=rexc.category, message=str(rexc)[:300])
                 outcome = "ROLLBACK_FAILED"
             raise
+        _renew_lease(db, device.id, holder)
         writer.save()
         step("save", True)
         post = writer.backup()
@@ -309,11 +443,22 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                 writer.close()
         except Exception:
             pass
-        _release(db, device.id)
+        _release(db, device.id, holder)
     ex.steps, ex.outcome, ex.finished_at = steps, outcome, datetime.now(timezone.utc)
     plan.state = {"APPLIED_VERIFIED": "APPLIED_VERIFIED", "ROLLED_BACK": "FAILED_ROLLED_BACK",
                   "ROLLBACK_FAILED": "ROLLBACK_FAILED", "ABORTED": "APPROVED"}[outcome]
+    if stale_hash is not None:
+        # approval no longer describes the device: new baseline, new revision, back to the approver
+        plan.state, plan.approver, plan.approved_at = "PENDING_APPROVAL", None, None
+        plan.expected_config_hash = stale_hash
+        plan.plan_hash = CC.plan_hash(device.id, plan.operations, stale_hash)
+        plan.revision += 1
+    _journal_update(db, journal_id, step=outcome, commit=False,
+                    state="RECOVERY_REQUIRED" if outcome == "ROLLBACK_FAILED" else "CLOSED",
+                    notes=None if outcome != "ROLLBACK_FAILED" else "Automatic rollback did not restore the "
+                    "pre-change configuration. Use Recovery to retry from the journal or follow the guided procedure.")
     db.flush()
+    _emit_change_event(db, plan, device, ex, env, outcome, actor)
     return {"decision": "ALLOW", "decision_id": dec.id, "execution_id": ex.id, "outcome": outcome,
             "steps": steps, "device_writes": writes, "adapter_called": True, "environment": env}
 
@@ -327,12 +472,25 @@ TEST_OPS = {
         {"op": "switch.port.admin_state", "port": t["test_port"], "value": "down"},
         {"op": "switch.port.poe", "port": t["test_port"], "value": "disabled"},
         {"op": "switch.lldp", "port": t["test_port"], "value": "disabled"},
+        {"op": "switch.port.description", "port": t["test_port"], "value": "INM certification"},
+        {"op": "switch.port.stp_bpdu_guard", "port": t["test_port"], "value": "enabled"},
+        {"op": "switch.port.storm_control", "port": t["test_port"], "broadcast_kbps": 1000, "multicast_kbps": 2000},
+        {"op": "switch.port.qos_trust", "port": t["test_port"], "value": "dscp"},
+        {"op": "switch.system.ntp", "value": t.get("test_ntp", "192.0.2.123")},
+        {"op": "switch.system.dns", "value": [t.get("test_dns", "192.0.2.53")]},
+        {"op": "switch.system.syslog", "value": t.get("test_syslog", "192.0.2.14"), "severity": "warning"},
     ] + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
     "access_point": lambda t: [
         {"op": "ap.client_match", "value": "disabled"}, {"op": "ap.band_steering", "value": "balance-bands"},
         {"op": "ap.airtime_fairness", "value": "fair-access"}, {"op": "ap.radio.width", "value": 20},
         {"op": "ap.radio.tx_power", "min_dbm": 10, "max_dbm": 17},
         {"op": "ap.radio.channel", "band": "5", "value": t.get("test_channel", 44), "power": 14},
+        # throwaway lab secrets generated per run; never persisted (only the masked render is recorded)
+        {"op": "ap.ssid.create", "ssid": "INM-CERT-PSK", "vlan": t.get("test_vlan", 100), "security": "wpa2-psk-aes",
+         "_secret": "cert-" + __import__("secrets").token_hex(8)},
+        {"op": "ap.ssid.enterprise", "ssid": "INM-CERT-1X", "vlan": t.get("test_vlan", 100), "radius_name": "inm-cert",
+         "radius_ip": t.get("test_radius", "192.0.2.80"), "security": "wpa2-enterprise",
+         "_secret": "cert-" + __import__("secrets").token_hex(8)},
     ] + ([{"op": "ap.ssid.vlan", "ssid": t["test_ssid"], "value": t.get("test_vlan", 100)}] if t.get("test_ssid") else []),
 }
 
@@ -351,62 +509,76 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     spec = resolve(device.vendor, device.family, device.model)
     run_id = str(uuid.uuid4())
     results = []
-    writer.open()
+    holder = uuid.uuid4().hex
+    if not _lease(db, device.id, holder):
+        raise WriterError("DEVICE_BUSY", "A different change, certification or recovery owns this device.")
     try:
-        ident = writer.identity() if hasattr(writer, "identity") else {"model": device.model, "firmware": device.firmware}
-        base = writer.backup()
-        seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
-        results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
-        for op in TEST_OPS[device.family](test):
-            ev = {"op": op}
-            try:
-                cp = writer.checkpoint()
-                ev["rendered"] = writer.render(op)
-                if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans"):
-                    # prerequisite inside the same checkpoint: the VLAN must exist on the switch
-                    writer.apply({"op": "switch.vlan.define", "value": test.get("test_vlan", 4090)})
-                writer.apply(op)
-                ok, observed = writer.readback(op)
-                ev["readback"] = observed
-                writer.rollback(cp)
-                restored = _norm(writer.backup(), device.family) == _norm(base, device.family)
-                ev["rollback_restored"] = restored
-                passed = ok and restored
-            except WriterError as exc:
-                ev["error"] = f"{exc.category}: {str(exc)[:200]}"
-                passed = False
-                try:
-                    writer.rollback(cp)
-                except Exception:
-                    pass
-            results.append({"operation": op["op"], "passed": passed, "evidence": ev})
-        # full-configuration restore: write the captured baseline back and prove it reads back identically
-        ev = {}
+        writer.open()
         try:
-            writer.restore(base)
-            ev["matches_baseline"] = _norm(writer.backup(), device.family) == _norm(base, device.family)
-            results.append({"operation": "config.restore", "passed": ev["matches_baseline"], "evidence": ev})
-        except WriterError as exc:
-            results.append({"operation": "config.restore", "passed": False,
-                            "unsupported": exc.category == "UNSUPPORTED",
-                            "evidence": {"error": f"{exc.category}: {str(exc)[:200]}"}})
+            ident = writer.identity() if hasattr(writer, "identity") else {"model": device.model, "firmware": device.firmware}
+            base = writer.backup()
+            seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
+            results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
+            for op in TEST_OPS[device.family](test):
+                public_op = {k: v for k, v in op.items() if k != "_secret"}
+                ev = {"op": public_op}
+                try:
+                    cp = writer.checkpoint()
+                    ev["rendered"] = writer.render(public_op)     # masked: evidence never contains a secret
+                    if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans"):
+                        # prerequisite inside the same checkpoint: the VLAN must exist on the switch
+                        _renew_lease(db, device.id, holder)
+                        writer.apply({"op": "switch.vlan.define", "value": test.get("test_vlan", 4090)})
+                    _renew_lease(db, device.id, holder)
+                    writer.apply(op)
+                    ok, observed = writer.readback(public_op)
+                    ev["readback"] = observed
+                    _renew_lease(db, device.id, holder)
+                    writer.rollback(cp)
+                    restored = _norm(writer.backup(), device.family) == _norm(base, device.family)
+                    ev["rollback_restored"] = restored
+                    passed = ok and restored
+                except WriterError as exc:
+                    ev["error"] = f"{exc.category}: {str(exc)[:200]}"
+                    passed = False
+                    try:
+                        _renew_lease(db, device.id, holder)
+                        writer.rollback(cp)
+                    except Exception:
+                        pass
+                results.append({"operation": op["op"], "passed": passed, "evidence": ev})
+            # full-configuration restore: write the captured baseline back and prove it reads back identically
+            ev = {}
+            try:
+                _renew_lease(db, device.id, holder)
+                writer.restore(base)
+                ev["matches_baseline"] = _norm(writer.backup(), device.family) == _norm(base, device.family)
+                results.append({"operation": "config.restore", "passed": ev["matches_baseline"], "evidence": ev})
+            except WriterError as exc:
+                results.append({"operation": "config.restore", "passed": False,
+                                "unsupported": exc.category == "UNSUPPORTED",
+                                "evidence": {"error": f"{exc.category}: {str(exc)[:200]}"}})
+        finally:
+            writer.close()
+        for r in results:
+            row = db.scalar(select(DeviceCertification).where(
+                DeviceCertification.adapter_key == spec.key, DeviceCertification.model_family == model_family(device.model),
+                DeviceCertification.firmware_train == firmware_train(device.firmware),
+                DeviceCertification.operation == r["operation"], DeviceCertification.environment == env))
+            if row is None:
+                row = DeviceCertification(adapter_key=spec.key, model_family=model_family(device.model),
+                                          firmware_train=firmware_train(device.firmware), operation=r["operation"],
+                                          environment=env)
+                db.add(row)
+            # An operation the adapter deliberately does not implement is UNSUPPORTED, not a failed test.
+            row.status = "TESTED_PENDING_APPROVAL" if r["passed"] else ("UNSUPPORTED" if r.get("unsupported") else "FAILED")
+            row.run_id, row.device_id, row.evidence, row.tested_by = run_id, device.id, r["evidence"], actor
+            row.tested_at, row.approved_by, row.approved_at = datetime.now(timezone.utc), None, None
+        db.flush()
+        return {"run_id": run_id, "environment": env, "identity": ident, "adapter": spec.key,
+                "model_family": model_family(device.model), "firmware_train": firmware_train(device.firmware),
+                "results": results}
+
     finally:
-        writer.close()
-    for r in results:
-        row = db.scalar(select(DeviceCertification).where(
-            DeviceCertification.adapter_key == spec.key, DeviceCertification.model_family == model_family(device.model),
-            DeviceCertification.firmware_train == firmware_train(device.firmware),
-            DeviceCertification.operation == r["operation"], DeviceCertification.environment == env))
-        if row is None:
-            row = DeviceCertification(adapter_key=spec.key, model_family=model_family(device.model),
-                                      firmware_train=firmware_train(device.firmware), operation=r["operation"],
-                                      environment=env)
-            db.add(row)
-        # An operation the adapter deliberately does not implement is UNSUPPORTED, not a failed test.
-        row.status = "TESTED_PENDING_APPROVAL" if r["passed"] else ("UNSUPPORTED" if r.get("unsupported") else "FAILED")
-        row.run_id, row.device_id, row.evidence, row.tested_by = run_id, device.id, r["evidence"], actor
-        row.tested_at, row.approved_by, row.approved_at = datetime.now(timezone.utc), None, None
-    db.flush()
-    return {"run_id": run_id, "environment": env, "identity": ident, "adapter": spec.key,
-            "model_family": model_family(device.model), "firmware_train": firmware_train(device.firmware),
-            "results": results}
+        _release(db, device.id, holder)
+        db.commit()

@@ -13,8 +13,10 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from .alert_engine import apply as apply_alerts
 from typing import Callable
+
+from . import outbox
+from ..domain.events import EventEnvelope, new_event
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +40,10 @@ METRIC_FAMILY_OF = {
     "port_errors_delta": "interfaces", "link_resets_delta": "interfaces", "max_port_util_percent": "interfaces",
     "port_rx_bps": "interfaces", "port_tx_bps": "interfaces", "port_util_percent": "interfaces",
     "poe_power_w": "poe", "poe_ports_powered": "poe", "lldp_neighbors": "lldp",
+    # per-interface series (entity_type=port): one value per port per poll
+    "port_link_up": "interfaces", "port_rx_errors": "interfaces", "port_tx_errors": "interfaces",
+    "port_errors_delta": "interfaces", "port_link_resets_delta": "interfaces",
+    "port_poe_w": "poe",
 }
 # Older names used by earlier releases; translated so nothing is silently mis-filed.
 ALIASES = {"interfaces_up": "ports_up", "interfaces_total": "ports_total"}
@@ -46,7 +52,9 @@ UNITS = {"cpu_percent": "%", "memory_percent": "%", "util_5g_percent": "%", "uti
          "ports_up": "count", "ports_total": "count", "port_errors_total": "count", "port_errors_delta": "count",
          "link_resets_delta": "count", "max_port_util_percent": "%", "port_rx_bps": "bps", "port_tx_bps": "bps",
          "port_util_percent": "%", "poe_power_w": "W", "poe_ports_powered": "count", "lldp_neighbors": "count",
-         "temp_max_c": "C", "fans_failed": "count", "psu_failed": "count"}
+         "temp_max_c": "C", "fans_failed": "count", "psu_failed": "count",
+         "port_link_up": "bool", "port_rx_errors": "count", "port_tx_errors": "count", "port_poe_w": "W",
+         "port_link_resets_delta": "count"}
 
 
 class CollectionFailure(Exception):
@@ -98,7 +106,10 @@ def aruba_read_collector(device: InmDevice, plan: CollectionPlan, db: Session) -
                 w.close()
         except WriterError as exc:
             raise CollectionFailure({"AUTH_REJECTED": "AUTH_REJECTED", "REST_DISABLED": "REST_DISABLED",
-                                     "TARGET_NOT_ALLOWED": "TARGET_NOT_ALLOWED", "PRECONDITION": "AUTH_REJECTED"}
+                                     "TARGET_NOT_ALLOWED": "TARGET_NOT_ALLOWED", "PRECONDITION": "AUTH_REJECTED",
+                                     "RATE_LIMITED": "RATE_LIMITED", "UNSUPPORTED_API": "UNSUPPORTED_API",
+                                     "CONNECTION_LOST": "CONNECTION_LOST", "PARSE_ERROR": "PARSE_ERROR",
+                                     "DEVICE_REJECTED": "PARSE_ERROR"}
                                     .get(exc.category, "UNREACHABLE"), str(exc)) from None
         if (t["identity"].get("serial_number") or device.serial_number).casefold() != device.serial_number.casefold():
             raise CollectionFailure("PARSE_ERROR", "Switch answered with a different serial; refusing to record.")
@@ -175,21 +186,77 @@ def _port_snapshot(db: Session, device: InmDevice, result: dict, now: datetime, 
             for k, metric in (("rx_bps", "port_rx_bps"), ("tx_bps", "port_tx_bps"), ("util_percent", "port_util_percent")):
                 if r.get(k) is not None:
                     port_points.append((metric, float(r[k]), name))
+        prev_by = {q["name"]: q for q in snap.ports or []}
         for p in result["ports"]:
             p["rates"] = rates["ports"].get(p["name"])
+            q = prev_by.get(p["name"])
+            if q is None:
+                continue
+            cur_e = (p.get("rx_errors") or 0) + (p.get("tx_errors") or 0)
+            old_e = (q.get("rx_errors") or 0) + (q.get("tx_errors") or 0)
+            if cur_e >= old_e:                        # a counter reset yields no delta, never a negative one
+                port_points.append(("port_errors_delta", float(cur_e - old_e), p["name"]))
+            if isinstance(p.get("link_resets"), (int, float)) and isinstance(q.get("link_resets"), (int, float)) \
+                    and p["link_resets"] >= q["link_resets"]:
+                port_points.append(("port_link_resets_delta", float(p["link_resets"] - q["link_resets"]), p["name"]))
         for k in ("port_errors_delta", "link_resets_delta", "max_port_util_percent"):
             if rates[k] is not None:
                 extra[k] = float(rates[k])
     else:
         snap = DevicePortSnapshot(device_id=device.id, ports=[], hardware={}, environment="")
         db.add(snap)
+    for p in result["ports"]:          # per-interface state every poll (independent series per port, E2E-01/02)
+        port_points.append(("port_link_up", 1.0 if p.get("link") == "up" else 0.0, p["name"]))
+        for k, metric in (("rx_errors", "port_rx_errors"), ("tx_errors", "port_tx_errors"), ("poe_w", "port_poe_w")):
+            if isinstance(p.get(k), (int, float)):
+                port_points.append((metric, float(p[k]), p["name"]))
     snap.collected_at, snap.ports, snap.hardware = now, result["ports"], result.get("hardware") or {}
     snap.environment = "EMULATED" if device.source_type == "DEMO" else "HARDWARE"
     return extra
 
 
+def _event_id(run_id: str, kind: str) -> str:
+    """Deterministic: re-collecting the same run never creates a second logical event."""
+    return str(uuid.uuid5(NS, f"{run_id}:{kind}"))
+
+
+def _telemetry_event(device: InmDevice, plan: CollectionPlan, runs: list, pts: list, metrics: dict, result: dict,
+                     now: datetime, corr: str) -> EventEnvelope:
+    from .telemetry.timescale import identity
+    ev_id = _event_id(runs[0].id, "telemetry")
+    points = []
+    for p in pts:
+        et, ei = identity(p)
+        points.append({"device_id": p.device_id, "metric": p.metric_name, "value": p.value, "unit": p.unit,
+                       "observed_at": p.observed_at.isoformat(), "collection_method": p.collection_method,
+                       "quality": p.quality.value, "sample_period_s": p.sample_period_s, "tags": p.tags,
+                       "entity_type": et, "entity_id": ei})
+    alert_values = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+    alert_values["consecutive_failures"] = 0
+    return new_event("device.telemetry.observed", source_service="collector", actor_id="scheduled-collector",
+                     source_type="DEMO" if device.source_type == "DEMO" else "REAL", event_id=ev_id,
+                     correlation_id=corr, occurred_at=now, site_id=device.site_id, device_id=device.id,
+                     adapter_version=device.adapter,
+                     payload={"collector": "scheduled", "plan_id": plan.id, "run_ids": [r.id for r in runs],
+                              "families": sorted({r.metric_family for r in runs}), "points": points,
+                              "expected_points": len(points), "alert_values": alert_values,
+                              "firmware": result.get("firmware"),
+                              "summary": f"{device.hostname or device.serial_number}: {len(points)} point(s)"})
+
+
+def _failure_event(device: InmDevice, plan: CollectionPlan, runs: list, category: str, now: datetime, corr: str,
+                   attempt: int) -> EventEnvelope:
+    return new_event("device.poll.failed", source_service="collector", actor_id="scheduled-collector",
+                     source_type="DEMO" if device.source_type == "DEMO" else "REAL",
+                     event_id=_event_id(f"{runs[0].id}:{attempt}", "failure"), correlation_id=corr, occurred_at=now,
+                     site_id=device.site_id, device_id=device.id, data_quality="UNAVAILABLE",
+                     payload={"collector": "scheduled", "plan_id": plan.id, "run_ids": [r.id for r in runs],
+                              "failure_category": category, "consecutive_failures": plan.consecutive_failures,
+                              "summary": f"{device.hostname or device.serial_number}: poll failed ({category})"})
+
+
 def run_due(db: Session, *, now: datetime | None = None, collector: Collector | None = None,
-            store=None, worker: str = "worker", plan_ids: list[str] | None = None) -> dict:
+            store=None, worker: str = "worker", plan_ids: list[str] | None = None, manual: bool = False) -> dict:
     """Execute every due ACTIVE plan once. Returns a summary. Safe to call concurrently."""
     now = now or datetime.now(timezone.utc)
     collector = collector or aruba_read_collector
@@ -198,6 +265,8 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
         q = q.where(CollectionPlan.id.in_(plan_ids))
     summary = {"evaluated": 0, "succeeded": 0, "retry": 0, "dlq": 0, "skipped_duplicate": 0,
                "skipped_window": 0, "points_written": 0}
+    queued: list[str] = []
+    collected: list[str] = []
     for plan in list(db.scalars(q)):
         if plan_ids is None and not C.due(now, plan.next_due_at):
             continue
@@ -208,10 +277,13 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
         if device is None:
             continue
         summary["evaluated"] += 1
-        window = C.scheduled_window(now, plan.interval_seconds)
+        # an operator's explicit "poll now" is its own run; scheduled polls dedupe per interval window
+        window = int(now.timestamp()) if manual else C.scheduled_window(now, plan.interval_seconds)
         runs: list[CollectionRun] = []
+        nonce = uuid.uuid4().hex if manual else ""       # every explicit "poll now" is a distinct run
         for fam in plan.metric_families:
-            key = C.dedupe_key(device.id, fam, window)
+            key = C.dedupe_key(device.id, fam, window) if not manual else \
+                C.dedupe_key(device.id, f"{fam}:manual:{nonce}", window)
             existing = db.scalar(select(CollectionRun).where(CollectionRun.dedupe_key == key))
             if existing is not None:
                 retry_at = existing.retry_at
@@ -236,6 +308,7 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
             runs.append(run)
         if not runs:
             continue
+        corr = runs[0].id            # one correlation id per poll: run -> event -> points -> log -> alerts -> UI
         try:
             result = (demo_collector if device.source_type == "DEMO" else collector)(device, plan, db)
         except CollectionFailure as exc:
@@ -247,41 +320,53 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
                 r.failure_category = exc.category
                 r.finished_at = now
                 r.retry_at = None if action == "DLQ" else now + timedelta(seconds=delay)
+                r.correlation_id = corr
             plan.last_failure_at, plan.last_failure_category = now, exc.category
             plan.consecutive_failures += 1
             plan.next_due_at = (now + timedelta(seconds=delay)) if action == "RETRY" \
                 else C.next_due_after(now, plan.interval_seconds)
             summary["dlq" if action == "DLQ" else "retry"] += 1
-            apply_alerts(db, device, {"consecutive_failures": plan.consecutive_failures}, now=now)
-            log.info("collection %s device=%s category=%s action=%s", plan.id, device.id, exc.category, action)
+            ev = _failure_event(device, plan, runs, exc.category, now, corr, attempt)
+            outbox.enqueue(db, ev)
+            for r in runs:
+                r.event_id = ev.event_id
+            queued.append(ev.event_id)
+            log.info("collection %s device=%s category=%s action=%s corr=%s", plan.id, device.id, exc.category,
+                     action, corr)
             continue
         families = {r.metric_family for r in runs}
         metrics = dict(result.get("metrics") or {})
-        port_points = []
+        port_points: list = []
         if result.get("ports") is not None:
             metrics.update(_port_snapshot(db, device, result, now, port_points))
         pts = _points(device, runs[0].id, metrics, families, now, plan.interval_seconds)
-        if "interfaces" in families:
+        if "interfaces" in families or "poe" in families:
             pts += [TelemetryPoint(device_id=device.id, metric_name=n, observed_at=now, value=v, unit=UNITS[n],
-                                   collection_method=pts[0].collection_method if pts else "ARUBA_REST_READ",
+                                   collection_method=pts[0].collection_method if pts else
+                                   ("DEMO_SYNTHETIC" if device.source_type == "DEMO" else "ARUBA_REST_READ"),
                                    quality=DataQuality.OBSERVED,
                                    source_type=SourceType.DEMO if device.source_type == "DEMO" else SourceType.REAL,
-                                   source_event_id=runs[0].id, site_id=device.site_id, sample_period_s=plan.interval_seconds,
-                                   tags={"port": port}) for n, v, port in port_points]
-        written = store.write_points(pts) if (store is not None and pts) else 0
+                                   source_event_id=runs[0].id, site_id=device.site_id,
+                                   sample_period_s=plan.interval_seconds, tags={"port": port},
+                                   entity_type="port", entity_id=port)
+                    for n, v, port in port_points if METRIC_FAMILY_OF.get(n) in families]
+        ev = _telemetry_event(device, plan, runs, pts, metrics, result, now, corr)
+        outbox.enqueue(db, ev)
         for r in runs:
-            r.state, r.finished_at, r.failure_category, r.retry_at = "SUCCEEDED", now, None, None
-            r.points_written = sum(1 for p in pts if METRIC_FAMILY_OF.get(p.metric_name, "system") == r.metric_family)
-        plan.last_success_at, plan.consecutive_failures = now, 0
+            # COLLECTED = read from the device, event durably queued; SUCCEEDED only after ingest verified storage
+            r.state, r.finished_at, r.failure_category, r.retry_at = "COLLECTED", now, None, None
+            r.event_id, r.correlation_id = ev.event_id, corr
+            r.expected_points = sum(1 for p in pts if METRIC_FAMILY_OF.get(p.metric_name, "system") == r.metric_family)
         plan.next_due_at = C.next_due_after(now, plan.interval_seconds)
-        device.last_observed_at = now
-        if result.get("firmware") and device.firmware and result["firmware"] != device.firmware:
-            from .phase_services import pause_enrollments
-            pause_enrollments(db, device.id, "FIRMWARE_CHANGED", actor=worker)
-        if result.get("firmware"):
-            device.firmware = result["firmware"]
-        apply_alerts(db, device, dict(metrics, consecutive_failures=0), now=now)
-        summary["succeeded"] += 1
-        summary["points_written"] += written
+        queued.append(ev.event_id)
+        collected.extend(r.id for r in runs)
+    db.flush()
+    if queued and outbox.mode() == "inprocess":
+        outbox.relay(db, now=now, event_ids=queued)
+    done = list(db.scalars(select(CollectionRun).where(CollectionRun.id.in_(collected)))) if collected else []
+    summary["succeeded"] = len({r.plan_id for r in done if r.state == "SUCCEEDED"})
+    summary["awaiting_persistence"] = len({r.plan_id for r in done if r.state == "COLLECTED"})
+    summary["points_written"] = sum(r.points_written or 0 for r in done if r.state == "SUCCEEDED")
+    summary["events_queued"] = len(queued)
     db.flush()
     return summary

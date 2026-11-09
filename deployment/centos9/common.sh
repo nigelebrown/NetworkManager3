@@ -8,6 +8,7 @@ ETC="${INM_ETC_DIR:-/etc/inm}"
 STATE="${INM_STATE_DIR:-/var/lib/inm}"
 LOG_DIR="${INM_LOG_DIR:-/var/log/inm}"
 ENV_FILE="$ETC/inm.env"
+# shellcheck disable=SC2034  # used by backup.sh / install.sh, which source this file
 BACKUP_DIR="${INM_BACKUP_DIR:-$STATE/backups}"
 PROJECT=inm
 

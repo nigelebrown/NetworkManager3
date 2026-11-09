@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import json
+import re
+import secrets
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -17,9 +19,13 @@ from .aruba_cx import API, ArubaCxWriter
 from .aruba_instant import ArubaInstantWriter
 
 
+IFACE_WRITABLE = {"admin", "vlan_mode", "vlan_tag", "vlan_trunks", "description", "other_config", "stp_config",
+                  "rate_limits", "rate_limits_units", "qos_trust"}
+
+
 class CxEmulator:
     """In-memory AOS-CX: vlans, interfaces, poe, lags, fullconfigs and checkpoints. Failure injection:
-    fail_path (substring -> HTTP 500), drop_after (connection drops after N writes), lie (readback ignores writes)."""
+    fail_path (substring -> HTTP 500 on writes), fail_read (same on reads), drop_after (connection drops after N writes), lie (readback ignores writes)."""
 
     def __init__(self, *, model="6200F 48G", firmware="ML.10.14.1020", ports=48):
         self.state = {
@@ -31,6 +37,10 @@ class CxEmulator:
                            "temp_sensors": {"1/1-CPU": {"name": "CPU", "temperature": 41000, "status": "normal"}}}},
             "central": None,
             "vlans": {"1": {"id": 1, "name": "DEFAULT_VLAN_1"}},
+            "ntp_associations": {},
+            "syslog_remotes": {},
+            "vrfs": {"mgmt": {"name": "mgmt", "dns_name_servers": {}, "dns_domain_name": None},
+                     "default": {"name": "default", "dns_name_servers": {}, "dns_domain_name": None}},
             "interfaces": {f"1/1/{i}": {"name": f"1/1/{i}", "admin": "up", "vlan_mode": "access",
                                         "vlan_tag": f"{API}/system/vlans/1", "vlan_trunks": [],
                                         "other_config": {"lldp_enable_dir": "rxtx"},
@@ -49,12 +59,85 @@ class CxEmulator:
         self.startup: dict | None = None
         self.writes = 0
         self.fail_path: str | None = None
+        self.fail_read: str | None = None        # substring -> HTTP 500 on GET (failed snapshot/telemetry read)
         self.drop_after: int | None = None
         self.lie = False
         self.password = "emulator-password"
+        self.username = "admin"
+        # strict protocol state (E2E-04/05/09)
+        m = re.search(r"(\d+)\.(\d+)", firmware or "")
+        self.train = (int(m.group(1)), int(m.group(2))) if m else (10, 14)
+        self.sessions: dict[str, dict] = {}
+        self.violations: list[str] = []        # every protocol rule a client broke
+        self.logins = 0
+
+    def api_versions(self) -> list[str]:
+        """REST versions this firmware serves: v10.04, v10.08 and v10.09 … v10.<train> (as on AOS-CX)."""
+        major, minor = self.train
+        vs = ["v10.04", "v10.08"] + [f"v10.{i:02d}" for i in range(9, minor + 1)]
+        return vs if major == 10 else ["v10.04"]
+
+    def csrf_supported(self) -> bool:
+        return self.train >= (10, 9)
+
+    def expire_sessions(self) -> None:
+        """Simulate idle-timeout / reboot: every existing session cookie becomes invalid."""
+        self.sessions.clear()
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
+
+    def _auth(self, req: httpx.Request, q: dict, p: str) -> httpx.Response | None:
+        """Strict AOS-CX session rules. Returns an error response, or None if the request may proceed."""
+        if p == "/login":
+            if req.method != "POST":
+                return httpx.Response(405)
+            if "password" in q or "username" in q:
+                self.violations.append("credentials-in-url")
+                return httpx.Response(400, text="Credentials must be sent in the request body.")
+            # AOS-CX login uses application/x-www-form-urlencoded form data in the BODY.
+            # Reject URL-query credentials and unsupported bodies; verify exact parsed form values.
+            from urllib.parse import parse_qs
+            ctype = req.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if ctype != "application/x-www-form-urlencoded":
+                self.violations.append("login-invalid-form-body")
+                return httpx.Response(415, text="Expected form-encoded request body")
+            try:
+                fields = parse_qs(req.content.decode("utf-8"), strict_parsing=True)
+            except (ValueError, UnicodeDecodeError):
+                return httpx.Response(400, text="Malformed login request")
+            form = {k: v[0] for k, v in fields.items() if len(v) == 1}
+            if form.get("username") != self.username or form.get("password") != self.password:
+                return httpx.Response(401, text="Login failed")
+            if len(self.sessions) >= 48:
+                return httpx.Response(429, text="Session limit reached")
+            sid = secrets.token_hex(12)
+            token = secrets.token_hex(16) if (self.csrf_supported() and
+                                              req.headers.get("x-use-csrf-token", "").lower() == "true") else None
+            self.sessions[sid] = {"csrf": token}
+            self.logins += 1
+            headers = {"set-cookie": f"id={sid}; Path=/; Secure; HttpOnly"}
+            if token:
+                headers["x-csrf-token"] = token
+            return httpx.Response(200, headers=headers)
+        cookie = req.headers.get("cookie", "")
+        m = re.search(r"(?:^|;\s*)id=([0-9a-f]+)", cookie)
+        sess = self.sessions.get(m.group(1)) if m else None
+        if sess is None:
+            # A stale cookie after expiry is normal (the switch answers 401 and the client logs in again);
+            # sending no cookie at all is a client protocol violation.
+            if m is None:
+                self.violations.append(f"no-session:{p}")
+            else:
+                self.expired_hits = getattr(self, "expired_hits", 0) + 1
+            return httpx.Response(401, text="Unauthorized")
+        if sess["csrf"] and req.headers.get("x-csrf-token") != sess["csrf"]:
+            self.violations.append(f"csrf-missing:{p}")
+            return httpx.Response(403, text="CSRF token missing or invalid")
+        if p == "/logout":
+            self.sessions.pop(m.group(1), None)
+            return httpx.Response(200)
+        return None
 
     def _running(self):
         return {k: v for k, v in self.state.items()}
@@ -63,19 +146,27 @@ class CxEmulator:
         u = urlparse(str(req.url))
         path = unquote(u.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        if not path.startswith(API):
-            return httpx.Response(404)
-        p = path[len(API):]
+        if path in ("/rest", "/rest/"):
+            vs = self.api_versions()
+            return httpx.Response(200, json={**{v: {"version": v, "prefix": f"/rest/{v}"} for v in vs},
+                                             "latest": {"version": vs[-1], "prefix": f"/rest/{vs[-1]}"}})
+        mv = re.match(r"^/rest/(v\d+\.\d+)(/.*)$", path)
+        if not mv or mv.group(1) not in self.api_versions():
+            return httpx.Response(404, text="Unknown REST version")
+        p = mv.group(2)
         m = req.method
-        if p == "/login":
-            return httpx.Response(200 if q.get("password") == self.password else 401)
-        if p == "/logout":
+        denied = self._auth(req, q, p)
+        if denied is not None:
+            return denied
+        if p in ("/login", "/logout"):
             return httpx.Response(200)
         if m in ("POST", "PUT", "PATCH", "DELETE"):
             if self.drop_after is not None and self.writes >= self.drop_after and not p.startswith("/fullconfigs"):
                 raise httpx.ConnectError("emulated link loss")
             if self.fail_path and self.fail_path in p:
                 return httpx.Response(500, text="emulated device error")
+        elif self.fail_read and self.fail_read in p:
+            return httpx.Response(500, text="emulated device read error")
         body = json.loads(req.content) if req.content else {}
         if p == "/system":
             return httpx.Response(200, json=self.state["system"])
@@ -113,6 +204,38 @@ class CxEmulator:
                 if name == "running-config":
                     self.state = copy.deepcopy(body)
                     return httpx.Response(200)
+        for coll, keyf in (("ntp_associations", "address"), ("syslog_remotes", "remote_host")):
+            if p == f"/system/{coll}" and m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(self.state[coll]))
+            if p == f"/system/{coll}" and m == "POST":
+                self.writes += 1
+                if not isinstance(body.get(keyf), str) or "vrf" not in body:
+                    return httpx.Response(400, text=f"{keyf} and vrf are required")
+                k = f"{body[keyf]},{body['vrf'].rsplit('/', 1)[-1]}"
+                if k in self.state[coll]:
+                    return httpx.Response(400, text="Entry exists")
+                if not self.lie:
+                    self.state[coll][k] = dict(body)
+                return httpx.Response(201)
+        if p.startswith("/system/vrfs/"):
+            vrf = self.state["vrfs"].get(p.rsplit("/", 1)[-1])
+            if vrf is None:
+                return httpx.Response(404)
+            if m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(vrf))
+            if m == "PATCH":
+                self.writes += 1
+                bad = set(body) - {"dns_name_servers", "dns_domain_name"}
+                if bad:
+                    return httpx.Response(400, text=f"Unknown VRF attribute(s): {sorted(bad)}")
+                if not self.lie:
+                    vrf.update(copy.deepcopy(body))
+                return httpx.Response(200)
+        if p == "/system/vlans" and m == "GET":
+            # depth>=1 returns objects, depth 0 returns URIs (as AOS-CX does)
+            if q.get("depth", "0") != "0":
+                return httpx.Response(200, json={k: copy.deepcopy(v) for k, v in self.state["vlans"].items()})
+            return httpx.Response(200, json={k: f"{path}/{k}" for k in self.state["vlans"]})
         if p == "/system/vlans" and m == "POST":
             self.writes += 1
             vid = str(body["id"])
@@ -145,6 +268,12 @@ class CxEmulator:
                 return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items() if k != "poe"})
             if m == "PATCH":
                 self.writes += 1
+                if not poe:
+                    unknown = set(body) - IFACE_WRITABLE
+                    if unknown:          # strict schema: an unknown attribute is a 400, as on AOS-CX
+                        return httpx.Response(400, text=f"Unknown or read-only attribute(s): {sorted(unknown)}")
+                    if body.get("qos_trust") not in (None, "none", "cos", "dscp"):
+                        return httpx.Response(400, text="qos_trust must be none, cos or dscp")
                 if "vlan_tag" in body and body["vlan_tag"].rsplit("/", 1)[-1] not in self.state["vlans"]:
                     return httpx.Response(400, text="VLAN does not exist")
                 if not self.lie:
@@ -187,7 +316,10 @@ wlan ssid-profile Corp-WiFi
 class InstantEmulator:
     """In-memory Instant VC: running-config text, ARM block edits via SSH lines, SSID via REST, per-AP radios."""
 
-    def __init__(self):
+    def __init__(self, *, model: str = "AP-505", firmware: str = "8.10.0.0"):
+        # Identity only: radio chain counts and per-model RF limits are NOT modelled (AP-505 vs AP-535 differ
+        # on real hardware; those differences can only be certified on hardware).
+        self.model, self.firmware = model, firmware
         self.text = INSTANT_BASE
         self.radios = [{"band": "5", "channel": "36", "tx_power_dbm": 15}, {"band": "2.4", "channel": "1", "tx_power_dbm": 12}]
         self.fail_on: str | None = None
@@ -213,25 +345,22 @@ class InstantEmulator:
                 if emu.lie:
                     return "Success"
                 prof = p["ssid-profile"]
-                lines = emu.text.split("\n")
-                out, i, found = [], 0, False
-                while i < len(lines):
-                    ln = lines[i]
-                    out.append(ln)
-                    if ln.strip() == f"wlan ssid-profile {prof}":
-                        found = True
-                        i += 1
-                        while i < len(lines) and lines[i].startswith(" "):
-                            if not (lines[i].strip().startswith("vlan ") and "vlan" in p):
-                                out.append(lines[i])
-                            i += 1
-                        if "vlan" in p:
-                            out.append(f" vlan {p['vlan']['value']}")
-                        continue
-                    i += 1
-                if not found:
-                    out += [f"wlan ssid-profile {prof}", f" essid {prof}"] + ([f" vlan {p['vlan']['value']}"] if "vlan" in p else [])
-                emu.text = "\n".join(out)
+                sets = []
+                if "essid" in p:
+                    sets.append(f"essid {p['essid']['value']}")
+                if "vlan" in p:
+                    sets.append(f"vlan {p['vlan']['value']}")
+                if "opmode" in p:
+                    sets.append(f"opmode {p['opmode']}")
+                if "wpa-passphrase" in p:
+                    if p["wpa-passphrase"] == "********":
+                        raise ValueError("masked secret reached the device")
+                    sets.append("wpa-passphrase " + ("%064x" % abs(hash(p["wpa-passphrase"])))[:32])
+                if p.get("type"):
+                    sets.append(f"type {p['type']}")
+                if p.get("enable") == "yes":
+                    sets.append("enable")
+                emu._cli([f"wlan ssid-profile {prof}", *sets, "exit"])
                 return "Success"
 
         self.client = _Client()
@@ -243,28 +372,70 @@ class InstantEmulator:
         for ln in lines:
             if self.fail_on and self.fail_on in ln:
                 raise ArubaSshError(f"The AP rejected '{ln}': % invalid input")
+            if " key ********" in f" {ln}" or ln.strip() == "key ********":
+                raise ArubaSshError("masked secret reached the device")
+            if ln.strip().startswith("opmode") and "80" in ln:
+                raise ArubaSshError("% invalid opmode")
         if self.lie:
             return [{"command": ln, "ok": True} for ln in lines]
-        for ln in lines:
+        self._cli(lines)
+        return [{"command": ln, "ok": True} for ln in lines]
+
+    def _cli(self, lines: list[str]) -> None:
+        """Minimal Instant CLI: context blocks (arm, wlan ssid-profile X, wlan auth-server X), 'no <block>',
+        'no <key>' / '<key> <value>' inside a block, 'exit'; top-level a-channel/g-channel per-AP commands."""
+        ctx = None
+        for raw in lines:
+            ln = raw.strip()
+            if ln in ("configure terminal", "end", "commit apply", ""):
+                continue
             if ln.startswith(("a-channel", "g-channel")):
                 _, ch, pw_ = ln.split()
                 r = next(x for x in self.radios if x["band"] == ("5" if ln[0] == "a" else "2.4"))
                 r["channel"], r["tx_power_dbm"] = ch, int(pw_)
-            elif ln in ("configure terminal", "end", "commit apply", "arm", "exit"):
                 continue
-            else:
-                self._arm_set(ln)
-        return [{"command": ln, "ok": True} for ln in lines]
+            if ln.startswith("no wlan "):
+                self._drop_block(ln[3:])
+                continue
+            if ln == "arm" or ln.startswith(("wlan ssid-profile ", "wlan auth-server ")):
+                ctx = ln
+                self._ensure_block(ctx)
+                continue
+            if ln == "exit":
+                ctx = None
+                continue
+            if ctx is None:
+                continue
+            if ctx.startswith("wlan auth-server") and ln.startswith("key "):
+                ln = "key " + ("%064x" % abs(hash(ln[4:])))[:32]      # stored encrypted, as on Instant
+            self._set_in_block(ctx, ln)
 
-    def _arm_set(self, ln: str):
-        key = ln.replace("no ", "") if ln.startswith("no ") else ln.split()[0]
+    def _block_range(self, header: str):
         lines = self.text.split("\n")
-        start = lines.index("arm")
+        if header not in lines:
+            return lines, None, None
+        start = lines.index(header)
         end = start + 1
         while end < len(lines) and lines[end].startswith(" "):
             end += 1
-        block = [x for x in lines[start + 1:end] if x.strip().replace("no ", "").split()[0] != key]
-        block.append(" " + ln)
+        return lines, start, end
+
+    def _ensure_block(self, header: str) -> None:
+        lines, start, _ = self._block_range(header)
+        if start is None:
+            self.text = "\n".join([x for x in lines if x != ""] + [header]) + "\n"
+
+    def _drop_block(self, header: str) -> None:
+        lines, start, end = self._block_range(header)
+        if start is not None:
+            self.text = "\n".join(lines[:start] + lines[end:])
+
+    def _set_in_block(self, header: str, ln: str) -> None:
+        lines, start, end = self._block_range(header)
+        key = ln[3:].split()[0] if ln.startswith("no ") else ln.split()[0]
+        block = [x for x in lines[start + 1:end] if x.strip().replace("no ", "", 1).split()[0] != key]
+        if not (ln.startswith("no ") and header != "arm"):
+            block.append(" " + ln)
         self.text = "\n".join(lines[:start + 1] + block + lines[end:])
 
     def writer(self) -> ArubaInstantWriter:

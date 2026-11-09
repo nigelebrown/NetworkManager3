@@ -7,6 +7,8 @@ only explicit RFC1918 allowlisted /24-/32 management targets.
 """
 from __future__ import annotations
 
+from ..infrastructure.posture import read_only, write_posture
+
 import ipaddress
 import json
 from datetime import datetime, timezone
@@ -187,13 +189,23 @@ def test_credential(profile_id: str, body: TargetCheck, request: Request,
           request=request)
     return {"status": "SUCCESS", "profile_id": profile.id, "target": str(body.management_ip),
             "hostname": observation.get("hostname"), "model": observation.get("model"),
-            "device_writes": "LOCKED"}
+            **read_only()}
 
 
 class DiscoveryRequest(BaseModel):
     credential_id: str
     scope: str = Field(min_length=1, max_length=48)
     site_name: str = Field(min_length=1, max_length=100)
+    rate_per_s: int = Field(default=16, ge=1, le=64)
+    workflow_id: str | None = None
+
+
+def _job_out(job, **extra) -> dict:
+    from ..infrastructure import discovery_jobs as DJ
+    return {"id": job.id, "status": job.status, "results": job.results or [], "targets": len(job.targets or []),
+            "site_name": job.site_name, "credential_id": job.credential_id, "scope": job.scope,
+            "workflow_id": job.workflow_id, "progress": DJ.progress(job) if job.targets else None,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None, **read_only(), **extra}
 
 
 def _targets(scope: str) -> list[ipaddress.IPv4Address]:
@@ -218,20 +230,19 @@ def discover_devices(body: DiscoveryRequest, request: Request,
     profile = _profile(db, body.credential_id)
     addresses = _targets(body.scope)
     if len(addresses) > 8:
-        job = OnboardingDiscovery(credential_id=profile.id, site_name=body.site_name.strip(), scope=body.scope,
-                                  device_family=profile.device_family, results=[], created_by=admin.username,
-                                  status="SCANNING")
-        db.add(job)
-        db.flush()
-        audit(db, "onboarding_discovery_started", username=admin.username, target=job.id,
-              detail=f"profile={profile.id} scope={body.scope} targets={len(addresses)} (background, read-only)",
-              request=request)
+        # Durable job (E2E-07): the row holds the work list and cursor; a worker (or the standalone scheduler)
+        # leases it, survives API/worker restarts and honours pause/cancel. No in-process threads.
+        from ..infrastructure import discovery_jobs as DJ
+        job, created = DJ.create(db, credential_id=profile.id, family=profile.device_family, scope=body.scope,
+                                 site_name=body.site_name.strip(), targets=[str(a) for a in addresses],
+                                 created_by=admin.username, rate_per_s=body.rate_per_s,
+                                 workflow_id=body.workflow_id)
+        if created:
+            audit(db, "onboarding_discovery_queued", username=admin.username, target=job.id,
+                  detail=f"profile={profile.id} scope={body.scope} targets={len(addresses)} "
+                         f"rate={job.rate_per_s}/s (durable job, read-only)", request=request)
         db.commit()
-        import threading
-        threading.Thread(target=_background_scan, args=(job.id, profile.id, [str(a) for a in addresses]),
-                         daemon=True, name=f"discovery-{job.id[:8]}").start()
-        return {"id": job.id, "status": "SCANNING", "results": [], "targets": len(addresses),
-                "site_name": job.site_name, "credential_id": job.credential_id, "device_writes": "LOCKED"}
+        return _job_out(job, duplicate_of_active=not created)
     found: list[dict] = []
     for address in addresses:
         try:
@@ -268,7 +279,7 @@ def discover_devices(body: DiscoveryRequest, request: Request,
           request=request)
     return {"id": job.id, "status": job.status, "results": job.results,
             "site_name": job.site_name, "credential_id": job.credential_id,
-            "device_writes": "LOCKED"}
+            **read_only()}
 
 
 def _tcp_open(ip: str, port: int, timeout: float = 1.0) -> bool:
@@ -307,41 +318,32 @@ def _identify(profile_id: str, ip: str) -> dict:
                 "result_note": "API identity read; existing device" if existing else "API identity read"}
 
 
-def _background_scan(job_id: str, profile_id: str, addresses: list[str]) -> None:
-    from concurrent.futures import ThreadPoolExecutor
-    from ..database.session import session_scope
-    results: list[dict] = []
-    try:
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            for i, r in enumerate(pool.map(lambda a: _identify(profile_id, a), addresses), 1):
-                results.append(r)
-                if i % 16 == 0 or i == len(addresses):
-                    with session_scope() as db:
-                        job = db.get(OnboardingDiscovery, job_id)
-                        job.results = [x for x in results if x["status"] != "NO_RESPONSE"]
-                        job.status = "SCANNING" if i < len(addresses) else "SCANNED"
-        with session_scope() as db:
-            audit(db, "onboarding_discovery_finished", username="discovery-worker", target=job_id,
-                  detail=f"targets={len(addresses)} found={sum(x['status'] == 'FOUND' for x in results)} "
-                         f"no_response={sum(x['status'] == 'NO_RESPONSE' for x in results)}; read-only")
-    except Exception as exc:  # report, never leave the job spinning
-        with session_scope() as db:
-            job = db.get(OnboardingDiscovery, job_id)
-            if job is not None:
-                job.status = "FAILED"
-                job.results = results + [{"status": "FAILED", "management_ip": "-", "enrollable": False,
-                                          "result_note": f"Scan aborted: {type(exc).__name__}"}]
-
-
 @router.get("/discoveries/{job_id}")
 def get_discovery(job_id: str, db: Session = Depends(get_db),
                   admin: User = Depends(require_role("admin"))):
     job = db.get(OnboardingDiscovery, job_id)
     if job is None:
         raise HTTPException(404, "Discovery not found")
-    return {"id": job.id, "status": job.status, "results": job.results,
-            "site_name": job.site_name, "credential_id": job.credential_id,
-            "device_writes": "LOCKED"}
+    return _job_out(job)
+
+
+@router.post("/discoveries/{job_id}/control/{action}")
+def control_discovery(job_id: str, action: str, request: Request, db: Session = Depends(get_db),
+                      admin: User = Depends(require_role("admin"))):
+    """pause | resume | cancel | retry a durable discovery job."""
+    from ..infrastructure import discovery_jobs as DJ
+    job = db.get(OnboardingDiscovery, job_id)
+    if job is None:
+        raise HTTPException(404, "Discovery not found")
+    if not job.targets:
+        raise HTTPException(409, "Small synchronous discoveries cannot be controlled; run a new discovery.")
+    try:
+        DJ.set_state(db, job, action)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    audit(db, f"onboarding_discovery_{action}", username=admin.username, target=job.id,
+          detail=f"status={job.status}", request=request)
+    return _job_out(job)
 
 
 class RegisterDiscovered(BaseModel):
@@ -390,46 +392,38 @@ def register_discovered(job_id: str, body: RegisterDiscovered, request: Request,
     audit(db, "onboarding_registered", username=admin.username, target=job.id,
           detail=f"registered={len(registered)}, shared_credential={job.credential_id}; device writes locked",
           request=request)
-    return {"registered": registered, "device_writes": "LOCKED", "next_step": "CAPTURE_BASELINE"}
+    return {"registered": registered, **read_only(), "next_step": "CAPTURE_BASELINE"}
 
 
 def _cx_baseline(host: str, username: str, password: str) -> dict:
-    # AOS-CX 10.14: only explicit read-only GETs; no running-config text, no secret fields.
-    root = "/rest/v10.14"
-    with httpx.Client(base_url=f"https://{host}", timeout=8.0,
-                      verify=get_settings().tls_verify_arg,
-                      trust_env=False, follow_redirects=False) as client:
-        client.post(root + "/login",
-                    params={"username": username, "password": password}).raise_for_status()
-        try:
-            vlan = client.get(root + "/system/vlans", params={"depth": 1})
-            vlan.raise_for_status()
-            ports = client.get(root + "/system/interfaces", params={"depth": 1})
-            ports.raise_for_status()
-            vdata, pdata = vlan.json(), ports.json()
-            # Whitelist only configuration-relevant, non-secret fields; no raw
-            # device responses, credentials, ACLs or interface descriptions.
-            vlans = []
-            for name, item in (vdata.items() if isinstance(vdata, dict) else []):
-                if isinstance(item, dict):
-                    vid = item.get("id")
-                    if isinstance(vid, int) and 1 <= vid <= 4094:
-                        vlans.append({"id": vid, "name": str(item.get("name") or "")[:64]})
-                elif str(name).isdigit() and 1 <= int(name) <= 4094:
-                    vlans.append({"id": int(name), "name": ""})
-            interfaces = []
-            for name, item in (pdata.items() if isinstance(pdata, dict) else []):
-                if len(interfaces) >= 128:
-                    break
-                if isinstance(item, dict) and len(str(name)) <= 40:
-                    interfaces.append({"name": str(name), "admin_state": str(item.get("admin_state") or "unknown")[:24],
-                                       "oper_state": str(item.get("oper_state") or "unknown")[:24]})
-            return {"vlans": vlans[:256], "interfaces": interfaces, "ssids": []}
-        finally:
-            try:
-                client.post(root + "/logout")
-            except httpx.HTTPError:
-                pass
+    """Read-only, secret-free CX baseline through the shared CxSession (E2E-04/05/09/16)."""
+    from ..infrastructure.writers import WriterError
+    from ..infrastructure.writers.aruba_cx import CxSession
+    try:
+        with CxSession(host, username, password, timeout=8.0, verify=get_settings().tls_verify_arg) as s:
+            vdata = s.request("GET", "/system/vlans", params={"depth": 1}).json()
+            pdata = s.request("GET", "/system/interfaces", params={"depth": 1}).json()
+    except WriterError as exc:
+        raise RuntimeError(f"{exc.category}: {exc}") from None
+    # Whitelist only configuration-relevant, non-secret fields; no raw device responses, credentials,
+    # ACLs or interface descriptions.
+    vlans = []
+    for name, item in (vdata.items() if isinstance(vdata, dict) else []):
+        if isinstance(item, dict):
+            vid = item.get("id")
+            if isinstance(vid, int) and 1 <= vid <= 4094:
+                vlans.append({"id": vid, "name": str(item.get("name") or "")[:64]})
+        elif str(name).isdigit() and 1 <= int(name) <= 4094:
+            vlans.append({"id": int(name), "name": ""})
+    interfaces = []
+    for name, item in (pdata.items() if isinstance(pdata, dict) else []):
+        if len(interfaces) >= 128:
+            break
+        if isinstance(item, dict) and len(str(name)) <= 40:
+            interfaces.append({"name": str(name),
+                               "admin_state": str(item.get("admin") or item.get("admin_state") or "unknown")[:24],
+                               "oper_state": str(item.get("link_state") or item.get("oper_state") or "unknown")[:24]})
+    return {"vlans": vlans[:256], "interfaces": interfaces, "ssids": []}
 
 
 class CaptureInput(BaseModel):
@@ -487,7 +481,7 @@ def capture_baseline(device_id: str, body: CaptureInput, request: Request,
           request=request)
     return {"snapshot_id": snapshot.id, "device_id": device.id, "source": snapshot.source,
             "completeness": snapshot.completeness, "config": snapshot.config_json,
-            "warning": warning, "device_writes": "LOCKED"}
+            "warning": warning, **read_only()}
 
 
 @router.get("/devices/{device_id}/config")
@@ -510,7 +504,7 @@ def device_config(device_id: str, db: Session = Depends(get_db),
                      "warning": snap.warning} if snap else None,
         "drafts": [{"id": d.id, "state": d.state, "created_at": d.created_at.isoformat(),
                     "proposed": d.proposed_json} for d in drafts],
-        "hardware_writes": "LOCKED",
+        "hardware_writes": write_posture()["hardware_writes"],
     }
 
 
@@ -524,8 +518,10 @@ def _device_acceptance(db: Session, device: InmDevice) -> dict:
     drafts = list(db.scalars(select(OnboardingConfigDraft).where(
         OnboardingConfigDraft.device_id == device.id
     ).order_by(OnboardingConfigDraft.created_at.desc()).limit(100)))
+    from ..infrastructure.posture import certification_summary
     return build_acceptance(device, credential, binding, snapshot, drafts,
-                            writes_locked=get_settings().device_write_lock)
+                            writes_locked=get_settings().device_write_lock,
+                            hardware_certified=certification_summary(db, device)["hardware_certified"])
 
 
 @router.get("/devices/{device_id}/acceptance")
@@ -549,8 +545,8 @@ def fleet_acceptance_report(db: Session = Depends(get_db),
     return {
         "device_count": len(reports),
         "limit": 250,
-        "hardware_certified": 0,
-        "device_writes": "LOCKED" if get_settings().device_write_lock else "UNSAFE",
+        "hardware_certified": sum(1 for r in reports if r["hardware_certified"]),
+        **read_only(),
         "stages": {stage: sum(r["stage"] == stage for r in reports)
                    for stage in ("MANUAL_REGISTERED", "REST_DISCOVERED",
                                  "BASELINE_CAPTURED", "DRAFTED")},
@@ -621,4 +617,4 @@ def create_draft(device_id: str, body: DraftInput, request: Request,
     db.flush()
     audit(db, "onboarding_config_draft_saved", username=admin.username, target=device.id,
           detail=f"draft={draft.id}, baseline={baseline.id}; not deployed", request=request)
-    return {"id": draft.id, "state": "DRAFT", "hardware_writes": "LOCKED", "proposed": doc}
+    return {"id": draft.id, "state": "DRAFT", "hardware_writes": write_posture()["hardware_writes"], "proposed": doc}

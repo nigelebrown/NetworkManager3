@@ -5,7 +5,7 @@ or ciphertext. Device configuration writes are never exposed by this domain.
 """
 from __future__ import annotations
 from datetime import datetime
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from .models import Base, utcnow
 from .models_inm import new_uuid
@@ -33,10 +33,22 @@ class OnboardingDiscovery(Base):
     site_name: Mapped[str] = mapped_column(String(100), nullable=False)
     scope: Mapped[str] = mapped_column(String(48), nullable=False)
     device_family: Mapped[str] = mapped_column(String(32), nullable=False)
+    # QUEUED | SCANNING | PAUSED | CANCELLED | SCANNED | FAILED   (durable job, E2E-07)
     status: Mapped[str] = mapped_column(String(24), default="SCANNED", nullable=False)
     results: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    # 0010 — restart-safe job state: work list, cursor, lease/heartbeat, retry and rate limits
+    targets: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    next_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rate_per_s: Mapped[int] = mapped_column(Integer, nullable=False, default=16)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
 class OnboardingConfigSnapshot(Base):
     __tablename__ = "onboarding_config_snapshots"

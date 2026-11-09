@@ -4,6 +4,8 @@ NO network probes, device credentials, hardware writes, ML, or scheduled scans.
 """
 from __future__ import annotations
 
+from ..infrastructure.posture import read_only, write_posture
+
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -56,7 +58,7 @@ def _overview(db: Session) -> dict:
         "engine": "RULE", "ml_trained": False,
         "data_source": "RECORDED_TELEMETRY_ONLY",
         "scheduled_device_polling": False,
-        "device_writes": "LOCKED",
+        **read_only(),
         "devices": devices,
     }
 
@@ -109,7 +111,7 @@ def analyze_recorded(db: Session, *, actor: str, request: Request | None = None)
           detail=f"evaluated={len(result['devices'])} created={created}; RULE, NO writes",
           request=request)
     return {"created": created, "evaluated_devices": len(result["devices"]),
-            "engine": "RULE", "ml_trained": False, "device_writes": "LOCKED"}
+            "engine": "RULE", "ml_trained": False, **read_only()}
 
 
 def _public(rec: RecommendationRecord) -> dict:
@@ -117,7 +119,7 @@ def _public(rec: RecommendationRecord) -> dict:
                 title=rec.title, explanation=rec.explanation, risk=rec.risk,
                 engine=rec.engine, rule_id=rec.rule_id, rule_version=rec.rule_version,
                 evidence=rec.evidence, approval_state=rec.approval_state,
-                source_type=rec.source_type, device_writes="LOCKED")
+                source_type=rec.source_type, **read_only())
 
 
 @router.get("/recommendations")

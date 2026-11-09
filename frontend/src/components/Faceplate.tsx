@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useLoad } from "./useLoad";
+import { TT } from "./viz";
+import { rem } from "../services/remediation";
 import { Link } from "react-router-dom";
 import { COLORS, Pill, ago } from "./viz";
 import type { Port, Ports } from "../services/ops";
@@ -62,7 +66,24 @@ export default function Faceplate({ data, deviceId }: { data: Ports; deviceId: s
         <dt className="text-slate-400">Neighbour</dt><dd>{sel.lldp ? `${sel.lldp.system_name} (${sel.lldp.port})` : "—"}</dd>
         <dt className="text-slate-400">Description</dt><dd>{sel.description || "—"}</dd>
       </dl>
+      <PortSeries deviceId={deviceId} port={sel.name} />
       <Link className="mt-2 inline-block text-xs text-sky-300" to={`/changes?device=${deviceId}&port=${encodeURIComponent(sel.name)}`}>Plan a change on this port →</Link>
     </div>}
+  </div>;
+}
+
+/** History of ONE interface (its own time series; ports are never mixed). */
+function PortSeries({ deviceId, port }: { deviceId: string; port: string }) {
+  const [metric, setMetric] = useState("port_util_percent");
+  const s = useLoad(() => rem.portSeries(deviceId, port, metric, 6), [deviceId, port, metric], 60000, ["telemetry"]);
+  const data = (s.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
+  return <div className="mt-3" aria-label={`Port ${port} history`}>
+    <div className="mb-1 flex gap-2 text-xs">{[["port_util_percent", "Utilisation %"], ["port_rx_bps", "RX bps"], ["port_tx_bps", "TX bps"],
+      ["port_rx_errors", "RX errors"], ["port_link_up", "Link"], ["port_poe_w", "PoE W"]].map(([m, l]) =>
+      <button key={m} className={`rounded px-2 py-0.5 ${metric === m ? "bg-sky-700" : "bg-slate-800"}`} onClick={() => setMetric(m)}>{l}</button>)}</div>
+    {data.length ? <ResponsiveContainer width="100%" height={120}><LineChart data={data}>
+      <XAxis dataKey="t" stroke="#64748b" fontSize={10} /><YAxis stroke="#64748b" fontSize={10} width={40} />
+      <Tooltip {...TT} /><Line dataKey="v" stroke="#38bdf8" dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer>
+      : <p className="text-xs text-slate-500">No persisted samples for this port and metric in the last 6 hours.</p>}
   </div>;
 }

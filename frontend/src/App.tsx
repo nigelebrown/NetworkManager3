@@ -31,6 +31,9 @@ import NocDashboard from "./pages/NocDashboard";
 import ExecutiveDashboard from "./pages/ExecutiveDashboard";
 import Compliance from "./pages/Compliance";
 import Certification from "./pages/Certification";
+import Deployments from "./pages/Deployments";
+import Notifications from "./pages/Notifications";
+import Topology from "./pages/Topology";
 import DeviceAlerts from "./pages/DeviceAlerts";
 import Device360 from "./pages/Device360";
 import Collection from "./pages/Collection";
@@ -93,6 +96,9 @@ export default function App() {
         <Route path="executive" element={<ExecutiveDashboard />} />
         <Route path="compliance" element={<Compliance />} />
         <Route path="certification" element={<Certification />} />
+        <Route path="deployments" element={<Deployments />} />
+        <Route path="notifications" element={<Notifications />} />
+        <Route path="topology" element={<Topology />} />
         <Route path="device-alerts" element={<DeviceAlerts />} />
         <Route path="devices/:id/360" element={<Device360 />} />
         <Route path="collection" element={<Collection />} />

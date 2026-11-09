@@ -111,9 +111,17 @@ def test_collection_plan_success_failure_dedupe_and_experience(live, adm, monkey
     assert r["plan"]["last_failure_category"] == "UNREACHABLE" and r["plan"]["freshness"] == "NEVER"
     exp = live.get(f"/api/v1/devices/{did}/experience", headers=adm).json()
     assert exp["sample_size"] == 0 and exp["measured"] == {}
-    # duplicate in same window is suppressed
+    # An explicit operator "poll now" is never silently swallowed (E2E remediation): it runs again.
     r2 = live.post(f"/api/v1/collection/plans/{plan['id']}/run-now", headers=adm).json()
-    assert r2["summary"]["skipped_duplicate"] == 3
+    assert r2["summary"]["retry"] == 1 and r2["summary"]["skipped_duplicate"] == 0
+    # Scheduled runs from several workers in the same window ARE deduplicated.
+    from datetime import datetime, timezone
+    t = datetime(2026, 11, 9, 12, 0, 10, tzinfo=timezone.utc)
+    with session_scope() as db:
+        CR.run_due(db, now=t, plan_ids=[plan["id"]], worker="w1")
+    with session_scope() as db:
+        again = CR.run_due(db, now=t.replace(second=11), plan_ids=[plan["id"]], worker="w2")
+    assert again["skipped_duplicate"] == 3 and again.get("retry", 0) == 0
     # success path in a fresh window
     def ok(device, plan, db):
         return {"metrics": {"cpu_percent": 33.0, "clients": 12.0, "util_5g_percent": 91.0}, "firmware": "8.10.0.9"}

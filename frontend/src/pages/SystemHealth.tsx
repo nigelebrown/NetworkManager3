@@ -4,6 +4,7 @@ import { StatusBadge, Table, btnPrimary } from "../components/inm";
 import { useLoad } from "../components/useLoad";
 import { getSession } from "../services/api";
 import { v1, type Trace } from "../services/inm";
+import { rem } from "../services/remediation";
 
 const STAGES: { key: keyof Trace; label: string }[] = [
   { key: "management_db", label: "PostgreSQL event record" },
@@ -41,6 +42,7 @@ export default function SystemHealth() {
         <span className="text-xs text-slate-500">Measured {data ? fmtTime(data.checked_at) : "…"} — every status comes from a live probe</span>
       </div>
       <ErrorNote error={error} />
+      <OutboxCard />
       <Card title="Seven service roles">
         <Table head={["Role", "Status", "Latency", "Version", "Detail"]}>
           {data?.services.map((s) => (
@@ -72,4 +74,21 @@ export default function SystemHealth() {
       </Card>
     </div>
   );
+}
+
+/** Transactional event outbox (collector + change engine -> ingest): nothing is acknowledged until stored. */
+function OutboxCard() {
+  const o = useLoad(() => rem.outbox(), [], 15000, ["system"]);
+  if (!o.data) return null;
+  const d = o.data;
+  return <Card title="Event delivery (transactional outbox)">
+    <div className="flex flex-wrap gap-6 text-sm">
+      <span>Mode <b>{d.mode === "jetstream" ? "NATS JetStream" : "in-process (standalone)"}</b></span>
+      <span>Pending <b className={d.pending ? "text-amber-300" : ""}>{d.pending}</b></span>
+      <span>Delivered <b>{d.delivered}</b></span>
+      <span>Dead-lettered <b className={d.dlq ? "text-red-300" : ""}>{d.dlq}</b></span>
+      {d.oldest_pending_at && <span className="text-amber-300">oldest pending {fmtTime(d.oldest_pending_at)}</span>}
+    </div>
+    <p className="mt-1 text-xs text-slate-500">Telemetry, poll failures and change executions are written here in the same transaction as their state, then delivered with retries. A collection is SUCCEEDED only after its telemetry was verifiably stored.</p>
+  </Card>;
 }

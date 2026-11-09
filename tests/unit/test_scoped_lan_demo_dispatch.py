@@ -34,7 +34,7 @@ def test_lan_script_preserves_password_and_rejects_open_networks():
 def test_guided_workflow_is_routed_and_visible_to_admin():
     layout = (ROOT / "frontend/src/components/Layout.tsx").read_text()
     app = (ROOT / "frontend/src/App.tsx").read_text()
-    assert 'to: "/onboarding", label: "Add device — 7-step wizard"' in layout
+    assert 'to: "/onboarding", label: "Add & configure devices"' in layout   # 12-step resumable workflow (E2E-06)
     assert 'to: "/onboarding/manual", label: "Manual / CSV import"' in layout
     assert 'path="onboarding" element={<GuidedOnboarding />}' in app
     assert 'path="onboarding/manual" element={<DeviceIntake />}' in app

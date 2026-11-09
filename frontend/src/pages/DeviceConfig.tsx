@@ -5,6 +5,7 @@ import { useLoad } from "../components/useLoad";
 import { getSession } from "../services/api";
 import { v1 } from "../services/inm";
 import { onboardingApi } from "../services/onboarding";
+import { rem } from "../services/remediation";
 
 type SsidRow = { profile: string; essid: string; vlan: string; rf_band: string; width: "20" | "40"; enabled: boolean };
 type PortRow = { name: string; admin_state: string; access_vlan: string };
@@ -16,6 +17,8 @@ export default function DeviceConfig() {
   const { id = "" } = useParams<{ id: string }>();
   const device = useLoad(() => v1.getDevice(id), [id], 30000, ["devices"]);
   const config = useLoad(() => onboardingApi.deviceConfig(id), [id], 30000, ["device-config"]);
+  const acceptance = useLoad(() => onboardingApi.acceptance(id), [id], 30000, ["device-config"]);
+  const caps = useLoad(() => rem.capabilities(id), [id], 30000, ["device-config", "devices"]);
   const profiles = useLoad(onboardingApi.credentials, [], 30000, ["onboarding-credentials"]);
   const [credentialId, setCredentialId] = useState("");
   const [vlanText, setVlanText] = useState("");
@@ -44,7 +47,7 @@ export default function DeviceConfig() {
 
   const perform = async (fn: () => Promise<unknown>, result: string) => {
     setBusy(true); setError(null); setMessage(null);
-    try { await fn(); config.reload(); setMessage(result); }
+    try { await fn(); config.reload(); acceptance.reload(); setMessage(result); }
     catch (e) { setError(e instanceof Error ? e.message : "Operation failed"); }
     finally { setBusy(false); }
   };
@@ -83,11 +86,44 @@ export default function DeviceConfig() {
     <Link className="text-sm text-sky-400 underline" to={`/devices/${id}`}>← Device details</Link>
     <h1 className="text-xl font-semibold">Device configuration — {device.data?.hostname || "Loading…"}</h1>
     <p className="text-sm text-amber-300">
-      Only read-only configuration retrieval and application-side drafts are enabled.
-      Saving a draft never changes a VLAN, SSID, radio, switch port or actual device.
+      This page edits application-side configuration drafts only; saving a draft never writes to hardware.
+      Approved change plans and the certified read/write execution engine are available separately in Change Management.
     </p>
     <ErrorNote error={error ?? config.error ?? device.error} />
     {message && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-200">{message}</p>}
+    <Card title="Phase 2 — device acceptance evidence">
+      <p className="text-sm text-slate-300">
+        This checks what was actually recorded. It does not contact the network or certify physical equipment.
+      </p>
+      <ErrorNote error={acceptance.error} />
+      {acceptance.data && <>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
+          <span>Stage: <b>{acceptance.data.stage.replace(/_/g, " ")}</b></span>
+          <span>Model: <b>{acceptance.data.recognized_pilot_model ?? "Not in certified pilot model list"}</b></span>
+          <span>Identity: <b>{acceptance.data.inventory_evidence.replace(/_/g, " ")}</b></span>
+          <span>Credential: <b>{acceptance.data.credential.enabled ? "Assigned and enabled" : "Missing or disabled"}</b></span>
+        </div>
+        <p className="mt-2 text-xs text-amber-300">Physical-device certified: {caps.data ? (caps.data.hardware_certified ? "YES" : "NO") : "Checking…"}
+          · Device writes: {caps.data?.write_posture.hardware_writes ?? acceptance.data.device_writes}
+          · Adapter: {caps.data?.adapter ?? "Checking…"}</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {acceptance.data.field_checks.map(field => <div key={field.field}
+            className="rounded border border-slate-700 p-3 text-xs">
+            <div className="font-semibold">{field.field.replace(/_/g, " ")}:
+              <span className={field.status === "OBSERVED" ? "ml-2 text-emerald-300" : "ml-2 text-amber-300"}>
+                {field.status.replace(/_/g, " ")}
+              </span>
+            </div>
+            <p className="mt-1 text-slate-400">{field.detail}</p>
+          </div>)}
+        </div>
+        <details className="mt-3 text-sm"><summary className="cursor-pointer">Remaining acceptance actions ({acceptance.data.remaining_actions.length})</summary>
+          <ul className="ml-5 mt-2 list-disc space-y-1 text-slate-300">
+            {acceptance.data.remaining_actions.map((action, i) => <li key={i}>{action}</li>)}
+          </ul>
+        </details>
+      </>}
+    </Card>
     <Card title="1. Capture or refresh the existing configuration">
       <label className="block text-sm">Credential profile (shared across devices)
         <select className={input} value={credentialId} onChange={e => setCredentialId(e.target.value)}>
@@ -159,9 +195,12 @@ export default function DeviceConfig() {
       </Card>}
       <Card title="4. Review and save the proposed configuration">
         <p className="text-sm text-slate-300">
-          This action saves an auditable draft against the imported baseline. A later certified change-management process would compare, approve, back up, apply and verify changes. None of those hardware-write actions are active here.
+          This action only saves an auditable draft. For an actual configuration write, use
+          Change Management: build and review a change plan, obtain independent approval,
+          run the per-device execution gate, then verify and audit the readback. Uncertified or globally locked devices remain blocked.
         </p>
         <button className={`mt-3 ${button}`} disabled={busy} onClick={save}>Save configuration draft (no hardware changes)</button>
+        <Link className="ml-3 text-xs text-sky-300 underline" to="/changes">Open Change Management →</Link>
       </Card>
     </>}
     <Card title="Saved drafts">

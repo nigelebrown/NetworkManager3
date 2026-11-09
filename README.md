@@ -1,3 +1,13 @@
+> **Release candidate 1.2.0-rc2 — software remediation before hardware testing (branch `release/software-remediation`).**
+> All 20 independent-audit findings fixed with regression tests; per-interface telemetry, a transactional outbox
+> event pipeline, CX form login + CSRF + API-version negotiation, durable discovery jobs, a 12-step persistent
+> onboarding workflow, a crash-safe change-recovery journal, an out-of-band-change guard, alert notifications and
+> escalation, and an emulated write-lifecycle campaign for AP-505/AP-535/CX 6100/CX 6200 (software PASS only).
+> Hardware writes remain UNCERTIFIED and locked. See
+> [docs/RELEASE_1.2.0_RC2_SOFTWARE_REMEDIATION.md](docs/RELEASE_1.2.0_RC2_SOFTWARE_REMEDIATION.md),
+> [docs/CAPABILITY_MATRIX_1.2.0_RC2.md](docs/CAPABILITY_MATRIX_1.2.0_RC2.md) and
+> [docs/RC_1.2.0_TEST_MATRIX.md](docs/RC_1.2.0_TEST_MATRIX.md).
+>
 > **Release candidate 1.2.0-rc1 — production read/write engine (branch `release/production-readiness`).**
 > Certified, backed-up, verified and rollback-protected configuration writes for Aruba CX 6100/6200 and
 > AP-505/AP-535, plus a write-certification workflow, live port faceplate, an alert engine with per-site

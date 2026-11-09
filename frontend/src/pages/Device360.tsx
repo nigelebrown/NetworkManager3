@@ -8,6 +8,7 @@ import { RuleTable } from "./Compliance";
 import Faceplate from "../components/Faceplate";
 import { Notice, btn2, useAction } from "../components/viz";
 import { rw } from "../services/ops";
+import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
 
@@ -33,6 +34,7 @@ export default function Device360() {
   const opt = useLoad(() => ops.optState(id), [id], 60000);
   const tile = noc.data?.devices.find(x => x.device_id === id);
   const ports = useLoad(() => rw.ports(id), [id], 30000, ["telemetry"]);
+  const caps = useLoad(() => rem.capabilities(id), [id], 60000, ["devices"]);
   const cert = useLoad(() => rw.deviceCert(id), [id], 60000);
   const act = useAction();
   const [fp, setFp] = useState("");
@@ -41,7 +43,9 @@ export default function Device360() {
   const data = (series.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
   return <div className="space-y-4">
     <PageHeader title={d ? `${d.hostname ?? d.serial_number}` : "Device"} subtitle={d ? `${d.vendor} ${d.model ?? ""} · serial ${d.serial_number} · firmware ${d.firmware ?? "unknown"}` : undefined}
-      right={d && <div className="flex items-center gap-2"><SourceTag source={d.source_type} /><Pill value={d.status} tone={statusTone(d.status)} />
+      right={d && <div className="flex items-center gap-2"><SourceTag source={d.source_type} />
+        <span title={(d as { state_reason?: string }).state_reason}><Pill value={(d as { state?: string }).state ?? d.status}
+          tone={statusTone((d as { state?: string }).state === "ONLINE" ? "PASS" : (d as { state?: string }).state ?? d.status)} /></span>
         <Link className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm" to={`/changes`}>Plan a change</Link>
         <Link className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm" to={`/devices/${id}`}>Inventory record</Link></div>} />
     <ErrorNote error={device.error} />
@@ -117,9 +121,16 @@ export default function Device360() {
         <tbody>{(ver.data?.full_fidelity ?? []).map(a => <tr key={a.id} className="border-t border-slate-800"><td className="py-1">{new Date(a.created_at).toLocaleString()}</td>
           <td>{a.trigger}</td><td>{a.capture_source}</td><td className="font-mono text-xs">{a.plaintext_sha256.slice(0, 16)}…</td><td><Pill value={a.restore_state} tone={statusTone(a.restore_state)} /></td></tr>)}</tbody></table>
       <p className="mt-2 text-xs text-slate-500">{ver.data?.redacted_baselines.length ?? 0} redacted onboarding baseline(s) also exist; they are not restorable.</p></Card>}
-    {tab === "Capabilities" && ad.data && <Card title={`Adapter ${ad.data.adapter.key} — ${ad.data.adapter.certification}`}>
-      <div className="grid gap-2 md:grid-cols-2">{ad.data.operations.map(o => <div key={o.op} className="flex items-center justify-between rounded border border-slate-800 px-3 py-1.5 text-sm">
-        <span className="font-mono text-xs">{o.op}</span><Pill value={o.status} tone={o.status === "AVAILABLE_READ_ONLY" ? "good" : o.status === "UNSUPPORTED" ? "none" : "fair"} /></div>)}</div>
-      <p className="mt-2 text-xs text-slate-500">{ad.data.adapter.notes}</p></Card>}
+    {tab === "Capabilities" && caps.data && <Card title={`${caps.data.adapter} · ${caps.data.model_family} firmware ${caps.data.firmware_train} · ${caps.data.environment}`}>
+      <p className="mb-2 text-xs text-slate-400">Software = what the platform implements. Certification = proven for THIS model + firmware train + environment
+        (emulated certification is never hardware certification). Hardware writes: <b>{caps.data.write_posture.hardware_writes}</b>.
+        {!caps.data.adapter_implemented && <b className="text-amber-300"> Placeholder adapter — not implemented.</b>}</p>
+      <table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-500"><th>Operation</th><th>Software</th><th>Certification</th><th>Executable now</th><th>Why</th></tr></thead>
+        <tbody>{caps.data.operations.map(o => <tr key={o.operation} className="border-t border-slate-800">
+          <td className="py-1 font-mono text-xs">{o.operation}</td><td><Pill value={o.software} tone={o.software === "IMPLEMENTED" ? "good" : "fair"} /></td>
+          <td><Pill value={o.certification} tone={o.certification === "CERTIFIED_WRITE" ? "good" : o.certification === "FAILED" ? "poor" : "fair"} /></td>
+          <td>{o.executable_now ? "yes" : "no"}</td><td className="text-xs text-slate-400">{o.reason}</td></tr>)}</tbody></table>
+      <div className="mt-3 flex flex-wrap gap-2">{caps.data.read_operations.map(o => <Pill key={o.op} value={`${o.op}: ${o.status === "AVAILABLE_READ_ONLY" ? "read OK" : o.status}`} tone={o.status === "AVAILABLE_READ_ONLY" ? "good" : "none"} />)}</div>
+      {ad.data && <p className="mt-2 text-xs text-slate-500">{ad.data.adapter.notes}</p>}</Card>}
   </div>;
 }

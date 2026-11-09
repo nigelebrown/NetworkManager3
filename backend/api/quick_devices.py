@@ -6,6 +6,8 @@ The existing Phase 1 device-write lock remains mandatory.
 """
 from __future__ import annotations
 
+from ..infrastructure.posture import read_only, write_posture
+
 import ipaddress
 import os
 import uuid
@@ -126,14 +128,12 @@ def record_observation(db: Session, body: QuickDevice, actor: str, request: Requ
         store.write_points(points)
     return {"id": dev.id, "source_type": "REAL", "evidence": evidence,
             "site": site.name, "hostname": dev.hostname, "family": dev.family,
-            "metrics_recorded": list(body.metrics), "device_writes": "LOCKED"}
+            "metrics_recorded": list(body.metrics), **read_only()}
 
 
 @router.post("", status_code=201)
 def create_device(body: QuickDevice, request: Request, db: Session = Depends(get_db),
                   admin: User = Depends(require_role("admin"))):
-    if not get_settings().device_write_lock:
-        raise HTTPException(403, "Quick intake requires the global device-write safety lock")
     return record_observation(db, body, admin.username, request)
 
 
@@ -151,8 +151,6 @@ def create_device_batch(body: BulkQuickDeviceInput, request: Request,
     No hardware calls. Bulk telemetry is excluded until cross-database transaction
     reconciliation is available; add observations individually after import.
     """
-    if not get_settings().device_write_lock:
-        raise HTTPException(403, "Bulk intake requires the global device-write safety lock.")
     serials: set[str] = set()
     for row in body.devices:
         key = row.serial_number.strip().casefold()
@@ -180,7 +178,7 @@ def create_device_batch(body: BulkQuickDeviceInput, request: Request,
     return {"count": len(results), "added": sum(x["action"] == "ADDED" for x in results),
             "updated": sum(x["action"] == "UPDATED" for x in results),
             "source_type": "REAL", "collection_method": "MANUAL",
-            "device_writes": "LOCKED", "results": results}
+            **read_only(), "results": results}
 
 
 class QuickProbe(BaseModel):
@@ -239,52 +237,37 @@ def _probe_ap(body: QuickProbe) -> dict:
 
 
 def _probe_cx(body: QuickProbe) -> dict:
-    # ArubaOS-CX OpenAPI 10.14: POST /rest/v10.14/login with query username/password;
-    # GET /system, GET /system/interfaces, POST /logout. No config paths are used.
-    # Base URL is the host only: request paths below already carry /rest/v10.14 (a base path here would
-    # double it to /rest/v10.14/rest/v10.14/... and every real switch would answer 404).
-    url = f"https://{body.management_ip}"
-    with httpx.Client(base_url=url, timeout=8.0, verify=get_settings().tls_verify_arg,
-                      follow_redirects=False, trust_env=False) as client:
-        response = client.post("/rest/v10.14/login",
-                               params={"username": body.username, "password": body.password})
-        response.raise_for_status()
-        try:
-            sysr = client.get("/rest/v10.14/system", params={"depth": 1})
-            sysr.raise_for_status()
-            data = sysr.json()
+    """Read-only CX probe through the shared CxSession (form-body login, CSRF, API negotiation — E2E-04/05/09/16)."""
+    from ..infrastructure.writers import WriterError
+    from ..infrastructure.writers.aruba_cx import CxSession, PORT_RE
+    try:
+        with CxSession(body.management_ip, body.username, body.password, timeout=8.0,
+                       verify=get_settings().tls_verify_arg) as s:
+            data = s.request("GET", "/system", params={"attributes": "hostname,platform_name,software_version,"
+                                                                     "serial_number"}).json()
             if not isinstance(data, dict):
                 raise ValueError("Unexpected CX system response")
-            iface = client.get("/rest/v10.14/system/interfaces", params={"depth": 1})
-            iface.raise_for_status()
-            ports = iface.json()
-            if not isinstance(ports, dict):
-                ports = {}
-            physical = [x for name, x in ports.items() if
-                        isinstance(x, dict) and str(name).startswith("1/")]
-            selected = physical if physical else [x for x in ports.values() if isinstance(x, dict)]
-            ports_up = sum(1 for x in selected if str(x.get("oper_state", "")).lower() == "up")
-            result = {"hostname": data.get("hostname") or body.hostname,
-                      "serial_number": data.get("serial_number") or body.serial_number,
-                      "model": data.get("platform_name") or body.model,
-                      "firmware": data.get("software_version"),
-                      "status": "up",
-                      "metrics": {"ports_up": float(ports_up),
-                                  "ports_total": float(len(physical) if physical else len(ports))},
-                      "notes": "CX REST read-only system/interfaces"}
-        finally:
-            try:
-                client.post("/rest/v10.14/logout")
-            except httpx.HTTPError:
-                pass
-    return result
+            ports = s.request("GET", "/system/interfaces", params={"depth": 1, "attributes": "name,link_state,"
+                                                                                             "admin"}).json()
+            api = s.api_version
+    except WriterError as exc:
+        raise RuntimeError(f"{exc.category}: {exc}") from None
+    ports = ports if isinstance(ports, dict) else {}
+    physical = [x for name, x in ports.items() if isinstance(x, dict) and PORT_RE.match(str(name))
+                and not str(name).startswith("lag")]
+    ports_up = sum(1 for x in physical if str(x.get("link_state") or x.get("oper_state") or "").lower() == "up")
+    return {"hostname": data.get("hostname") or body.hostname,
+            "serial_number": data.get("serial_number") or body.serial_number,
+            "model": data.get("platform_name") or body.model,
+            "firmware": data.get("software_version"),
+            "status": "up",
+            "metrics": {"ports_up": float(ports_up), "ports_total": float(len(physical))},
+            "notes": f"CX REST {api} read-only system/interfaces"}
 
 
 @router.post("/probe", status_code=201)
 def probe_device(body: QuickProbe, request: Request, db: Session = Depends(get_db),
                  admin: User = Depends(require_role("admin"))):
-    if not get_settings().device_write_lock:
-        raise HTTPException(403, "Device-write safety lock required.")
     _permit_probe(body.management_ip)
     try:
         observation = _probe_ap(body) if body.family == "access_point" else _probe_cx(body)

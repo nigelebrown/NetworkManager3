@@ -165,8 +165,10 @@ def test_disabled_profile_is_not_available_to_discover(client, admin):
 
 
 def test_full_slash24_discovery_runs_in_background_and_reports_progress(client, admin, monkeypatch):
-    import time
+    """E2E-07: /24 discovery is a durable job run by the worker/scheduler (not an API thread)."""
     from backend.api import onboarding_workflow as flow
+    from backend.database.session import session_scope
+    from backend.infrastructure import discovery_jobs as DJ
     p = new_profile(client, admin).json()
     monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.20.0/24")
     reachable = {"10.103.20.5", "10.103.20.77"}
@@ -175,12 +177,10 @@ def test_full_slash24_discovery_runs_in_background_and_reports_progress(client, 
         "hostname": f"ap-{ip}", "model": "AP-535", "serial_number": f"SN{str(ip).split('.')[-1]}", "firmware": "8.10.0.9"})
     r = client.post("/api/v1/onboarding/discover", headers=admin, json={
         "credential_id": p["id"], "scope": "10.103.20.0/24", "site_name": "HQ"})
-    assert r.status_code == 201 and r.json()["status"] == "SCANNING" and r.json()["targets"] == 254
-    for _ in range(100):
-        job = client.get(f"/api/v1/onboarding/discoveries/{r.json()['id']}", headers=admin).json()
-        if job["status"] != "SCANNING":
-            break
-        time.sleep(0.1)
-    assert job["status"] == "SCANNED"
+    assert r.status_code == 201 and r.json()["status"] == "QUEUED" and r.json()["targets"] == 254
+    assert r.json()["progress"]["done"] == 0
+    DJ.tick(session_scope, "test-worker", flow._identify)
+    job = client.get(f"/api/v1/onboarding/discoveries/{r.json()['id']}", headers=admin).json()
+    assert job["status"] == "SCANNED" and job["progress"]["done"] == 254 and job["progress"]["percent"] == 100.0
     found = sorted(x["management_ip"] for x in job["results"] if x["status"] == "FOUND")
     assert found == ["10.103.20.5", "10.103.20.77"]

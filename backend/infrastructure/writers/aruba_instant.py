@@ -53,9 +53,39 @@ def arm_block(text: str) -> dict:
     return out
 
 
+def cli_block(text: str, header: str) -> list[str] | None:
+    """Indented lines of one top-level CLI block (e.g. 'wlan ssid-profile Corp'), or None if absent."""
+    lines = text.replace("\r", "").split("\n")
+    try:
+        i = [ln.rstrip() for ln in lines].index(header)
+    except ValueError:
+        return None
+    out = []
+    for ln in lines[i + 1:]:
+        if not ln.startswith(" "):
+            break
+        out.append(ln.strip())
+    return out
+
+
+def block_dict(lines: list[str] | None) -> dict:
+    out: dict = {}
+    for ln in lines or []:
+        k, _, v = ln.partition(" ")
+        out[k] = v
+    return out
+
+
+ENTERPRISE_OPMODES = {"wpa2-enterprise": "wpa2-aes", "wpa3-enterprise": "wpa3-aes-ccm-128"}
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+
+
 class ArubaInstantWriter:
     family = "access_point"
     key = "aruba_instant_8_10"
+    # Every typed operation implemented below (asserted equal to domain.adapters.INSTANT_TYPED_OPS).
+    OPERATIONS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
+                  "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, client=None, ssh_runner=None,
                  snapshot=None):
@@ -121,6 +151,13 @@ class ArubaInstantWriter:
         self._cp = {"running": self._running(), "radios": self._radios()}
         return "instant-prior-state:" + str(abs(hash(json.dumps(self._cp["radios"], sort_keys=True, default=str))))
 
+    def export_checkpoint(self) -> dict:
+        """Prior state for the encrypted recovery journal (survives process restarts — E2E-14)."""
+        return dict(getattr(self, "_cp", None) or {})
+
+    def import_checkpoint(self, prior: dict) -> None:
+        self._cp = dict(prior)
+
     def _radios(self) -> list[dict]:
         if self._snapshot is not None:
             return self._snapshot()
@@ -143,6 +180,17 @@ class ArubaInstantWriter:
                 lines.append(f"{k} {arm[k]}")
         lines += ["no 80mhz-support", "exit"]
         self._ssh_lines(lines)
+        # SSID / RADIUS blocks created or changed by the change: delete new ones, re-apply prior ones
+        cur_text = self._running()
+        undo: list[str] = []
+        for hdr in sorted(set(re.findall(r"^(wlan (?:ssid-profile|auth-server) \S+)$", cur_text, re.M))):
+            before, after = cli_block(prior["running"], hdr), cli_block(cur_text, hdr)
+            if before is None:
+                undo.append(f"no {hdr}")
+            elif before != after:
+                undo += [hdr, *[ln for ln in before if not ln.startswith("key ")], "exit"]
+        if undo:
+            self._ssh_lines(undo)
         from ...aruba.configuration import SsidChange, build_ssid_payload, parse_running_config
         from ...aruba.errors import ArubaError
         before = {x["profile"]: x for x in parse_running_config(prior["running"])["ssids"]}
@@ -177,6 +225,25 @@ class ArubaInstantWriter:
             cmd = "a-channel" if band == "5" else "g-channel"
             return [{"transport": "SSH-EXEC", "host": self.ap_ip,
                      "lines": [f"{cmd} {int(v)} {int(op.get('power', 14))}"]}]
+        if k == "ap.ssid.create":
+            from ...aruba.configuration import SsidChange, build_ssid_payload, mask_payload
+            secret = op.get("_secret")
+            ch = SsidChange(profile=op["ssid"], essid=op.get("essid") or op["ssid"], vlan=int(op["vlan"]),
+                            opmode=op.get("security", "wpa2-psk-aes"),
+                            passphrase=(secret or "placeholder-secret") if op.get("security", "wpa2-psk-aes") != "opensystem" else None,
+                            enabled=True)
+            payload = build_ssid_payload(ch, creating=True)
+            return [{"transport": "REST", "endpoint": "ssid", "json": payload if secret else mask_payload(payload)}]
+        if k == "ap.ssid.enterprise":
+            srv, prof = op["radius_name"], op["ssid"]
+            key = op.get("_secret") or "********"
+            lines = [f"wlan auth-server {srv}", f" ip {op['radius_ip']}", f" port {int(op.get('radius_port', 1812))}",
+                     f" acctport {int(op.get('radius_acct_port', 1813))}", f" key {key}", "exit",
+                     f"wlan ssid-profile {prof}", f" essid {op.get('essid') or prof}", " type employee",
+                     f" vlan {int(op['vlan'])}", f" opmode {ENTERPRISE_OPMODES[op.get('security', 'wpa2-enterprise')]}",
+                     f" auth-server {srv}", " enable", "exit"]
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host,
+                     "lines": ["configure terminal", *lines, "end", "commit apply"]}]
         lines = ["arm"]
         if k == "ap.client_match":
             lines.append("client-match" if v == "enabled" else "no client-match")
@@ -213,6 +280,22 @@ class ArubaInstantWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "ap.ssid.create":
+            b = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}"))
+            want = {"essid": op.get("essid") or op["ssid"], "vlan": str(int(op["vlan"])),
+                    "opmode": op.get("security", "wpa2-psk-aes")}
+            got = {x: b.get(x) for x in want}
+            return got == want, got
+        if k == "ap.ssid.enterprise":
+            text = self._running()
+            srv = block_dict(cli_block(text, f"wlan auth-server {op['radius_name']}"))
+            b = block_dict(cli_block(text, f"wlan ssid-profile {op['ssid']}"))
+            got = {"radius_ip": srv.get("ip"), "radius_key_set": "key" in srv, "opmode": b.get("opmode"),
+                   "auth_server": b.get("auth-server"), "vlan": b.get("vlan")}
+            want = {"radius_ip": op["radius_ip"], "radius_key_set": True,
+                    "opmode": ENTERPRISE_OPMODES[op.get("security", "wpa2-enterprise")],
+                    "auth_server": op["radius_name"], "vlan": str(int(op["vlan"]))}
+            return got == want, got
         if k == "ap.ssid.vlan":
             from ...aruba.configuration import SsidChange, parse_running_config, verify_ssid
             problems = verify_ssid(parse_running_config(self._running()), SsidChange(profile=op["ssid"], vlan=int(v)))

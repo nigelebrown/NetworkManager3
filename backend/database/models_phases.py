@@ -50,9 +50,13 @@ class CollectionRun(Base):
     scheduled_window: Mapped[int] = mapped_column(Integer)
     dedupe_key: Mapped[str] = mapped_column(String(64), unique=True)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
-    state: Mapped[str] = mapped_column(String(12))  # LEASED | SUCCEEDED | RETRY | DLQ
+    # LEASED | COLLECTED (read, event queued, persistence not yet confirmed) | SUCCEEDED (persisted) | RETRY | DLQ
+    state: Mapped[str] = mapped_column(String(12))
     failure_category: Mapped[str | None] = mapped_column(String(24), nullable=True)
     points_written: Mapped[int] = mapped_column(Integer, default=0)
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)        # 0010
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # 0010
+    expected_points: Mapped[int | None] = mapped_column(Integer, nullable=True)               # 0010
     worker: Mapped[str] = mapped_column(String(64))
     started_at: Mapped[datetime] = mapped_column(_TS, default=utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
@@ -341,6 +345,7 @@ class ChangeExecution(Base):
     executed_by: Mapped[str] = mapped_column(String(64))
     started_at: Mapped[datetime] = mapped_column(_TS, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # 0010
 
 
 class DeviceAccess(Base):
@@ -408,6 +413,9 @@ class InmAlert(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
     acked_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_type: Mapped[str] = mapped_column(String(8), default="REAL")
+    correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # 0010
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)                   # 0010
+    entity: Mapped[str | None] = mapped_column(String(64), nullable=True)                     # 0010 e.g. port 1/1/3
 
 
 class AlertPolicy(Base):

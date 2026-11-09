@@ -6,6 +6,8 @@ is called. There is no code path from this module to a device driver.
 """
 from __future__ import annotations
 
+from ..infrastructure.posture import read_only, write_posture
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
@@ -50,7 +52,7 @@ def _public(p: ChangePlan) -> dict:
             "rollback_plan": p.rollback_plan, "state": p.state, "requester": p.requester,
             "approver": p.approver, "approved_at": iso(p.approved_at), "decision_note": p.decision_note,
             "source": p.source, "revision": p.revision, "created_at": iso(p.created_at),
-            "device_writes": "LOCKED"}
+            **read_only()}
 
 
 @router.post("/plans", status_code=201)

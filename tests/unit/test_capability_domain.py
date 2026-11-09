@@ -301,7 +301,8 @@ def test_adapter_registry_unsupported_and_writes_central():
     cisco = AD.resolve("Cisco", "switch", "Catalyst 2960-X")
     assert cisco.key == "cisco_ios_xe_snmpv3"
     assert AD.operation_result(cisco, "backup_full_config")["status"] == "UNSUPPORTED"
-    assert AD.operation_result(cisco, "apply_change")["status"] == "DENIED_BY_CENTRAL_POLICY"
+    # placeholder adapter: nothing is implemented, so a write is UNSUPPORTED (not a gated working path) — E2E-19
+    assert AD.operation_result(cisco, "apply_change")["status"] == "UNSUPPORTED"
     cx = AD.resolve("Aruba", "switch", "CX 6200F 24G")
     assert cx.key == "aruba_cx_10_14" and AD.operation_result(cx, "collect")["status"] == "AVAILABLE_READ_ONLY"
     assert AD.operation_result(cx, "apply_change")["status"] == "DENIED_BY_CENTRAL_POLICY"
@@ -364,3 +365,14 @@ def test_best_practice_unknown_without_config_and_scores_good_vs_bad():
                                     cx_config("x", False))
     fields = {d["field"] for d in diff["differences"]}
     assert diff["status"] == "DRIFT" and "vlan:999" in fields and "interface:1/1/2:access_vlan" in fields
+
+
+def test_adapter_resolution_accepts_real_platform_strings():
+    """Regression (GUI E2E): a REST-discovered switch reporting '6200F 48G' fell back to the generic placeholder."""
+    for m in ("CX 6200F 48G", "6200F 48G", "JL724A 6200F 24G 4SFP+", "Aruba 6200", "6100 24G CL4", "CX 6100 12G"):
+        assert AD.resolve("Aruba", "switch", m).key == "aruba_cx_10_14", m
+    for m in ("AP-505", "AP-535-US", "505", "AP-515"):
+        assert AD.resolve("Aruba", "access_point", m).key == "aruba_instant_8_10", m
+    for m in ("CX 8360", "2930F", None, ""):
+        assert AD.resolve("Aruba", "switch", m).key == "generic_snmpv3", m
+    assert AD.resolve("Aruba", "access_point", "AP-635").key == "generic_snmpv3"

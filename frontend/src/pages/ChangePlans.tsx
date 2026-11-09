@@ -7,9 +7,10 @@ import { getSession } from "../services/api";
 import type { Device } from "../services/inm";
 import { ops, rw, type ChangePlan, type ExecResult } from "../services/ops";
 import { useSearchParams } from "react-router-dom";
+import { onboardingApi } from "../services/onboarding";
 
 type Op = Record<string, unknown>;
-const OPS: Record<string, { op: string; label: string; fields: { key: string; label: string; kind: "int" | "text" | "list" | "select"; options?: string[] }[] }[]> = {
+const OPS: Record<string, { op: string; label: string; fields: { key: string; label: string; kind: "int" | "text" | "list" | "select" | "ips" | "secret"; options?: string[]; optional?: boolean }[] }[]> = {
   switch: [
     { op: "switch.lag.members", label: "LACP LAG members", fields: [{ key: "lag", label: "LAG (e.g. lag10)", kind: "text" }, { key: "value", label: "Member ports (comma separated)", kind: "text" }] },
     { op: "switch.lldp", label: "Port LLDP", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "LLDP", kind: "select", options: ["enabled", "disabled"] }] },
@@ -18,6 +19,14 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "switch.port.trunk_vlans", label: "Set port trunk VLANs", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "VLANs (comma separated)", kind: "list" }] },
     { op: "switch.port.admin_state", label: "Port admin state", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "State", kind: "select", options: ["up", "down"] }] },
     { op: "switch.port.poe", label: "Port PoE", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "PoE", kind: "select", options: ["disabled", "enabled"] }] },
+    { op: "switch.port.description", label: "Port description", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "Description", kind: "text" }] },
+    { op: "switch.port.stp_bpdu_guard", label: "BPDU guard (edge port)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "BPDU guard", kind: "select", options: ["enabled", "disabled"] }] },
+    { op: "switch.port.storm_control", label: "Storm control", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "broadcast_kbps", label: "Broadcast kbps", kind: "int" },
+      { key: "multicast_kbps", label: "Multicast kbps (optional)", kind: "int", optional: true }, { key: "unknown_unicast_kbps", label: "Unknown-unicast kbps (optional)", kind: "int", optional: true }] },
+    { op: "switch.port.qos_trust", label: "QoS trust (voice)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "Trust", kind: "select", options: ["dscp", "cos", "none"] }] },
+    { op: "switch.system.ntp", label: "NTP server", fields: [{ key: "value", label: "NTP server IP", kind: "text" }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
+    { op: "switch.system.dns", label: "DNS servers", fields: [{ key: "value", label: "DNS server IPs (comma separated)", kind: "ips" }, { key: "domain", label: "Domain (optional)", kind: "text", optional: true }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
+    { op: "switch.system.syslog", label: "Syslog server", fields: [{ key: "value", label: "Syslog server IP", kind: "text" }, { key: "severity", label: "Severity", kind: "select", options: ["warning", "info", "notice", "error"] }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
   ],
   access_point: [
     { op: "ap.radio.channel", label: "Radio channel", fields: [{ key: "band", label: "Band", kind: "select", options: ["5", "2.4"] }, { key: "value", label: "Channel", kind: "int" }, { key: "power", label: "EIRP dBm", kind: "int" }] },
@@ -27,6 +36,13 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "ap.band_steering", label: "Band steering", fields: [{ key: "value", label: "Mode", kind: "select", options: ["prefer-5ghz", "force-5ghz", "balance-bands", "disabled"] }] },
     { op: "ap.client_match", label: "ClientMatch", fields: [{ key: "value", label: "State", kind: "select", options: ["enabled", "disabled"] }] },
     { op: "ap.airtime_fairness", label: "Airtime fairness", fields: [{ key: "value", label: "Mode", kind: "select", options: ["fair-access", "default-access", "preferred-access"] }] },
+    { op: "ap.ssid.create", label: "New SSID (PSK / open)", fields: [{ key: "ssid", label: "Profile", kind: "text" }, { key: "essid", label: "Broadcast name", kind: "text" },
+      { key: "vlan", label: "VLAN", kind: "int" }, { key: "security", label: "Security", kind: "select", options: ["wpa2-psk-aes", "wpa3-sae-aes", "opensystem"] },
+      { key: "secret_ref", label: "Passphrase (credential library)", kind: "secret", optional: true }] },
+    { op: "ap.ssid.enterprise", label: "New 802.1X SSID + RADIUS", fields: [{ key: "ssid", label: "Profile", kind: "text" }, { key: "essid", label: "Broadcast name", kind: "text" },
+      { key: "vlan", label: "VLAN", kind: "int" }, { key: "security", label: "Security", kind: "select", options: ["wpa2-enterprise", "wpa3-enterprise"] },
+      { key: "radius_name", label: "RADIUS server name", kind: "text" }, { key: "radius_ip", label: "RADIUS server IP", kind: "text" },
+      { key: "secret_ref", label: "RADIUS shared secret (credential library)", kind: "secret" }] },
   ],
 };
 
@@ -35,12 +51,15 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
   const [kind, setKind] = useState(defs[0]?.op ?? "");
   const [vals, setVals] = useState<Record<string, string>>({});
   const def = defs.find(d => d.op === kind) ?? defs[0];
+  const creds = useLoad(onboardingApi.credentials, [], 0);
   if (!def) return null;
   const add = () => {
     const o: Op = { op: def.op };
     for (const f of def.fields) {
       const v = vals[f.key] ?? (f.options?.[0] ?? "");
+      if (f.optional && !v.trim()) continue;
       o[f.key] = def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
+        : f.kind === "ips" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "int" || (f.key === "value" && def.op === "ap.radio.width") ? Number(v)
         : f.kind === "list" ? v.split(/[\s,]+/).filter(Boolean).map(Number) : v;
     }
@@ -49,7 +68,10 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
   return <div className="flex flex-wrap items-end gap-2">
     <label className="text-sm">Operation<select className={inputCls} value={def.op} onChange={e => { setKind(e.target.value); setVals({}); }}>
       {defs.map(d => <option key={d.op} value={d.op}>{d.label}</option>)}</select></label>
-    {def.fields.map(f => <label key={f.key} className="text-sm">{f.label}{f.kind === "select"
+    {def.fields.map(f => <label key={f.key} className="text-sm">{f.label}{f.kind === "secret"
+      ? <select aria-label={f.label} className={inputCls} value={vals[f.key] ?? ""} onChange={e => setVals({ ...vals, [f.key]: e.target.value })}>
+          <option value="">Select a credential profile…</option>{(creds.data ?? []).filter(c => c.enabled).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+      : f.kind === "select"
       ? <select className={inputCls} value={vals[f.key] ?? f.options![0]} onChange={e => setVals({ ...vals, [f.key]: e.target.value })}>{f.options!.map(o => <option key={o}>{o}</option>)}</select>
       : <input className={inputCls} value={vals[f.key] ?? ""} onChange={e => setVals({ ...vals, [f.key]: e.target.value })} />}</label>)}
     <button className={btn2} onClick={add}>Add to plan</button>

@@ -141,6 +141,7 @@ class Worker:
         while not self.stop.is_set():
             await asyncio.to_thread(J.safe(J.vault_captures))
             await asyncio.to_thread(J.safe(J.optimizer))
+            await asyncio.to_thread(J.safe(J.recovery_sweep))
             if tick % 12 == 0:
                 await asyncio.to_thread(J.safe(J.scheduled_analysis))
             tick += 1
@@ -301,9 +302,80 @@ class Worker:
 
     def _apply(self, e):
         with session_scope() as db:
+            from backend.infrastructure.event_effects import apply_effects
             svc = IngestService(ledger=SqlEventLedger(db, INGEST_CONSUMER), telemetry=telemetry_store(), logs=log_store(),
-                                commit=db.commit, rollback=db.rollback)
+                                commit=db.commit, rollback=db.rollback, effects=lambda ev: apply_effects(db, ev))
             return svc.handle(e)
+
+    async def discovery_loop(self) -> None:
+        """Durable /24 discovery jobs (E2E-07): leased, resumable after restarts, pause/cancel aware."""
+        from backend.infrastructure import scheduled_jobs as J
+        while not self.stop.is_set():
+            try:
+                res = await asyncio.to_thread(J.discovery, f"worker-{self.instance}")
+                if res:
+                    self.stats["discovery"] = res
+            except Exception as exc:
+                log.warning("discovery cycle failed: %s", type(exc).__name__)
+            await self._sleep(2)
+
+    async def notifications_loop(self) -> None:
+        """Alert notifications and escalation (E2E-20); idempotent across replicas via delivery dedupe keys."""
+        from backend.infrastructure import scheduled_jobs as J
+        while not self.stop.is_set():
+            res = await asyncio.to_thread(J.safe(J.notifications))
+            if res:
+                self.stats["notifications"] = res
+            await self._sleep(15)
+
+    # ------------------------------------------------------------------ transactional outbox relay (E2E-03)
+    async def outbox_loop(self) -> None:
+        """Publish PENDING outbox rows (scheduled collection, change engine) to JetStream with Nats-Msg-Id =
+        event_id. A row is marked DELIVERED only after the broker acknowledged it; failures back off and
+        dead-letter after MAX_ATTEMPTS. The ingest consumer then applies the event like every other one."""
+        from backend.infrastructure import outbox
+        from backend.database.models_remediation import EventOutbox
+        from sqlalchemy import select
+
+        def _due():
+            now = datetime.now(timezone.utc)
+            with session_scope() as db:
+                rows = db.scalars(select(EventOutbox).where(EventOutbox.state == "PENDING")
+                                  .order_by(EventOutbox.created_at).limit(200)).all()
+                return [(r.event_id, r.envelope) for r in rows
+                        if r.next_attempt_at is None or
+                        (r.next_attempt_at if r.next_attempt_at.tzinfo else r.next_attempt_at.replace(tzinfo=timezone.utc)) <= now]
+
+        def _mark(event_id: str, error: str | None):
+            with session_scope() as db:
+                row = db.get(EventOutbox, event_id)
+                if row is None or row.state != "PENDING":
+                    return
+                if error is None:
+                    row.state, row.delivered_at, row.last_error, row.next_attempt_at = \
+                        "DELIVERED", datetime.now(timezone.utc), None, None
+                    row.attempts += 1
+                else:
+                    row.attempts += 1
+                    row.last_error = error[:300]
+                    if row.attempts >= outbox.MAX_ATTEMPTS:
+                        row.state = "DLQ"
+                    else:
+                        row.next_attempt_at = datetime.now(timezone.utc) + outbox._backoff(row.attempts)
+
+        while not self.stop.is_set():
+            try:
+                for event_id, env in await asyncio.to_thread(_due):
+                    try:
+                        await self.bus.publish(parse_event(env.encode()))
+                        await asyncio.to_thread(_mark, event_id, None)
+                        self.stats["outbox_published"] = self.stats.get("outbox_published", 0) + 1
+                    except Exception as exc:
+                        await asyncio.to_thread(_mark, event_id, f"{type(exc).__name__}: {exc}")
+                        self.stats["last_error"] = f"outbox publish: {type(exc).__name__}"
+            except Exception as exc:
+                log.warning("outbox relay cycle failed: %s", type(exc).__name__)
+            await self._sleep(2)
 
     # ------------------------------------------------------------------ synthetic job
     async def synthetic_responder(self) -> None:
@@ -341,7 +413,9 @@ class Worker:
         await self.connect_bus()
         await self.synthetic_responder()
         tasks = [hb, asyncio.create_task(self.poll_loop()), asyncio.create_task(self.ingest_loop()),
-                 asyncio.create_task(self.collection_loop()), asyncio.create_task(self.jobs_loop())]
+                 asyncio.create_task(self.collection_loop()), asyncio.create_task(self.jobs_loop()),
+                 asyncio.create_task(self.outbox_loop()), asyncio.create_task(self.discovery_loop()),
+                 asyncio.create_task(self.notifications_loop())]
         await self.stop.wait()
         log.info("shutting down")
         # Threads running blocking DB calls cannot be cancelled; never let shutdown hang past the grace period.
@@ -359,6 +433,8 @@ class Worker:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from backend.security.log_redaction import install
+    install()
     asyncio.run(Worker().run())
 
 

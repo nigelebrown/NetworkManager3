@@ -19,7 +19,7 @@ EVID = Path(__file__).resolve().parents[2] / "evidence" / "e2e-live"
 PAGES = ["/", "/executive", "/wifi", "/system", "/onboarding", "/onboarding/manual", "/discovery", "/sites", "/aps",
          "/switches", "/clients", "/collection", "/experience", "/phase4-insights", "/alerts", "/logs", "/compliance",
          "/changes", "/config-templates", "/vault", "/config", "/replace", "/accountability", "/audit", "/learning",
-         "/optimization", "/certification", "/device-alerts", "/assistant", "/ai-learning", "/firmware", "/printers", "/platform", "/recovery", "/data", "/users"]
+         "/optimization", "/certification", "/device-alerts", "/deployments", "/topology", "/notifications", "/assistant", "/ai-learning", "/firmware", "/printers", "/platform", "/recovery", "/data", "/users"]
 
 
 @pytest.fixture(scope="module")
@@ -170,8 +170,8 @@ def test_live_platform_end_to_end(browser):
     demo_sw = next(d for d in api(page, "GET", "/v1/devices") if d["source_type"] == "DEMO" and d["family"] == "switch")
     page.goto(URL + "/certification")
     page.get_by_label("Device", exact=True).select_option(demo_sw["id"])
-    page.get_by_label("Unused test port").fill("1/1/20")
-    page.get_by_label(re.compile("LAG test ports")).fill("1/1/21, 1/1/22")
+    page.get_by_label("Unused test port").fill("1/1/10")      # exists on every demo model
+    page.get_by_label(re.compile("LAG test ports")).fill("1/1/11, 1/1/12")
     page.get_by_label(re.compile("authorised LAB device")).check()
     page.get_by_role("button", name="Run certification").click()
     page.get_by_text(re.compile("Certification run complete: .*EMULATED")).wait_for(timeout=60000)
@@ -222,7 +222,11 @@ def test_live_platform_end_to_end(browser):
     page.get_by_role("button", name="Yes, remove").click()
     page.get_by_text(re.compile("Demo data removed")).wait_for(timeout=60000)
     noc = api(page, "GET", "/v1/noc/overview")
-    assert [d["device_id"] for d in noc["devices"]] == [real]
+    ids = [d["device_id"] for d in noc["devices"]]
+    assert real in ids
+    left = api(page, "GET", "/v1/devices")
+    assert not [d for d in left if d["source_type"] == "DEMO"], "demo devices survived removal"
+    assert {d["id"] for d in left} == set(ids)  # NOC and inventory agree
     page.goto(URL + "/")
     page.wait_for_load_state("networkidle")
     assert page.get_by_text("DEMO DATA LOADED").count() == 0

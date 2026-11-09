@@ -39,6 +39,13 @@ CATALOGUE: tuple[AlertRule, ...] = (
     AlertRule("SW_UPLINK_UTIL_HIGH", "switch", "max_port_util_percent", "ge", 85, "major", "Port utilisation high"),
 )
 
+# Per-interface rules: evaluated for EACH port separately (alert entity = port), so an operator sees which port.
+PORT_CATALOGUE: tuple[AlertRule, ...] = (
+    AlertRule("PORT_UTIL_HIGH", "port", "port_util_percent", "ge", 90, "major", "Interface utilisation high"),
+    AlertRule("PORT_ERRORS", "port", "port_errors_delta", "ge", 10, "major", "Interface errors increasing"),
+    AlertRule("PORT_FLAPPING", "port", "port_link_resets_delta", "ge", 3, "major", "Interface flapping"),
+)
+
 
 def evaluate(family: str, values: dict, overrides: dict[str, dict] | None = None) -> list[dict]:
     """values: metric -> number (absent = unmeasured). overrides: rule_id -> {threshold, severity, enabled}."""

@@ -13,15 +13,35 @@ export type FoundDevice = {
 };
 export type DiscoveryJob = {
   id: string; status: string; results: FoundDevice[];
-  site_name: string; scope?: string; credential_id: string; device_writes: "LOCKED";
-  total_targets?: number; completed_targets?: number; found_count?: number; failed_count?: number;
+  site_name: string; credential_id: string; device_writes: string;
 };
 export type Registered = {
   registered: { device_id: string; hostname: string; serial_number: string; config_status: string }[];
-  device_writes: "LOCKED"; next_step: string;
+  device_writes: string; next_step: string;
 };
+export type DeviceAcceptance = {
+  device_id: string; family: "access_point" | "switch"; reported_model: string | null;
+  recognized_pilot_model: string | null; reported_firmware: string | null;
+  inventory_evidence: "REST_DISCOVERY_RECORDED" | "MANUAL_ENTRY";
+  last_observed_at: string | null;
+  credential: { bound: boolean; enabled: boolean; profile_id: string | null; last_test_status: string | null };
+  baseline: { id: string | null; captured_at: string | null;
+    source: string | null; completeness: string; warning: string | null };
+  stage: "MANUAL_REGISTERED" | "REST_DISCOVERED" | "BASELINE_CAPTURED" | "DRAFTED";
+  draft_count: number; field_checks: {field: string; status: "OBSERVED" | "NOT_VERIFIED"; detail: string}[];
+  operator_pilot_eligible: boolean; hardware_certified: boolean;
+  device_writes: string; remaining_actions: string[];
+};
+export type FleetAcceptance = {
+  device_count: number; limit: number; hardware_certified: number; device_writes: string;
+  stages: Record<string, number>;
+  devices: {device_id: string; family: string; reported_model: string | null;
+    recognized_pilot_model: string | null; inventory_evidence: string;
+    stage: string; hardware_certified: boolean}[];
+};
+
 export type ConfigData = {
-  device_id: string; credential_id: string | null; hardware_writes: "LOCKED";
+  device_id: string; credential_id: string | null; hardware_writes: string;
   baseline: {
     id: string; captured_at: string; completeness: string;
     config: { vlans?: (number | { id: number; name: string })[];
@@ -36,6 +56,8 @@ const enc = (v: string) => encodeURIComponent(v);
 const opts = (obj: unknown) => ({ method: "POST", body: JSON.stringify(obj) });
 export const onboardingApi = {
   credentials: () => request<CredentialProfile[]>("/v1/onboarding/credentials"),
+  acceptance: (id: string) => request<DeviceAcceptance>(`/v1/onboarding/devices/${enc(id)}/acceptance`),
+  fleetAcceptance: () => request<FleetAcceptance>("/v1/onboarding/acceptance"),
   createCredential: (body: {
     name: string; device_family: "access_point" | "switch"; username: string;
     password: string; description?: string | null;
@@ -49,20 +71,16 @@ export const onboardingApi = {
       `/v1/onboarding/credentials/${enc(id)}/test`, opts({ management_ip: ip })),
   discover: (body: { credential_id: string; scope: string; site_name: string }) =>
     request<DiscoveryJob>("/v1/onboarding/discover", opts(body)),
-  startDiscovery: (body: { credential_id: string; scope: string; site_name: string }) =>
-    request<DiscoveryJob>("/v1/onboarding/discoveries/start", opts(body)),
-  nextDiscoveryBatch: (id: string, offset: number, batch_size = 4) =>
-    request<DiscoveryJob>(`/v1/onboarding/discoveries/${enc(id)}/next`, opts({ offset, batch_size })),
   discovery: (id: string) => request<DiscoveryJob>(`/v1/onboarding/discoveries/${enc(id)}`),
   register: (id: string, indices: number[]) =>
     request<Registered>(`/v1/onboarding/discoveries/${enc(id)}/register`, opts({ indices })),
   capture: (id: string, credential_id?: string) =>
     request<{ snapshot_id: string; completeness: string; config: Record<string, unknown>;
-      warning: string | null; device_writes: "LOCKED" }>(
+      warning: string | null; device_writes: string }>(
       `/v1/onboarding/devices/${enc(id)}/capture`, opts({ credential_id: credential_id || null })),
   deviceConfig: (id: string) =>
     request<ConfigData>(`/v1/onboarding/devices/${enc(id)}/config`),
   saveDraft: (id: string, proposed: Record<string, unknown>) =>
-    request<{ id: string; state: "DRAFT"; hardware_writes: "LOCKED" }>(
+    request<{ id: string; state: "DRAFT"; hardware_writes: string }>(
       `/v1/onboarding/devices/${enc(id)}/drafts`, opts({ proposed })),
 };

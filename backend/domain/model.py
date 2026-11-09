@@ -107,6 +107,13 @@ class TelemetryPoint:
     site_id: str | None = None
     sample_period_s: int | None = None
     tags: dict = field(default_factory=dict)
+    # Resource identity inside the device (E2E-01/02): one value per (device, entity, metric, time).
+    # entity_type: device | port | radio | client | psu | fan | sensor ; entity_id e.g. "1/1/24", "radio0".
+    entity_type: str = "device"
+    entity_id: str = ""
+
+
+ENTITY_TYPES = ("device", "port", "radio", "client", "psu", "fan", "sensor", "lag", "vlan")
 
 
 @dataclass(frozen=True)

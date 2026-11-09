@@ -14,10 +14,24 @@ from datetime import datetime, timedelta, timezone
 ALLOWED_WIDTHS_MHZ = (20, 40)          # 80/160 MHz are never permitted
 APPROVAL_TTL = timedelta(hours=24)
 AP_OPERATIONS = {"ap.radio.channel", "ap.radio.width", "ap.radio.tx_power", "ap.ssid.vlan",
-                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness"}
+                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise"}
 SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
-                     "switch.lldp", "config.restore", "switch.central.disable"}
+                     "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
+                     "switch.port.stp_bpdu_guard", "switch.port.storm_control", "switch.port.qos_trust",
+                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog"}
+# Operations whose secret (PSK / RADIUS shared secret) is referenced by an encrypted credential profile id.
+# Plans never contain the secret itself; the executor resolves it only at apply time.
+SECRET_REF_OPS = {"ap.ssid.create", "ap.ssid.enterprise"}
+_NAME = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$"
+
+
+def _ipv4(v) -> bool:
+    import ipaddress
+    try:
+        return isinstance(v, str) and isinstance(ipaddress.ip_address(v), ipaddress.IPv4Address)
+    except ValueError:
+        return False
 VALID_2G = set(range(1, 14))
 VALID_5G = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136,
             140, 144, 149, 153, 157, 161, 165}
@@ -73,6 +87,37 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             raise PolicyViolation("Invalid band steering mode.")
         if kind == "ap.airtime_fairness" and op.get("value") not in ("default-access", "fair-access", "preferred-access"):
             raise PolicyViolation("Invalid airtime fairness mode.")
+        if kind in ("ap.ssid.create", "ap.ssid.enterprise"):
+            import re as _re
+            if not _re.match(_NAME, str(op.get("ssid", ""))):
+                raise PolicyViolation("SSID profile name must be 1-32 letters, digits, '_', '.', '-'.")
+            if op.get("essid") is not None and not (isinstance(op["essid"], str) and 1 <= len(op["essid"]) <= 32
+                                                    and op["essid"].isprintable()):
+                raise PolicyViolation("ESSID must be 1-32 printable characters.")
+            if not (isinstance(op.get("vlan"), int) and 1 <= op["vlan"] <= 4094):
+                raise PolicyViolation("SSID VLAN must be 1..4094.")
+            if any(k in op for k in ("passphrase", "secret", "key", "_secret")):
+                raise PolicyViolation("Secrets are never placed in a change plan; reference a credential profile "
+                                      "with secret_ref.")
+        if kind == "ap.ssid.create":
+            sec = op.get("security", "wpa2-psk-aes")
+            if sec not in ("wpa2-psk-aes", "wpa3-sae-aes", "opensystem"):
+                raise PolicyViolation("Security must be wpa2-psk-aes, wpa3-sae-aes or opensystem.")
+            if sec != "opensystem" and not op.get("secret_ref"):
+                raise PolicyViolation("A PSK SSID needs secret_ref (credential profile holding the passphrase).")
+        if kind == "ap.ssid.enterprise":
+            import re as _re
+            if op.get("security", "wpa2-enterprise") not in ("wpa2-enterprise", "wpa3-enterprise"):
+                raise PolicyViolation("Enterprise security must be wpa2-enterprise or wpa3-enterprise.")
+            if not _re.match(_NAME, str(op.get("radius_name", ""))):
+                raise PolicyViolation("RADIUS server name must be 1-32 letters, digits, '_', '.', '-'.")
+            if not _ipv4(op.get("radius_ip")):
+                raise PolicyViolation("RADIUS server must be an IPv4 address.")
+            for k in ("radius_port", "radius_acct_port"):
+                if op.get(k) is not None and not (isinstance(op[k], int) and 1 <= op[k] <= 65535):
+                    raise PolicyViolation(f"{k} must be 1..65535.")
+            if not op.get("secret_ref"):
+                raise PolicyViolation("802.1X SSID needs secret_ref (credential profile holding the RADIUS secret).")
     elif family == "switch":
         if kind not in SWITCH_OPERATIONS:
             raise PolicyViolation(f"Operation {kind!r} is not a switch operation.")
@@ -96,6 +141,35 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             raise PolicyViolation("Admin state must be up or down.")
         if kind in ("switch.port.poe", "switch.lldp") and op.get("value") not in ("enabled", "disabled"):
             raise PolicyViolation("Value must be enabled or disabled.")
+        if kind == "switch.port.description":
+            v = op.get("value")
+            if not (isinstance(v, str) and len(v) <= 64 and v.isprintable()):
+                raise PolicyViolation("Description must be at most 64 printable characters.")
+        if kind == "switch.port.stp_bpdu_guard" and op.get("value") not in ("enabled", "disabled"):
+            raise PolicyViolation("BPDU guard must be enabled or disabled.")
+        if kind == "switch.port.stp_bpdu_guard" and op.get("value") == "enabled" and uplink_ports and port in uplink_ports:
+            raise PolicyViolation(f"Port {port} is a protected uplink; BPDU guard would err-disable it.")
+        if kind == "switch.port.storm_control":
+            ks = [k for k in ("broadcast_kbps", "multicast_kbps", "unknown_unicast_kbps") if op.get(k) is not None]
+            if not ks:
+                raise PolicyViolation("Storm control needs at least one of broadcast/multicast/unknown_unicast _kbps.")
+            for k in ks:
+                if not (isinstance(op[k], int) and 64 <= op[k] <= 10_000_000):
+                    raise PolicyViolation(f"{k} must be 64..10000000 kbps.")
+        if kind == "switch.port.qos_trust" and op.get("value") not in ("none", "cos", "dscp"):
+            raise PolicyViolation("QoS trust must be none, cos or dscp.")
+        if kind in ("switch.system.ntp", "switch.system.syslog"):
+            if not _ipv4(op.get("value")):
+                raise PolicyViolation("Server must be an IPv4 address.")
+            if kind == "switch.system.syslog" and op.get("severity", "info") not in (
+                    "emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"):
+                raise PolicyViolation("Invalid syslog severity.")
+        if kind == "switch.system.dns":
+            vs = op.get("value")
+            if not (isinstance(vs, list) and 1 <= len(vs) <= 3 and all(_ipv4(x) for x in vs)):
+                raise PolicyViolation("DNS needs 1-3 IPv4 name servers.")
+        if kind.startswith("switch.system.") and op.get("vrf", "mgmt") not in ("mgmt", "default"):
+            raise PolicyViolation("VRF must be mgmt or default.")
         if kind == "switch.lag.members":
             import re as _re
             if not _re.match(r"^lag\d{1,3}$", str(op.get("lag", ""))):

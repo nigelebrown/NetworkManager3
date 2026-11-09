@@ -38,6 +38,7 @@ class SqlEventLedger:
         """Insert the event record and the processed marker in the caller's transaction. False if already there."""
         if self.is_processed(e.event_id):
             return False
+        sp = self.db.begin_nested()     # a lost race must not roll back the caller's whole transaction
         self.db.add(ProcessedEvent(consumer=self.consumer, event_id=e.event_id))
         if not self.db.get(EventRecord, e.event_id):
             self.db.add(EventRecord(
@@ -49,8 +50,9 @@ class SqlEventLedger:
                 summary=(summary or "")[:300] or None, delivery_count=1))
         try:
             self.db.flush()
+            sp.commit()
         except IntegrityError:  # a concurrent consumer won the race: treat as duplicate
-            self.db.rollback()
+            sp.rollback()
             return False
         return True
 

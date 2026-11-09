@@ -126,19 +126,24 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     t = now()
     store = telemetry_store()
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
-    plans = {p.device_id: p for p in db.scalars(select(CollectionPlan))}
+    from ..infrastructure.device_state import plans_by_device, state_of
+    plans = plans_by_device(db)
     tiles = []
     for d in db.scalars(select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"])).order_by(InmDevice.hostname)):
         p = plans.get(d.id)
         fresh = C.freshness(p.last_success_at, p.interval_seconds, t) if p else ("MANUAL" if d.last_observed_at else "NEVER")
-        rows = store.query(device_id=d.id, metric_name=None, since=t - timedelta(hours=1), limit=200) if store else []
+        rows = store.query(device_id=d.id, metric_name=None, since=t - timedelta(hours=1), limit=2000,
+                           entity_type="device") if store else []
         latest = N.latest_by_metric(rows)
-        h = N.health(d.family, latest, fresh, d.status)
+        st = state_of(d, p, now=t)
+        h = N.health(d.family, latest, fresh, "down" if st["state"] == "OFFLINE" else d.status)
+        st = state_of(d, p, now=t, health_band=h["band"])
         tiles.append({"device_id": d.id, "hostname": d.hostname, "site": sites.get(d.site_id), "family": d.family,
                       "model": d.model, "firmware": d.firmware, "status": d.status, "source_type": d.source_type,
-                      "freshness": fresh, "health": h,
+                      "freshness": fresh, "health": h, "state": st["state"], "state_reason": st["state_reason"],
+                      "last_persisted_at": st["last_persisted_at"],
                       "metrics": {k: v["value"] for k, v in latest.items()},
-                      "last_failure": p.last_failure_category if p and p.consecutive_failures else None})
+                      "last_failure": st["last_failure"]})
     status = Counter(x["status"] for x in tiles)
     fresh = Counter(x["freshness"] for x in tiles)
     since = t - timedelta(hours=1)
@@ -159,6 +164,7 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     clients = sum(x["metrics"].get("clients", 0) or 0 for x in tiles)
     return {"generated_at": iso(t), "devices": tiles,
             "summary": {"devices": len(tiles), "up": status.get("up", 0), "down": status.get("down", 0),
+                        "states": dict(Counter(x["state"] for x in tiles)),
                         "unknown": status.get("unknown", 0), "fresh": fresh.get("FRESH", 0),
                         "stale_or_gap": fresh.get("STALE", 0) + fresh.get("GAP", 0),
                         "never_polled": fresh.get("NEVER", 0) + fresh.get("MANUAL", 0),
@@ -168,17 +174,47 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
 
 
 @router.get("/devices/{device_id}/metrics/series")
-def series(device_id: str, metric: str, hours: int = 24, db: Session = Depends(get_db),
-           user: User = Depends(require_role("viewer"))):
+def series(device_id: str, metric: str, hours: int = 24, entity_type: str = "device", entity_id: str = "",
+           db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    """One time series = one (device, entity, metric). Device-level by default; pass entity_type=port and
+    entity_id=1/1/3 for a single interface (E2E-02). Series of different entities are never mixed."""
     d = real_device(db, device_id)
     store = telemetry_store()
     if store is None:
         raise HTTPException(503, "Telemetry store unavailable.")
     hours = max(1, min(hours, 24 * 30))
-    rows = store.query(device_id=d.id, metric_name=metric, since=now() - timedelta(hours=hours), limit=5000)
-    return {"device_id": d.id, "metric": metric,
-            "points": [{"t": r["observed_at"], "v": r["value"], "q": r["quality"], "src": r["source_type"]}
-                       for r in reversed(rows)]}
+    rows = store.query(device_id=d.id, metric_name=metric, since=now() - timedelta(hours=hours), limit=5000,
+                       entity_type=entity_type, entity_id=entity_id)
+    return {"device_id": d.id, "metric": metric, "entity_type": entity_type, "entity_id": entity_id,
+            "points": [{"t": r["observed_at"], "v": r["value"], "q": r["quality"], "src": r["source_type"],
+                        "event_id": r["source_event_id"]} for r in reversed(rows)]}
+
+
+@router.get("/devices/{device_id}/ports/{port:path}/series")
+def port_series(device_id: str, port: str, metric: str = "port_util_percent", hours: int = 24,
+                db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    return series(device_id, metric, hours, "port", port, db, user)
+
+
+@router.get("/devices/{device_id}/metrics/entities")
+def entities(device_id: str, hours: int = 1, db: Session = Depends(get_db),
+             user: User = Depends(require_role("viewer"))):
+    """Latest value per (entity, metric) — e.g. all 48 ports of a switch, each distinct."""
+    d = real_device(db, device_id)
+    store = telemetry_store()
+    if store is None:
+        raise HTTPException(503, "Telemetry store unavailable.")
+    latest: dict[tuple, dict] = {}
+    for r in store.query(device_id=d.id, metric_name=None, since=now() - timedelta(hours=max(1, min(hours, 24))),
+                         limit=20000):
+        key = (r["entity_type"], r["entity_id"], r["metric_name"])
+        if key not in latest:
+            latest[key] = r
+    out: dict[str, dict] = {}
+    for (et, ei, m), r in sorted(latest.items()):
+        out.setdefault(f"{et}:{ei}" if ei else et, {})[m] = {"v": r["value"], "t": r["observed_at"],
+                                                            "event_id": r["source_event_id"]}
+    return {"device_id": d.id, "entities": out}
 
 
 # ---- executive trends ----------------------------------------------------------------------

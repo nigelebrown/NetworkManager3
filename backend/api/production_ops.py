@@ -327,7 +327,8 @@ def _alert_public(a) -> dict:
     return {"id": a.id, "device_id": a.device_id, "site_id": a.site_id, "rule_id": a.rule_id, "severity": a.severity,
             "message": a.message, "value": a.value, "threshold": a.threshold, "state": a.state, "suppressed": a.suppressed,
             "opened_at": iso(a.opened_at), "last_seen_at": iso(a.last_seen_at), "resolved_at": iso(a.resolved_at),
-            "acked_by": a.acked_by, "source_type": a.source_type}
+            "acked_by": a.acked_by, "source_type": a.source_type, "entity": a.entity,
+            "correlation_id": a.correlation_id, "event_id": a.event_id}
 
 
 @router.get("/alerts")
@@ -416,3 +417,71 @@ def add_window(body: WindowInput, request: Request, db: Session = Depends(get_db
     audit(db, "maintenance_window_created", username=user.username, target=w.site_id or w.device_id or "all",
           detail=f"{iso(w.starts_at)}..{iso(w.ends_at)} {body.reason}", request=request)
     return {"id": w.id}
+
+
+# ---- E2E-14 durable change recovery ------------------------------------------------------------
+@router.get("/recovery/journal")
+def recovery_journal(state: str | None = None, db: Session = Depends(get_db),
+                     user: User = Depends(require_any_role("admin", "auditor", "approver", "operator"))):
+    from ..database.models_remediation import ChangeRecoveryJournal
+    from ..infrastructure import recovery as RC
+    RC.sweep(db)
+    q = select(ChangeRecoveryJournal).order_by(ChangeRecoveryJournal.created_at.desc()).limit(200)
+    if state:
+        q = q.where(ChangeRecoveryJournal.state == state)
+    return [RC.public(j) for j in db.scalars(q)]
+
+
+@router.post("/recovery/journal/{journal_id}/recover")
+def recovery_run(journal_id: str, request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(require_role("admin"))):
+    from ..database.models_remediation import ChangeRecoveryJournal
+    from ..infrastructure import recovery as RC
+    j = db.get(ChangeRecoveryJournal, journal_id)
+    if j is None:
+        raise HTTPException(404, "Journal entry not found.")
+    if X.control(db).emergency_stop:
+        raise HTTPException(409, "Emergency stop is active.")
+    try:
+        out = RC.recover(db, j, actor=user.username)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    audit(db, "change_recovery_" + ("succeeded" if out["recovered"] else "failed"), username=user.username,
+          target=j.device_id, detail=f"journal={j.id} plan={j.plan_id} steps={out['steps']}", request=request,
+          success=out["recovered"])
+    return out
+
+
+class ResolveInput(BaseModel):
+    note: str = Field(min_length=10, max_length=400)
+
+
+@router.post("/recovery/journal/{journal_id}/resolve")
+def recovery_resolve(journal_id: str, body: ResolveInput, request: Request, db: Session = Depends(get_db),
+                     user: User = Depends(require_role("admin"))):
+    """Close an entry after a guided/manual recovery, with the operator's evidence note."""
+    from ..database.models_remediation import ChangeRecoveryJournal
+    from ..infrastructure import recovery as RC
+    j = db.get(ChangeRecoveryJournal, journal_id)
+    if j is None:
+        raise HTTPException(404, "Journal entry not found.")
+    if j.state not in ("RECOVERY_REQUIRED", "OPEN"):
+        raise HTTPException(409, f"Journal is {j.state}.")
+    j.state, j.resolved_by, j.notes, j.updated_at = "RESOLVED_MANUALLY", user.username, body.note, now()
+    audit(db, "change_recovery_resolved_manually", username=user.username, target=j.device_id,
+          detail=f"journal={j.id}: {body.note}", request=request)
+    return RC.public(j)
+
+
+@router.get("/devices/{device_id}/guided-restore")
+def guided_restore(device_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    from ..infrastructure import recovery as RC
+    return RC.guided_restore(real_device(db, device_id))
+
+
+@router.get("/outbox/status")
+def outbox_status(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor"))):
+    from ..infrastructure import outbox
+    return outbox.stats(db)

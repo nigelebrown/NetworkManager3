@@ -20,6 +20,9 @@ EVENT_TYPES = {
     "synthetic.probe",
     "alert.changed",
     "recommendation.created",
+    # 1.2.0 remediation: the scheduled real-device collector and change engine use the same contract
+    "device.poll.failed",
+    "change.executed",
 }
 
 

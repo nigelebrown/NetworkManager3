@@ -28,7 +28,7 @@ export interface Snapshot { id: number; site_id: number; taken_at: string; kind:
 export interface Recovery { vault: { status: string; phase: number; detail: string }; replacement_wizard: { status: string; phase: number }; restore_candidates: unknown[]; sanitized_snapshots: Snapshot[] }
 export interface UserRow { id: number; username: string; role: string; is_active: boolean; site_scope: "all" | "granted"; site_grants: number[]; must_change_password: boolean; created_at: string }
 export interface ReleaseRow { id: number; ts: string; operation: string; operator: string; version: string; git_commit: string | null; environment: string; outcome: string; detail: string | null }
-export interface Features { device_writes: "LOCKED" | "ENABLED"; modules: { key: string; status: string; phase?: number; note?: string }[] }
+export interface Features { device_writes: string; modules: { key: string; status: string; phase?: number; note?: string }[] }
 
 const j = (body: unknown) => ({ body: JSON.stringify(body) });
 export const v1 = {

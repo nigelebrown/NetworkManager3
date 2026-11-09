@@ -36,6 +36,6 @@ def test_release_manifest_head_matches_latest_migration():
     import json
     rel = json.loads((ROOT / "release.json").read_text())
     versions = sorted(p.name[:4] for p in (ROOT / "backend/database/migrations/versions").glob("0*.py"))
-    assert rel["management_schema_head"] == versions[-1] == "0009"
+    assert rel["management_schema_head"] == versions[-1] == "0011"
     assert rel["device_writes"] == "LOCKED"
     assert set(rel["upgradable_management_schemas"]) == set(versions[3:-1])

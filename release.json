@@ -1,14 +1,14 @@
 {
   "product": "Intelligent Network Manager",
-  "version": "1.2.0-rc1",
-  "phase": "5-11 software complete (hardware certification pending)",
-  "management_schema_head": "0009",
-  "telemetry_schema_head": "t001",
+  "version": "1.2.0-rc2",
+  "phase": "1-11 software remediation (hardware certification pending)",
+  "management_schema_head": "0011",
+  "telemetry_schema_head": "t002",
   "accepts_management_schemas": [
-    "0009"
+    "0011"
   ],
   "accepts_telemetry_schemas": [
-    "t001"
+    "t002"
   ],
   "migrations_expand_only": true,
   "device_writes": "LOCKED",
@@ -38,7 +38,7 @@
     ]
   },
   "onboarding_module": {
-    "status": "WIZARD_READ_ONLY",
+    "status": "WIZARD_READWRITE_CERTIFICATION_GATED",
     "schema_revision": "0006",
     "device_writes": "LOCKED",
     "features": [
@@ -49,13 +49,13 @@
       "configuration drafts"
     ],
     "limitations": [
-      "no device configuration writes",
+      "hardware writes require lab certification and independent approval",
       "range preview is not unrestricted network scan",
       "real model validation required"
     ]
   },
   "configuration_inheritance": {
-    "status": "GLOBAL_SITE_DEVICE_DRAFT_ONLY",
+    "status": "GLOBAL_GROUP_SITE_MODEL_DEVICE_WRITE_GATED",
     "schema_revision": "0007",
     "device_writes": "LOCKED",
     "features": [
@@ -93,16 +93,18 @@
     "0005",
     "0006",
     "0007",
-    "0008"
+    "0008",
+    "0009",
+    "0010"
   ],
   "capability_completion": {
-    "status": "SOFTWARE_COMPLETE_HARDWARE_UNVERIFIED",
+    "status": "SOFTWARE_REMEDIATION_HARDWARE_UNCERTIFIED",
     "schema_revision": "0008",
     "device_writes": "LOCKED",
     "work_packages": {
       "WP-02": "scheduled read-only collection plans, leases, dedupe, bounded retry/DLQ, freshness",
       "WP-03": "syslog normalization, AAA session evidence, VERIFIED/CORRELATED/UNKNOWN attribution",
-      "WP-04": "draft-only inheritance (phase 3) \u2014 unchanged",
+      "WP-04": "draft-only inheritance (phase 3) — unchanged",
       "WP-05": "envelope-encrypted signed config vault, tamper detection, restore-compatibility validation",
       "WP-06": "typed change plans, 20/40 MHz RF policy, two-person approval, execution gate (always DENY while locked)",
       "WP-07": "replacement planning to LAB_VALIDATION_REQUIRED; no restore endpoint",
@@ -120,9 +122,12 @@
       "multi-VM HA failover"
     ]
   },
-  "automatic_optimization": "NOT_PROVIDED_BY_OWNER_POLICY",
+  "automatic_optimization": "DEVICE_OPT_IN_IMPLEMENTED_DISABLED_BY_DEFAULT",
   "install_modes": {
-    "live": "INM_MODE=live INM_PROFILE=lab-readonly \u2014 production, real devices, read-only collection",
+    "live": "live collection and workflows; hardware writes LOCKED by default pending per-model certification",
     "demo": "simulated sites only (evaluation)"
-  }
+  },
+  "upgradable_telemetry_schemas": [
+    "t001"
+  ]
 }

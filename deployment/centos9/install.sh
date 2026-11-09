@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # One-command clean installation (Appendix H.1):
-#   sudo bash deployment/centos9/install.sh --mode demo
+#   sudo bash deployment/centos9/install.sh --mode live    (production: real devices, read-only collection)
+#   sudo bash deployment/centos9/install.sh --mode demo    (evaluation: simulated sites only)
 # State machine: PRECHECK -> PREPARE -> DEPLOY -> VERIFY -> COMMIT (release receipt). Re-running is safe:
 # secrets are never regenerated, data volumes are never touched, and a version change is refused (use update.sh).
 # Options:
-#   --mode demo            required; the only profile Phase 1 supports (no device access, device writes locked)
+#   --mode live|demo       required. live = INM_MODE=live, INM_PROFILE=lab-readonly (no simulated sites; demo data
+#                          only via the in-app Load/Remove buttons). Device writes stay locked in both modes.
 #   --preflight-only       run PRECHECK and stop
 #   --skip-docker-install  fail instead of installing Docker CE when it is missing
 source "$(dirname "$0")/common.sh"
@@ -20,10 +22,11 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option $1" 2 ;;
   esac
 done
-[[ "$MODE" == demo ]] || die "usage: sudo bash deployment/centos9/install.sh --mode demo   (Phase 1 supports the demo profile only)" 2
+[[ "$MODE" == demo || "$MODE" == live ]] || die "usage: sudo bash deployment/centos9/install.sh --mode live|demo" 2
 
 require_root
 start_transcript install
+# shellcheck disable=SC2154  # rc is assigned inside the trap body
 trap 'rc=$?; if [[ $rc -ne 0 ]]; then warn "install FAILED (exit $rc). Transcript: $TRANSCRIPT"; record_release install failed "exit $rc" || true; fi' EXIT
 
 # ---------------------------------------------------------------- PRECHECK
@@ -57,6 +60,14 @@ install -d -m 0750 "$STATE" "$BACKUP_DIR"
 generate_secrets
 ensure_tls
 set_env_value INM_GIT_COMMIT "$(git_commit)"
+if [[ "$MODE" == live ]]; then
+  [[ "$(env_get SIMS_ADMIN_PASSWORD)" != 'demo123!' ]] || die "the demo password cannot be used in live mode" 2
+  set_env_value INM_MODE live
+  set_env_value INM_PROFILE lab-readonly
+  set_env_value INM_DEMO_SIMPLE_LOGIN false
+else
+  set_env_value INM_MODE demo
+fi
 compose config --quiet || die "compose configuration invalid" 7
 
 # ---------------------------------------------------------------- DEPLOY
@@ -74,11 +85,11 @@ log "VERIFY"
 bash "$ROOT/deployment/centos9/verify.sh" || die "verification failed: see the [FAIL] lines above" 8
 
 # ---------------------------------------------------------------- COMMIT
-record_release install success "mode=demo"
+record_release install success "mode=$MODE"
 trap - EXIT
 cat <<EOF
 
-INM $(release_version) (DEMO profile) is installed and verified.
+INM $(release_version) (${MODE^^} profile) is installed and verified.
   Web UI   : https://${INM_WEB_BIND:-$(env_get INM_WEB_BIND)}:$(env_get INM_WEB_PORT)/
              (bound to $(env_get INM_WEB_BIND) — from your workstation: ssh -L 8443:127.0.0.1:$(env_get INM_WEB_PORT) $(operator_name | cut -d' ' -f1)@$(hostname))
   Sign in  : user '$(env_get INM_ADMIN_USERNAME)'; the one-time password is in $ETC/initial-admin-password (root only).

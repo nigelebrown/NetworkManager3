@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..config import get_settings
 from .models import Base
 from . import models_printer  # register printer tables with metadata for tests and migrations
+from . import models_templates  # Phase 3 scoped draft templates; no device writes
 from . import models_onboarding  # encrypted reusable profiles and staged device onboarding
+from . import models_phases  # phases 5-11 (WP-02..WP-12) expand-only tables; writes stay LOCKED
+from . import models_remediation  # 0010 outbox, workflows, recovery journal, device groups
 
 log = logging.getLogger("sims.db")
 

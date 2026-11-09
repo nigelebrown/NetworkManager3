@@ -87,20 +87,43 @@ def features(_: User = Depends(get_current_user)):
     s = get_settings()
     demo = s.mode == "demo"
     live_or_demo = "DEMO" if demo else "LIVE_READ_ONLY"
-    return {"device_writes": "LOCKED" if not s.device_writes_permitted else "ENABLED", "modules": [
+    from ..infrastructure.optimizer import feature_enabled
+    from ..infrastructure.posture import write_posture
+    posture = write_posture()
+    return {"device_writes": posture["hardware_writes"], "write_posture": posture, "modules": [
         {"key": "dashboard", "status": live_or_demo}, {"key": "aps", "status": live_or_demo},
         {"key": "clients", "status": live_or_demo}, {"key": "sites", "status": live_or_demo},
         {"key": "experience", "status": live_or_demo}, {"key": "alerts", "status": live_or_demo},
-        {"key": "switches", "status": "DEMO_PLUS_REAL_INVENTORY", "note": "REAL device metrics labelled MANUAL or PROBED"},
-        {"key": "configuration", "status": "READ_PLAN_ONLY", "phase_write": 6},
-        {"key": "firmware", "status": "READ_PLAN_ONLY", "phase_write": 6},
+        {"key": "switches", "status": "LIVE", "note": "REST telemetry per port; demo switches use a labelled emulator"},
+        {"key": "configuration", "status": "CERTIFIED_WRITE_ENGINE",
+         "note": "Writes need an approved plan, per-model/firmware certification and an unlocked posture"},
+        {"key": "firmware", "status": "PARTIAL",
+         "note": "AP firmware staging uses the legacy SIMS path (independent approval required); CX firmware "
+                 "orchestration and post-upgrade certification are not implemented"},
         {"key": "assistant", "status": "ADVISORY_READ_ONLY"},
-        {"key": "logs", "status": "LIVE", "note": "platform events + synthetic syslog; device syslog Phase 3"},
+        {"key": "logs", "status": "LIVE", "note": "platform events, collector and change events in Loki; device "
+                                                 "syslog via Alloy"},
         {"key": "audit", "status": "LIVE"}, {"key": "system_health", "status": "LIVE"},
-        {"key": "recovery", "status": "PLANNED", "phase": 5, "note": "legacy backups are NOT RESTORABLE"},
-        {"key": "ai_learning", "status": "RULES_ONLY", "phase_ml": 8},
-        {"key": "onboarding", "status": "MANUAL_AND_READ_ONLY", "note": "Import AP/switch data now; live REST read only with approved management CIDRs"},
-        {"key": "change_control", "status": "PLANNED", "phase": 6},
+        {"key": "recovery", "status": "LIVE", "note": "encrypted vault, change-recovery journal; legacy SIMS "
+                                                     "backups remain NOT RESTORABLE"},
+        {"key": "ai_learning", "status": "RULES_ONLY", "note": "Rule-based recommendations; no trained ML model "
+                                                              "is deployed"},
+        {"key": "phase4_insights", "status": "RECORDED_DATA_RULES", "note": "Rules over persisted telemetry"},
+        {"key": "onboarding", "status": "WORKFLOW", "note": "Resumable workflow: discover -> import -> templates -> "
+                                                          "approve -> apply -> verify -> monitor"},
+        {"key": "change_control", "status": "LIVE"},
+        {"key": "optimization", "status": "PER_DEVICE_OPT_IN" if feature_enabled() else "OFF",
+         "note": "Off unless INM_AUTOMATIC_OPTIMIZATION=true and an AP is individually enrolled"},
+        {"key": "vendors_cisco_unifi", "status": "PLACEHOLDER", "note": "Manual inventory only; no adapter"},
+        {"key": "notifications", "status": "LIVE", "note": "Webhook / email (SMTP relay) / syslog; retry, DEAD "
+                                                           "state, escalation of unacknowledged alerts"},
+        # Not built in this release: listed so no screen or report can imply they exist.
+        {"key": "switch_port_access_control", "status": "NOT_IMPLEMENTED", "note": "802.1X / MAB on switch ports"},
+        {"key": "switch_stacking", "status": "NOT_IMPLEMENTED", "note": "VSF stacking provisioning"},
+        {"key": "switch_acl_routing", "status": "NOT_IMPLEMENTED", "note": "ACLs, static/dynamic routing"},
+        {"key": "client_roaming_rf_interference", "status": "NOT_IMPLEMENTED",
+         "note": "Roaming history and interference analytics need AP event feeds not yet collected"},
+        {"key": "remote_diagnostics", "status": "NOT_IMPLEMENTED", "note": "Ping/traceroute/cable test from devices"},
     ]}
 
 
@@ -157,7 +180,10 @@ def synthetic_trace(correlation_id: str, db: Session = Depends(get_db), _: User 
 
 
 # ---------------------------------------------------------------- inventory
-def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None) -> dict:
+_NO_PLAN = object()
+
+
+def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None, plan=_NO_PLAN) -> dict:
     out = {"id": d.id, "source_type": d.source_type, "environment": d.environment, "vendor": d.vendor,
            "family": d.family, "model": d.model, "serial_number": d.serial_number, "hostname": d.hostname,
            "firmware": d.firmware, "status": d.status, "adapter": d.adapter, "site_id": d.site_id,
@@ -166,6 +192,9 @@ def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None) -> dic
            "management_addresses": d.mgmt_addresses if d.source_type == "REAL" else []}
     if caps is not None:
         out["capabilities"] = [{"operation": c.operation, "status": c.status, "evidence": c.evidence} for c in caps]
+    if plan is not _NO_PLAN:
+        from ..infrastructure.device_state import state_of
+        out.update(state_of(d, plan))
     return out
 
 
@@ -197,7 +226,9 @@ def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$
     caps: dict[str, list] = {}
     for c in db.scalars(select(DeviceCapability).where(DeviceCapability.device_id.in_([d.id for d in devs]))):
         caps.setdefault(c.device_id, []).append(c)
-    return [_device_out(d, caps.get(d.id, [])) for d in devs]
+    from ..infrastructure.device_state import plans_by_device
+    plans = plans_by_device(db)
+    return [_device_out(d, caps.get(d.id, []), plans.get(d.id)) for d in devs]
 
 
 def _visible_device(db: Session, device_id: str) -> InmDevice:
@@ -213,7 +244,8 @@ def _visible_device(db: Session, device_id: str) -> InmDevice:
 def v1_device(device_id: str, db: Session = Depends(get_db), _: User = Depends(require_role("viewer"))):
     d = _visible_device(db, device_id)
     caps = list(db.scalars(select(DeviceCapability).where(DeviceCapability.device_id == d.id)))
-    return _device_out(d, caps)
+    from ..infrastructure.device_state import plans_by_device
+    return _device_out(d, caps, plans_by_device(db).get(d.id))
 
 
 @router.get("/devices/{device_id}/metrics")
@@ -231,7 +263,8 @@ def v1_device_metrics(device_id: str, metric: str | None = Query(None, max_lengt
 def v1_device_snapshots(device_id: str, db: Session = Depends(get_db), _: User = Depends(require_role("admin"))):
     d = _visible_device(db, device_id)
     rows = list(db.scalars(select(ConfigBackup).where(ConfigBackup.site_id == d.legacy_site_id).order_by(ConfigBackup.taken_at.desc()).limit(50)))
-    return {"vault": {"status": "PLANNED", "phase": 5},
+    return {"vault": {"status": "LIVE", "where": "/vault", "detail": "Full-fidelity encrypted captures are in the "
+                                                                      "Configuration vault."},
             "sanitized_snapshots": [{"id": b.id, "taken_at": _iso(b.taken_at), "kind": b.kind, "sha256": b.sha256,
                                      "classification": b.classification, "restorable": False} for b in rows]}
 
@@ -427,13 +460,14 @@ def v1_recommendations(db: Session = Depends(get_db), _: User = Depends(require_
             for r in rows if r.legacy_site_id is None or r.legacy_site_id in ids]
 
 
-# ---------------------------------------------------------------- recovery (Phase 5/7 planned)
+# ---------------------------------------------------------------- recovery (legacy SIMS snapshots: display only)
 @router.get("/recovery/snapshots")
 def v1_recovery(db: Session = Depends(get_db), _: User = Depends(require_role("admin"))):
     ids = _visible_legacy_ids(db)
     rows = [b for b in db.scalars(select(ConfigBackup).order_by(ConfigBackup.taken_at.desc()).limit(200)) if b.site_id in ids]
-    return {"vault": {"status": "PLANNED", "phase": 5, "detail": "Encrypted full-fidelity vault arrives in Phase 5."},
-            "replacement_wizard": {"status": "PLANNED", "phase": 7},
+    return {"vault": {"status": "LIVE", "where": "/vault", "detail": "Encrypted full-fidelity captures, restore "
+                                                                      "plans and the change-recovery journal."},
+            "replacement_wizard": {"status": "LIVE", "where": "/replace"},
             "restore_candidates": [],
             "sanitized_snapshots": [{"id": b.id, "site_id": b.site_id, "taken_at": _iso(b.taken_at), "kind": b.kind,
                                      "sha256": b.sha256, "classification": b.classification, "restorable": False,

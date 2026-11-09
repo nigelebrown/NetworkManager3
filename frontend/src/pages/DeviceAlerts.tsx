@@ -6,6 +6,7 @@ import { Notice, PageHeader, Pill, ago, btn, btn2, inputCls, useAction } from ".
 import { getSession } from "../services/api";
 import { v1 } from "../services/inm";
 import { rw } from "../services/ops";
+import { rem } from "../services/remediation";
 
 const sevTone = (s: string) => s === "critical" ? "poor" : s === "major" ? "fair" : "none";
 
@@ -33,8 +34,11 @@ export default function DeviceAlerts() {
         <tbody>{rows.map(a => <tr key={a.id} className="border-t border-slate-800">
           <td className="py-1.5 text-xs">{ago(a.opened_at)}</td><td><Pill value={a.severity} tone={sevTone(a.severity)} /></td>
           <td><Link className="text-sky-300" to={`/devices/${a.device_id}/360`}>{a.message}</Link>{a.suppressed && <> <Pill value="maintenance" tone="info" /></>}{a.source_type === "DEMO" && <> <Pill value="DEMO" tone="demo" /></>}</td>
-          <td className="font-mono text-[11px]">{a.rule_id}</td><td><Pill value={a.state} tone={a.state === "RESOLVED" ? "good" : "fair"} /></td>
-          <td>{a.state === "OPEN" && <button className={btn2} onClick={() => act.run(async () => { await rw.ack(a.id); alerts.reload(); })}>Acknowledge</button>}</td></tr>)}
+          <td className="font-mono text-[11px]">{a.rule_id}{a.entity && <div className="text-sky-300">{a.entity}</div>}</td><td><Pill value={a.state} tone={a.state === "RESOLVED" ? "good" : "fair"} /></td>
+          <td className="space-x-1 whitespace-nowrap">{a.state === "OPEN" && <button className={btn2} onClick={() => act.run(async () => { await rw.ack(a.id); alerts.reload(); })}>Acknowledge</button>}
+            <button className={btn2} onClick={() => act.run(async () => { const r = await rem.relatedChanges(a.id);
+              return r.candidates.length ? `Changes in the ${r.window_minutes} min before this alert: ` + r.candidates.map(x => `${x.title ?? x.plan_id.slice(0, 8)} (${x.outcome}, ${x.minutes_before_alert} min before, ${x.same_device ? "same device" : "LLDP neighbour"})`).join("; ") + ". " + r.method
+                : `No configuration change on this device or its LLDP neighbours in the ${r.window_minutes} minutes before this alert.`; })}>Related changes</button></td></tr>)}
           {!rows.length && <tr><td colSpan={6} className="py-4 text-center text-slate-500">No alerts in this state.</td></tr>}</tbody></table>
     </Card>
     <Notice error={act.error} message={act.message} />

@@ -8,12 +8,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
 from ...domain.model import TelemetryPoint
 
-TELEMETRY_HEAD = "t001"
+TELEMETRY_HEAD = "t002"
 RETENTION_DAYS = 90
 
 _MIGRATIONS = [
@@ -41,7 +41,54 @@ _MIGRATIONS = [
         # Apache-only build this is skipped and the worker prunes with drop_chunks() (Apache) instead.
         f"@timescale-optional SELECT add_retention_policy('telemetry_points', INTERVAL '{RETENTION_DAYS} days', if_not_exists => TRUE)",
     ]),
+    # t002 (E2E-01/02): every interface/radio/client metric has its own identity. The t001 key
+    # (event, device, metric, time) made all ports but one collide and be dropped by ON CONFLICT DO NOTHING.
+    ("t002", [
+        "@pg ALTER TABLE telemetry_points ADD COLUMN IF NOT EXISTS entity_type VARCHAR(16) NOT NULL DEFAULT 'device'",
+        "@pg ALTER TABLE telemetry_points ADD COLUMN IF NOT EXISTS entity_id VARCHAR(128) NOT NULL DEFAULT ''",
+        "@pg UPDATE telemetry_points SET entity_type = 'port', entity_id = (tags::json ->> 'port') "
+        "WHERE tags IS NOT NULL AND tags LIKE '%\"port\"%' AND entity_type = 'device'",
+        "@pg ALTER TABLE telemetry_points DROP CONSTRAINT IF EXISTS uq_telemetry_event_metric",
+        "@pg CREATE UNIQUE INDEX IF NOT EXISTS uq_telemetry_identity ON telemetry_points "
+        "(source_event_id, device_id, entity_type, entity_id, metric_name, observed_at)",
+        "@pg CREATE INDEX IF NOT EXISTS ix_telemetry_entity_time ON telemetry_points "
+        "(device_id, entity_type, entity_id, metric_name, observed_at DESC)",
+        # SQLite cannot drop an inline constraint: rebuild the table (tests / single-file installs only).
+        """@sqlite CREATE TABLE telemetry_points_t002 (
+            observed_at TIMESTAMP NOT NULL, device_id VARCHAR(36) NOT NULL, site_id VARCHAR(36),
+            metric_name VARCHAR(64) NOT NULL, value REAL, unit VARCHAR(16) NOT NULL,
+            collection_method VARCHAR(32) NOT NULL, quality VARCHAR(12) NOT NULL, source_type VARCHAR(8) NOT NULL,
+            source_event_id VARCHAR(36) NOT NULL, sample_period_s INTEGER, tags TEXT,
+            ingested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            entity_type VARCHAR(16) NOT NULL DEFAULT 'device', entity_id VARCHAR(128) NOT NULL DEFAULT '',
+            CONSTRAINT uq_telemetry_identity UNIQUE (source_event_id, device_id, entity_type, entity_id, metric_name, observed_at))""",
+        """@sqlite INSERT OR IGNORE INTO telemetry_points_t002 (observed_at, device_id, site_id, metric_name, value, unit,
+            collection_method, quality, source_type, source_event_id, sample_period_s, tags, ingested_at, entity_type, entity_id)
+            SELECT observed_at, device_id, site_id, metric_name, value, unit, collection_method, quality, source_type,
+            source_event_id, sample_period_s, tags, ingested_at,
+            CASE WHEN tags LIKE '%"port"%' THEN 'port' ELSE 'device' END,
+            COALESCE(json_extract(tags, '$.port'), '') FROM telemetry_points""",
+        "@sqlite DROP TABLE telemetry_points",
+        "@sqlite ALTER TABLE telemetry_points_t002 RENAME TO telemetry_points",
+        "@sqlite CREATE INDEX IF NOT EXISTS ix_telemetry_device_time ON telemetry_points (device_id, observed_at)",
+        "@sqlite CREATE INDEX IF NOT EXISTS ix_telemetry_metric_time ON telemetry_points (metric_name, observed_at)",
+        "@sqlite CREATE INDEX IF NOT EXISTS ix_telemetry_entity_time ON telemetry_points (device_id, entity_type, entity_id, metric_name, observed_at)",
+    ]),
 ]
+
+
+_ENTITY_TAGS = ("port", "radio", "client", "psu", "fan", "sensor", "lag", "vlan")
+
+
+def identity(p: TelemetryPoint) -> tuple[str, str]:
+    """(entity_type, entity_id) of a point: explicit fields win; otherwise a recognised resource tag
+    (port/radio/client/…) is the identity, so producers that only tag a port can never collide (E2E-01)."""
+    if p.entity_type != "device" or p.entity_id:
+        return p.entity_type, str(p.entity_id)
+    for k in _ENTITY_TAGS:
+        if (p.tags or {}).get(k) not in (None, ""):
+            return k, str(p.tags[k])[:128]
+    return "device", ""
 
 
 def _iso(dt: datetime) -> datetime:
@@ -91,6 +138,14 @@ class TimescaleTelemetryStore:
                 if rev in done:
                     continue
                 for s in stmts:
+                    if s.startswith("@pg "):
+                        if self.is_sqlite:
+                            continue
+                        s = s[4:]
+                    elif s.startswith("@sqlite "):
+                        if not self.is_sqlite:
+                            continue
+                        s = s[8:]
                     optional = s.startswith("@timescale-optional ")
                     if s.startswith(("@timescale ", "@timescale-optional ")):
                         if self.is_sqlite:
@@ -121,29 +176,51 @@ class TimescaleTelemetryStore:
 
     # ---- data --------------------------------------------------------------------------
     def write_points(self, points: list[TelemetryPoint]) -> int:
-        """Idempotent insert: a redelivered event writes nothing new (unique on event/device/metric/time)."""
+        """Idempotent insert keyed by (event, device, entity, metric, time). Returns rows newly stored.
+
+        Raises ValueError if the batch itself contains two points with the same identity: that is a collector bug
+        that would otherwise silently discard data (E2E-01/02)."""
         if not points:
             return 0
+        ids = [identity(p) for p in points]
+        keys = [(p.source_event_id, p.device_id, *i, p.metric_name, _iso(p.observed_at)) for p, i in zip(points, ids)]
+        if len(set(keys)) != len(keys):
+            dup = next(k for k in keys if keys.count(k) > 1)
+            raise ValueError(f"duplicate telemetry identity in one batch: {dup[1:5]}")
         rows = [dict(observed_at=_iso(p.observed_at), device_id=p.device_id, site_id=p.site_id, metric_name=p.metric_name,
                      value=p.value, unit=p.unit, collection_method=p.collection_method, quality=p.quality.value,
                      source_type=p.source_type.value, source_event_id=p.source_event_id,
-                     sample_period_s=p.sample_period_s, tags=json.dumps(p.tags, sort_keys=True)) for p in points]
+                     sample_period_s=p.sample_period_s, tags=json.dumps(p.tags, sort_keys=True),
+                     entity_type=i[0], entity_id=i[1]) for p, i in zip(points, ids)]
         sql = text("""INSERT INTO telemetry_points (observed_at, device_id, site_id, metric_name, value, unit,
-                      collection_method, quality, source_type, source_event_id, sample_period_s, tags)
+                      collection_method, quality, source_type, source_event_id, sample_period_s, tags,
+                      entity_type, entity_id)
                       VALUES (:observed_at, :device_id, :site_id, :metric_name, :value, :unit, :collection_method,
-                      :quality, :source_type, :source_event_id, :sample_period_s, :tags)
+                      :quality, :source_type, :source_event_id, :sample_period_s, :tags, :entity_type, :entity_id)
                       ON CONFLICT DO NOTHING""")
+        events = sorted({p.source_event_id for p in points})
+        count = text("SELECT COUNT(*) FROM telemetry_points WHERE source_event_id IN :e").bindparams(
+            bindparam("e", expanding=True))
         with self.engine.begin() as c:
-            before = c.execute(text("SELECT COUNT(*) FROM telemetry_points WHERE source_event_id = :e"),
-                               {"e": points[0].source_event_id}).scalar()
+            before = c.execute(count, {"e": events}).scalar()
             c.execute(sql, rows)
-            after = c.execute(text("SELECT COUNT(*) FROM telemetry_points WHERE source_event_id = :e"),
-                              {"e": points[0].source_event_id}).scalar()
+            after = c.execute(count, {"e": events}).scalar()
         return int(after - before)
 
+    def count_event(self, source_event_id: str) -> int:
+        """Rows persisted for one collection run — used to prove a poll really stored what it read (E2E-10)."""
+        with self.engine.connect() as c:
+            return int(c.execute(text("SELECT COUNT(*) FROM telemetry_points WHERE source_event_id = :e"),
+                                 {"e": source_event_id}).scalar() or 0)
+
     def query(self, *, device_id: str | None, metric_name: str | None, since: datetime, limit: int = 500,
-              source_event_id: str | None = None) -> list[dict]:
-        where, params = ["observed_at >= :since"], {"since": _iso(since), "limit": min(max(limit, 1), 5000)}
+              source_event_id: str | None = None, entity_type: str | None = None,
+              entity_id: str | None = None) -> list[dict]:
+        where, params = ["observed_at >= :since"], {"since": _iso(since), "limit": min(max(limit, 1), 20000)}
+        if entity_type:
+            where.append("entity_type = :et"); params["et"] = entity_type
+        if entity_id is not None:
+            where.append("entity_id = :ei"); params["ei"] = entity_id
         if device_id:
             where.append("device_id = :d"); params["d"] = device_id
         if metric_name:
@@ -151,7 +228,7 @@ class TimescaleTelemetryStore:
         if source_event_id:
             where.append("source_event_id = :e"); params["e"] = source_event_id
         sql = text(f"SELECT observed_at, device_id, site_id, metric_name, value, unit, collection_method, quality, "
-                   f"source_type, source_event_id FROM telemetry_points WHERE {' AND '.join(where)} "
+                   f"source_type, source_event_id, entity_type, entity_id, tags FROM telemetry_points WHERE {' AND '.join(where)} "
                    f"ORDER BY observed_at DESC LIMIT :limit")
         with self.engine.connect() as c:
             out = []
@@ -161,8 +238,19 @@ class TimescaleTelemetryStore:
                 if isinstance(ts, str):
                     ts = datetime.fromisoformat(ts)
                 d["observed_at"] = _iso(ts).isoformat()
+                try:
+                    d["tags"] = json.loads(d["tags"]) if d.get("tags") else {}
+                except ValueError:
+                    d["tags"] = {}
                 out.append(d)
             return out
+
+    def delete_source(self, source_type: str) -> int:
+        """Remove every point of one provenance (used only to unload the DEMO dataset)."""
+        if source_type not in ("DEMO",):
+            raise ValueError("Only DEMO telemetry may be bulk-deleted.")
+        with self.engine.begin() as c:
+            return int(c.execute(text("DELETE FROM telemetry_points WHERE source_type = :s"), {"s": source_type}).rowcount or 0)
 
     def has_retention_policy(self) -> bool:
         if self.is_sqlite:

@@ -73,8 +73,8 @@ def test_ingest_failure_rolls_back_then_retry_applies_once(db, tmp_path):
 
 def test_telemetry_absent_values_are_not_zero(tmp_path):
     store = TimescaleTelemetryStore(f"sqlite:///{tmp_path / 't.db'}")
-    assert store.migrate() == ["t001"] and store.migrate() == []  # idempotent migration
-    assert store.schema_revision() == "t001"
+    assert store.migrate() == ["t001", "t002"] and store.migrate() == []  # idempotent migration
+    assert store.schema_revision() == "t002"
 
 
 def test_lease_one_winner_per_slot(db):
