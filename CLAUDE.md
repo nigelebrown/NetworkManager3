@@ -41,6 +41,12 @@ For each package create domain contracts, migration and compatibility proof (whe
 - Evidence register updated with actual observed results, build SHA and tester.
 - Vendor specific behaviour checked against supplied Instant AOS 8.10 guide or CX 10.14 OpenAPI; capability not assumed from unrelated models.
 
+## Device optimization authorization — mandatory product rule
+
+**Automatic optimization is OFF by default, with no implicit site, model, group, organization or template inheritance.** Monitoring, rule/ML analysis, and recommendations may run without writing. Only explicitly selected individual devices may be configured for automatic optimization, using a device-ID/serial-bound enrollment, named requester and independent approver, approved operation/value constraints, expiry, schedule, cooldown and immediate disable action. Multi-select is merely a batch *proposal* producing separate approvals per device; newly discovered, transferred and replacement devices begin OFF.
+
+Read `docs/CAPABILITY_COMPLETION_DESIGN.md` §C5a (GAP-13). A global write lock or emergency stop overrides every device enrollment. Do not create a global auto-enable switch, use template inheritance to turn on optimization, allow an ML/LLM service to write directly, or silently activate hardware writes by implementing the design. Implement observe/recommend and shadow mode first. Require independently accepted GAP-T17–GAP-T24 tests, plus device hardware certification, before any real per-device execution.
+
 ## Prohibited shortcuts
 
 Do not fabricate successful device tests, hardware capabilities, backups, ML improvements or deployment results. Do not embed device credentials or personal information in Git. Do not enable live network-device writes in Phase 1. Do not silently bypass TLS, alter the approved RF channel restrictions, or allow AI to execute configuration changes directly.
