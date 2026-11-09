@@ -60,7 +60,7 @@ MAX_CONSECUTIVE_TELEMETRY_FAILURES = 3
 def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
     """Add uptime, CPU, memory, radio channel/power/noise and channel utilization to each AP.
 
-    Two read-only commands per AP, each targeted at that AP. Anything that cannot be read stays None
+    Three read-only commands per AP, each targeted at that AP. Anything that cannot be read stays None
     (shown as unavailable); a failure for one AP never affects the others or the rest of the poll. After
     several failures in a row the remaining APs are skipped so a cluster that does not support targeting
     is not hammered every poll.
@@ -86,6 +86,16 @@ def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
                         d[key] = r["util_percent"]
         except ArubaCommandError as exc:
             log.info("rf-summary unavailable for %s: %s", ip, exc)
+        try:
+            radio_stats = telemetry.parse_radio_stats(
+                parsers.output_text(client.show("show ap debug radio-stats", iap_ip=ip))
+            )
+            if radio_stats:
+                got_any = True
+                # Compact typed measurements only; cumulative counters need delta samples.
+                d["radio_stats"] = radio_stats
+        except ArubaCommandError as exc:
+            log.info("radio-stats unavailable for %s: %s", ip, exc)
         try:
             st = telemetry.parse_system_status(parsers.output_text(client.show("show ap debug system-status", iap_ip=ip)))
             if st:
