@@ -454,7 +454,7 @@ def capture_baseline(device_id: str, body: CaptureInput, request: Request,
         if device.family == "access_point":
             with ArubaClient(ArubaTarget(str(ip), 4343, profile.username, password),
                              timeout=min(8, get_settings().aruba_timeout_seconds),
-                             verify=get_settings().tls_verify_for(host)) as client:
+                             verify=get_settings().tls_verify_for(str(ip))) as client:
                 client.login()
                 text = fetch_running_config(client)  # redacted by vendor parser
                 config = parse_running_config(text)
