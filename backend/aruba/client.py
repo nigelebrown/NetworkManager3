@@ -241,13 +241,19 @@ class ArubaClient:
             raise ArubaCommandError(f"'{cmd}': unexpected response type {type(data).__name__}.")
 
         status = str(data.get("Status", "")).lower()
-        if status and status != "success":
-            msg = str(data.get("Message") or data.get("Status") or "unknown error")
-            # An expired sid is reported in the body on some firmware: retry once.
+        code = data.get("Status-code")
+        # Instant can return HTTP 200 while the CLI failed with Status-code 6.
+        # Do not expose vendor output from errors: it may contain sensitive data.
+        if resp.status_code != 200 or (status and status != "success") or (
+            code is not None and str(code) != "0"
+        ):
+            msg = str(data.get("Message") or data.get("Error message") or data.get("Status") or "")
             if _retry and ("sid" in msg.lower() or "session" in msg.lower() or "auth" in msg.lower()):
                 self._sid = None
                 return self.show(cmd, iap_ip=iap_ip, _retry=False)
-            raise ArubaCommandError(f"'{cmd}' failed: {msg}")
+            raise ArubaCommandError(
+                f"'{cmd}' rejected by device (HTTP {resp.status_code}, API code {code})."
+            )
         return data
 
     @staticmethod
