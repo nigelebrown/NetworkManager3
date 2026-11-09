@@ -43,11 +43,17 @@ Do not claim that an existing redacted config snapshot is a restorable device im
 | **6 — controlled configuration** | Global→model→site→device inheritance, policies, config plans, peer approval, pre/post-change backups and rollback | Approved changes only; one technician cannot self-approve; rejected/failed changes cause no unauthorized writes; limits on AP RF widths (20/40 MHz only) |
 | **7 — replace device** | Compatible hardware replacement wizard, template/snapshot selection, prechecks, staged restore and readback | Restore tested on same model/compatible firmware; new serial tracked; all operational checks and audit trail pass |
 | **8 — AI learning centre** | Analyze Now, hourly recommendations, history, MLflow versions, held-out evaluation, feedback | Show historical baseline, model version, evidence, confidence/calibration and measured recommendation quality; never label a simple rule as trained ML |
-| **9 — safe optimization** | Measured-outcome evaluation and bounded automated adjustment | Policy constraints, change approval, cooldown, rollback, no repeated oscillation, comparison to native Aruba ARM/ClientMatch |
+| **9 — per-device opt-in optimization** | **Default OFF for every device**; recommendations/shadow mode globally available but automatic actions eligible only by explicit device-specific enrollment, independent policy approval, expiry and bounded operations | Selecting one AP never enables any other AP/switch; site/model/group templates cannot auto-enable new devices. Global write lock, backup, safe readback, 20/40 MHz, cooldown and rollback always override enrollment |
 | **10 — other vendor adapters** | Cisco IOS/IOS XE and Ubiquiti UniFi adapters using capability contracts | Correctly detect supported/unsupported operations; vendor adapters cannot bypass central write/audit policy |
 | **11 — production scale-out** | Distribute services onto separate VMs, secured service networking, HA/DR, backups, observability | Fail individual roles; prove recovery, restore, loss of broker, database failover and end-to-end consistency; zero undocumented change to domain behaviour |
 
 **Gate rule:** no phase is complete without implementation evidence, negative tests, rollback/recovery tests, security review, accepted risk exceptions and explicit non-developer sign-off. Preserve build commit SHA and artifacts for every test.
+
+### Non-negotiable automatic optimization scope
+
+Automatic optimization in **NetworkManager3** is **disabled by default**. Analysis and recommendations may run without device writes. Administrators may eventually enroll specific, individually identified devices through a separate permission workflow, with a precise operation allowlist, independent approval, expiry and one-click revocation. Enrollment **must not be inherited from the organization, site, group, model template or device replacement**, and bulk-selection must resolve to separate audited device IDs. Any global safety lock overrides individual enrollment. A device showing `AUTO OFF` may still use its vendor's native automatic features (for example ARM), which this management setting does not change.
+
+The complete mandatory contract and tests are in [C5a: Per-device automatic optimization](CAPABILITY_COMPLETION_DESIGN.md#c5a--per-device-automatic-optimization-policy-gap-13--normative); test cases GAP-T17–GAP-T24. **This is a design rule, not enabled device-write functionality in the current release.**
 
 ## 4. Cross-cutting audit/backup contract
 
