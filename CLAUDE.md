@@ -4,7 +4,7 @@
 
 Build the organization-neutral Intelligent Network Manager using Python/FastAPI, React/TypeScript, Onion Architecture, PostgreSQL, TimescaleDB, Loki/Alloy, NATS JetStream, isolated Python AI and a one-VM Docker Compose test deployment that can be separated into seven production roles.
 
-Read `docs/ARCHITECTURE_AND_PHASED_BUILD.md`, `docs/PHASE1_REVIEW_AND_RELEASE_GATE.md` and `docs/SERVER_DEPLOYMENT_RUNBOOK.md` **before modifying source**.
+Read `docs/ARCHITECTURE_AND_PHASED_BUILD.md`, **`docs/CAPABILITY_COMPLETION_DESIGN.md`**, `docs/GUIDED_DEVICE_ONBOARDING.md`, `docs/PHASE1_REVIEW_AND_RELEASE_GATE.md` and `docs/SERVER_DEPLOYMENT_RUNBOOK.md` **before modifying source**. The capability-completion addendum is part of the governing architecture, not optional background reading.
 
 ## First work order
 
@@ -16,7 +16,20 @@ Read `docs/ARCHITECTURE_AND_PHASED_BUILD.md`, `docs/PHASE1_REVIEW_AND_RELEASE_GA
 6. Preserve the demo network-isolation and device-write lock, fail closed on audit/permission failures.
 7. Add accurate Phase 1 test evidence, unknowns and signoff request. **Do not mark Phase 1 accepted or start Phase 2 without independent acceptance.**
 
-**Deployment architecture:** CentOS pulls application source directly from `nigelebrown/NetworkManager3` using a read-only SSH deploy key. No Windows PC, upload bundle, manual `git pull` of an already installed release or source change on the server is permitted. The approved demo tag pointer lives in `deployment/releases/approved-demo-tag` and may remain empty until explicitly released.\n\n## Definition of done for every subsequent module
+**Deployment architecture:** CentOS pulls application source directly from `nigelebrown/NetworkManager3` using a read-only SSH deploy key. No Windows PC, upload bundle, manual `git pull` of an already installed release or source change on the server is permitted. The approved demo tag pointer lives in `deployment/releases/approved-demo-tag` and may remain empty until explicitly released.\n\n## Implementation work order for missing capabilities
+
+The outstanding design now consists of **GAP-01–GAP-18**, **WP-01–WP-12**, and **GAP-T01–GAP-T16** in `docs/CAPABILITY_COMPLETION_DESIGN.md`. Convert a work package into a short-lived feature branch; implement in this order unless explicitly reprioritized:
+
+1. Preserve existing schema `0006` onboarding, read-only configuration drafts, demo data, audit and real manual imports. Do not introduce another parallel device onboarding stack.
+2. WP-01: establish on-host Git-managed CentOS acceptance, backup and *test-restore* evidence. A source-only doc or GitHub CI run is not host acceptance.
+3. WP-02: add scheduled **read-only** Aruba Instant/CX collection with capability checks, clear data quality labels, rate limits, job leases and real hardware tests.
+4. WP-03: syslog, AAA and external-change attribution with `VERIFIED / CORRELATED / UNKNOWN`; never invent a technician.
+5. WP-04: deterministic global → family → model/port layout → site → device **draft-only** template inheritance, with provenance and 20/40-MHz-only RF policy.
+6. Prepare (not activate) ML datasets, feedback and measurable outcomes, then WP-05–WP-12 under their independent safety gates.
+
+For each package create domain contracts, migration and compatibility proof (when needed), API, worker, UI, audit, test evidence and rollback procedure. Update `docs/Feature_Integration_Traceability_v4.csv` and `docs/Unified_Acceptance_Register_v4.csv` with **NOT_RUN** until observed on the stated environment. Never mark `DESIGNED_NOT_IMPLEMENTED` as operational. Unretrievable external ChatGPT share text is not authority to invent additional features; reconcile that source separately when supplied.
+
+## Definition of done for every subsequent module
 
 - Contract and migration design reviewed.
 - Working UI + backend endpoints + background worker contract.
