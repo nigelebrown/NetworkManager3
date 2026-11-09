@@ -88,7 +88,9 @@ if [[ "$VERIFY_ONLY" -eq 0 ]]; then
   set_env INM_VERSION "$(tr -d '[:space:]' < "$ROOT/VERSION")"
   chmod 0600 "$ENV_FILE"
   if [[ "$(env_value INM_DEMO_SIMPLE_LOGIN)" == true && "$(env_value INM_WEB_BIND)" != '127.0.0.1' ]]; then
-    fail 'Insecure simple demo login cannot be exposed outside loopback.'
+    say 'WARNING: Weak demo credentials are configured on a non-loopback web bind. Continuing with the development update as requested.'
+    say 'WARNING: The API still requires an approved private LAN CIDR/acknowledgment and Nginx access policy; an unapproved or public bind will fail application startup.'
+    say 'WARNING: Do not expose this development login through internet port forwarding.'
   fi
   compose config --quiet
 
