@@ -115,14 +115,14 @@ export default function NocDashboard() {
           {openChanges.length ? openChanges.slice(0,5).map(p => <div className="inm-row" key={p.id}>
             <span className="grow"><Link className="inm-link" to={"/changes?device="+encodeURIComponent(p.device_id)}>{p.title}</Link>
               <small>Requested by {p.requester} · {ago(p.created_at)}</small></span>
-            <Badge value={p.state.replaceAll("_"," ")} kind={p.state==="PENDING_APPROVAL"?"warn":p.state==="APPROVED"?"good":"info"}/></div>)
+            <Badge value={p.state.replace(/_/g," ")} kind={p.state==="PENDING_APPROVAL"?"warn":p.state==="APPROVED"?"good":"info"}/></div>)
             : <div className="inm-empty">No outstanding change requests.</div>}
         </Panel>
         <Panel title="Onboarding & deployment" href="/onboarding" footer="Guided discovery, baseline, approvals and verified application.">
           <div style={{fontSize:27,fontWeight:800}}>{activeWf.length}</div><p style={{fontSize:11,color:"#72849a"}}>active workflows</p>
           {activeWf.slice(0,4).map(w => <div className="inm-row" key={w.id}><span className="grow">
             <Link className="inm-link" to={"/onboarding?id="+w.id}>{w.title}</Link><small>{w.site} · {w.devices} devices</small></span>
-            <Badge value={w.step.replaceAll("_"," ")} kind="info"/></div>)}
+            <Badge value={w.step.replace(/_/g," ")} kind="info"/></div>)}
           {!activeWf.length && <div className="inm-empty">No active workflows.</div>}
         </Panel>
         <Panel title="Recent activity" href="/logs" footer="Monitoring and change events share correlation IDs.">
