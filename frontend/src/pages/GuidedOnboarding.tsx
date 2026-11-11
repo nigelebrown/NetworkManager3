@@ -52,9 +52,10 @@ export default function GuidedOnboarding() {
     <PageHeader title={w.title} subtitle={`${w.site.name} · ${w.device_family === "switch" ? "switches" : "access points"} · workflow ${w.id.slice(0, 8)} · ${w.state}`}
       right={<div className="flex gap-2"><button className={btn2} onClick={() => setParams({})}>All workflows</button>
         {w.state === "ACTIVE" && <button className={btnDanger} onClick={() => run(() => wf.cancel(w.id), "Workflow cancelled; devices, backups and plans are kept.")}>Cancel</button>}</div>} />
-    <ol className="grid grid-cols-3 gap-1 md:grid-cols-6 lg:grid-cols-12" aria-label="Workflow steps">
-      {w.steps.map((s, i) => <li key={s.step} className={`rounded border px-2 py-1 text-[11px] ${s.status === "current" ? "border-sky-500 text-sky-200" : s.status === "done" ? "border-emerald-900 text-emerald-300" : "border-slate-700 text-slate-500"}`}>
-        {i + 1}. {LABEL[s.step]}</li>)}
+    <ol className="inm-steps" aria-label="Device onboarding steps">
+      {w.steps.map((step, i) => <li key={step.step} data-status={step.status} aria-current={step.status === "current" ? "step" : undefined}>
+        <b style={{marginRight:5}}>{step.status === "done" ? "✓" : (i+1)+"."}</b>{LABEL[step.step]}
+      </li>)}
     </ol>
     <Notice error={act.error} message={act.message} />
     {w.state !== "CANCELLED" && <>

@@ -36,6 +36,7 @@ import Notifications from "./pages/Notifications";
 import Topology from "./pages/Topology";
 import DeviceAlerts from "./pages/DeviceAlerts";
 import Device360 from "./pages/Device360";
+import DeviceInventory from "./pages/DeviceInventory";
 import Collection from "./pages/Collection";
 import ChangePlans from "./pages/ChangePlans";
 import Vault from "./pages/Vault";
@@ -74,6 +75,7 @@ export default function App() {
         <Route path="config" element={<Configuration />} />
         <Route path="firmware" element={<Firmware />} />
         <Route path="sites" element={<Sites />} />
+        <Route path="inventory" element={<DeviceInventory />} />
         <Route path="alerts" element={<Alerts />} />
         {/* INM additions */}
         <Route path="system" element={<SystemHealth />} />

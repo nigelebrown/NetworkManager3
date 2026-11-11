@@ -3,12 +3,12 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { useLoad } from "./useLoad";
 import { v1, type Device } from "../services/inm";
 
-export const COLORS = { good: "#34d399", fair: "#fbbf24", poor: "#f87171", none: "#475569", info: "#38bdf8", violet: "#a78bfa" };
-export const TT = { contentStyle: { background: "#0f172a", border: "1px solid #334155", borderRadius: 8 }, itemStyle: { color: "#e2e8f0" } };
-export const inputCls = "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none";
-export const btn = "rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-40";
-export const btn2 = "rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-40";
-export const btnDanger = "rounded-lg bg-red-600/80 px-3 py-1.5 text-sm font-semibold hover:bg-red-500 disabled:opacity-40";
+export const COLORS = { good: "#2d9d70", fair: "#dfaa51", poor: "#c8626b", none: "#a0afc2", info: "#357fdb", violet: "#8f77c5" };
+export const TT = { contentStyle: { background: "#fff", border: "1px solid #dfe6ed", borderRadius: 8 }, itemStyle: { color: "#253c55" } };
+export const inputCls = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-blue-500 focus:outline-none";
+export const btn = "rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40";
+export const btn2 = "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40";
+export const btnDanger = "rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-40";
 
 export function scoreColor(s: number | null | undefined) {
   return s == null ? COLORS.none : s >= 80 ? COLORS.good : s >= 60 ? COLORS.fair : COLORS.poor;
@@ -26,11 +26,11 @@ export function Gauge({ value, label, size = 120 }: { value: number | null | und
   return <div className="flex flex-col items-center">
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <g transform={`rotate(135 ${size / 2} ${size / 2})`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1e293b" strokeWidth={10} strokeDasharray={`${arc} ${c}`} strokeLinecap="round" />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e5edf6" strokeWidth={10} strokeDasharray={`${arc} ${c}`} strokeLinecap="round" />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={scoreColor(value)} strokeWidth={10}
           strokeDasharray={`${(arc * v) / 100} ${c}`} strokeLinecap="round" />
       </g>
-      <text x="50%" y="52%" textAnchor="middle" dominantBaseline="middle" fill="#e2e8f0" fontSize={size / 4.5} fontWeight={600}>
+      <text x="50%" y="52%" textAnchor="middle" dominantBaseline="middle" fill="#253c55" fontSize={size / 4.5} fontWeight={600}>
         {value == null ? "—" : Math.round(value)}</text>
     </svg>
     {label && <div className="-mt-3 text-xs uppercase tracking-wide text-slate-400">{label}</div>}
@@ -53,8 +53,8 @@ export function Donut({ data, height = 180 }: { data: { name: string; value: num
 }
 
 export function Pill({ value, tone }: { value: ReactNode; tone?: "good" | "fair" | "poor" | "info" | "demo" | "none" }) {
-  const map = { good: "bg-emerald-500/15 text-emerald-300", fair: "bg-amber-500/15 text-amber-300", poor: "bg-red-500/15 text-red-300",
-    info: "bg-sky-500/15 text-sky-300", demo: "bg-fuchsia-500/20 text-fuchsia-300", none: "bg-slate-700/40 text-slate-300" };
+  const map = { good: "bg-emerald-50 border border-emerald-200 text-emerald-700", fair: "bg-amber-50 border border-amber-200 text-amber-700", poor: "bg-red-50 border border-red-200 text-red-700",
+    info: "bg-sky-50 border border-sky-200 text-sky-700", demo: "bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700", none: "bg-slate-100 border border-slate-200 text-slate-700" };
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map[tone ?? "none"]}`}>{value}</span>;
 }
 
@@ -94,8 +94,8 @@ export function useAction() {
 }
 
 export function Notice({ error, message }: { error: string | null; message: string | null }) {
-  if (error) return <div role="alert" className="rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">{error}</div>;
-  if (message) return <div role="status" className="rounded-lg border border-emerald-900 bg-emerald-950/40 p-3 text-sm text-emerald-200">{message}</div>;
+  if (error) return <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>;
+  if (message) return <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{message}</div>;
   return null;
 }
 

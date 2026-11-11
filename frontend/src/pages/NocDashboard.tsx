@@ -1,101 +1,150 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card, ErrorNote, Stat } from "../components/ui";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
-import { COLORS, Donut, Gauge, PageHeader, Pill, SourceTag, TT, ago, inputCls, scoreColor, statusTone } from "../components/viz";
+import { ago } from "../components/viz";
+import { getSession } from "../services/api";
 import { ops, type NocTile } from "../services/ops";
+import { wf } from "../services/remediation";
 
-function Tile({ t }: { t: NocTile }) {
-  const s = t.health.score;
-  return <Link to={`/devices/${t.device_id}/360`} title={t.health.reasons.join("\n") || "Healthy"}
-    className="group block rounded-lg border border-slate-800 bg-slate-900/70 p-2.5 transition hover:border-sky-600"
-    style={{ boxShadow: `inset 4px 0 0 ${scoreColor(s)}` }}>
-    <div className="flex items-start justify-between gap-1">
-      <div className="truncate text-sm font-medium">{t.hostname ?? t.device_id.slice(0, 8)}</div>
-      <span className="text-sm font-bold" style={{ color: scoreColor(s) }}>{s ?? "—"}</span>
-    </div>
-    <div className="mt-0.5 truncate text-[11px] text-slate-500">{t.site ?? "No site"} · {t.model ?? t.family}</div>
-    <div className="mt-1.5 flex flex-wrap gap-1 text-[10px]">
-      <span title={t.state_reason}><Pill value={t.state} tone={t.state === "ONLINE" ? "good" : t.state === "OFFLINE" ? "poor" : t.state === "DEGRADED" || t.state === "STALE" ? "fair" : "none"} /></span>
-      <Pill value={t.freshness} tone={statusTone(t.freshness)} />
-      {t.source_type === "DEMO" && <Pill value="DEMO" tone="demo" />}
-      {t.metrics.clients != null && <Pill value={`${t.metrics.clients} clients`} tone="info" />}
-    </div>
+function Badge({ value, kind = "" }: { value: string; kind?: string }) {
+  return <span className={"inm-pill " + kind}>{value}</span>;
+}
+function Panel({ title, href, footer, children }: { title: string; href?: string; footer?: string; children: ReactNode }) {
+  return <section className="inm-card">
+    <div className="inm-cardhead"><h2>{title}</h2>{href && <Link className="inm-link" to={href}>View details</Link>}</div>
+    <div className="inm-cardbody">{children}</div>{footer && <div className="inm-cardfooter">{footer}</div>}
+  </section>;
+}
+function Kpi({ label, value, sub, href }: { label: string; value: string | number; sub: string; href: string }) {
+  return <Link className="inm-kpi" to={href}>
+    <div style={{fontSize:11,color:"#63748b"}}>{label}</div><div className="inm-kpi-value">{value}</div>
+    <div className="inm-kpi-sub">{sub}</div>
   </Link>;
 }
+const tone = (state: string) => state === "ONLINE" || state === "GOOD" ? "good"
+  : state === "OFFLINE" || state === "POOR" ? "bad"
+  : state === "STALE" || state === "DEGRADED" || state === "FAIR" ? "warn" : "";
 
 export default function NocDashboard() {
   const noc = useLoad(ops.noc, [], 15000, ["devices", "telemetry", "alerts", "*"]);
-  const [filter, setFilter] = useState("");
-  const [band, setBand] = useState("ALL");
+  const trends = useLoad(() => ops.trends().catch(() => null), [], 60000, ["telemetry"]);
+  const plans = useLoad(() => ops.changePlans().catch(() => []), [], 30000, ["changes"]);
+  const workflows = useLoad(() => wf.list().catch(() => []), [], 30000, ["workflows"]);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("ALL");
   const d = noc.data;
-  const tiles = useMemo(() => (d?.devices ?? []).filter(t =>
-    (band === "ALL" || t.health.band === band) &&
-    (!filter || `${t.hostname} ${t.site} ${t.model}`.toLowerCase().includes(filter.toLowerCase()))), [d, filter, band]);
-  const scored = (d?.devices ?? []).map(t => t.health.score).filter((x): x is number => x != null);
-  const fleet = scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
+  const devices = d?.devices ?? [];
+  const ap = devices.filter(x => x.family === "access_point");
+  const switches = devices.filter(x => x.family === "switch");
+  const online = (rows: NocTile[]) => rows.filter(x => x.state === "ONLINE").length;
+  const scores = devices.map(x => x.health.score).filter((v): v is number => v != null);
+  const score = scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : null;
   const bySite = useMemo(() => {
-    const m: Record<string, number[]> = {};
-    (d?.devices ?? []).forEach(t => { if (t.health.score != null) (m[t.site ?? "No site"] ??= []).push(t.health.score); });
-    return Object.entries(m).map(([site, v]) => ({ site, score: Math.round(v.reduce((a, b) => a + b, 0) / v.length) }));
-  }, [d]);
-  return <div className="space-y-4">
-    <PageHeader title="Network Operations Centre" subtitle={`Live health of every managed AP and switch. Updated ${ago(d?.generated_at)} — refreshes automatically.`} />
-    <ErrorNote error={noc.error} />
+    const m: Record<string,number[]> = {};
+    (d?.devices ?? []).forEach(x => { if(x.health.score != null) (m[x.site ?? "Unassigned"] ??= []).push(x.health.score); });
+    return Object.entries(m).map(([name,vals]) => ({ name,score:Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) }))
+      .sort((a,b)=>a.score-b.score).slice(0,7);
+  },[d]);
+  const openChanges = (plans.data ?? []).filter(p => ["PENDING_APPROVAL","APPROVED","DRAFT"].includes(p.state));
+  const pending = openChanges.filter(p => p.state === "PENDING_APPROVAL");
+  const activeWf = (workflows.data ?? []).filter(w => !["DONE","CANCELLED"].includes(w.state));
+  const filtered = devices.filter(x => (filter === "ALL" || x.state === filter)
+    && [x.hostname ?? "",x.model ?? "",x.site ?? ""].join(" ").toLowerCase().includes(query.toLowerCase()));
+  const polled = d ? Object.values(d.collection_last_hour).reduce((a,b)=>a+b,0) : 0;
+  const succeeded = d?.collection_last_hour.SUCCEEDED ?? 0;
+  return <div className="inm-noc">
+    <div className="inm-titlebar"><div><div className="inm-section-label">Operations / NOC</div>
+      <h1 className="inm-pagetitle">Network command center</h1>
+      <p className="inm-subtitle">Live network health, devices, clients, incidents, changes, telemetry and site performance. {d ? "Updated " + ago(d.generated_at) : "Loading…"}</p></div>
+      <div className="inm-actionbar">{getSession()?.role === "admin" && <Link to="/onboarding" className="inm-header-action">＋ Add / configure devices</Link>}
+        <Link to="/device-alerts" className="inm-link">View incidents</Link></div></div>
+    <ErrorNote error={noc.error}/>
+    {!d && !noc.error && <div className="inm-notice">Loading measured information from the NOC API…</div>}
     {d && <>
-      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
-        <div className="col-span-1 flex items-center justify-center rounded-xl border border-slate-800 bg-slate-900/60 p-2 lg:row-span-1">
-          <Gauge value={fleet} label="Experience" size={110} /></div>
-        <Stat label="Devices" value={d.summary.devices} sub={`${d.summary.states?.ONLINE ?? 0} online · ${d.summary.states?.DEGRADED ?? 0} degraded · ${d.summary.states?.STALE ?? 0} stale · ${d.summary.states?.UNKNOWN ?? 0} unknown`} />
-        <Stat label="Offline" value={d.summary.states?.OFFLINE ?? 0} tone={(d.summary.states?.OFFLINE ?? 0) ? "bad" : "ok"} sub="not answering polls" />
-        <Stat label="Clients now" value={d.summary.clients} />
-        <Stat label="Fresh telemetry" value={d.summary.fresh} sub={`${d.summary.stale_or_gap} stale/gap · ${d.summary.never_polled} not polled`}
-          tone={d.summary.stale_or_gap ? "warn" : "ok"} />
-        <Stat label="Active alerts" value={d.summary.active_alerts} tone={d.summary.active_alerts ? "warn" : "ok"} />
-        <Stat label="Polls last hour" value={Object.values(d.collection_last_hour).reduce((a, b) => a + b, 0)}
-          sub={`${d.collection_last_hour.SUCCEEDED ?? 0} ok · ${(d.collection_last_hour.RETRY ?? 0) + (d.collection_last_hour.DLQ ?? 0)} failed`} />
+      {devices.some(x => x.source_type === "DEMO") && <div className="inm-notice">This view includes DEMO-labelled devices. Sample observations remain distinguishable from real equipment.</div>}
+      <div className="inm-kpis">
+        <Kpi label="Network experience" value={score == null ? "—" : Math.round(score)+"%"} sub={scores.length+" measured devices"} href="/experience"/>
+        <Kpi label="Access points" value={online(ap)+" / "+ap.length} sub={(ap.length-online(ap))+" not online"} href="/aps"/>
+        <Kpi label="CX switches" value={online(switches)+" / "+switches.length} sub={(switches.length-online(switches))+" not online"} href="/switches"/>
+        <Kpi label="Connected clients" value={d.summary.clients} sub="Last persisted observation" href="/clients"/>
+        <Kpi label="Active incidents" value={d.summary.active_alerts} sub="Open monitoring alerts" href="/device-alerts"/>
+        <Kpi label="Pending changes" value={pending.length} sub={openChanges.length+" open plans"} href="/changes"/>
       </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Health distribution"><Donut data={[
-          { name: "Good", value: d.summary.health_bands.GOOD ?? 0, color: COLORS.good },
-          { name: "Fair", value: d.summary.health_bands.FAIR ?? 0, color: COLORS.fair },
-          { name: "Poor", value: d.summary.health_bands.POOR ?? 0, color: COLORS.poor },
-          { name: "No data", value: d.summary.health_bands.NO_DATA ?? 0, color: COLORS.none }]} /></Card>
-        <Card title="Experience by site">
-          {bySite.length ? <ResponsiveContainer width="100%" height={180}><BarChart data={bySite} layout="vertical" margin={{ left: 20 }}>
-            <CartesianGrid stroke="#1e293b" horizontal={false} /><XAxis type="number" domain={[0, 100]} stroke="#64748b" fontSize={11} />
-            <YAxis type="category" dataKey="site" stroke="#64748b" fontSize={11} width={110} /><Tooltip {...TT} />
-            <Bar dataKey="score" radius={[0, 4, 4, 0]}>{bySite.map(r => <Cell key={r.site} fill={scoreColor(r.score)} />)}</Bar>
-          </BarChart></ResponsiveContainer> : <p className="py-8 text-center text-sm text-slate-500">No measured telemetry yet.</p>}
-        </Card>
-        <Card title="Worst user experience">
-          <ul className="space-y-1.5 text-sm">{d.worst_experience.slice(0, 7).map(t =>
-            <li key={t.device_id} className="flex items-center justify-between gap-2">
-              <Link className="truncate text-sky-300 hover:underline" to={`/devices/${t.device_id}/360`}>{t.hostname}</Link>
-              <span className="truncate text-xs text-slate-500">{t.health.reasons[0] ?? ""}</span>
-              <span className="font-semibold" style={{ color: scoreColor(t.health.score) }}>{t.health.score}</span></li>)}
-            {!d.worst_experience.length && <li className="text-slate-500">No scored devices.</li>}</ul>
-        </Card>
+      <div className="inm-panel-grid">
+        <Panel title="Client sessions — last 24 hours" href="/executive" footer="Measured client activity from collection history; not an estimated availability chart.">
+          {trends.data?.hourly?.some(x => x.clients != null) ? <ResponsiveContainer width="100%" height={185}>
+            <AreaChart data={trends.data.hourly}>
+              <defs><linearGradient id="clients-color" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#357fdb" stopOpacity={0.26}/>
+                <stop offset="1" stopColor="#357fdb" stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid vertical={false} stroke="#e7edf3"/><XAxis dataKey="hour" stroke="#8999ab" fontSize={10} minTickGap={18}/>
+              <YAxis stroke="#8999ab" fontSize={10} allowDecimals={false}/>
+              <Tooltip contentStyle={{background:"#fff",color:"#253b53",border:"1px solid #dfe6ed",borderRadius:8}}/>
+              <Area dataKey="clients" type="monotone" stroke="#357fdb" strokeWidth={2.5} fill="url(#clients-color)" connectNulls={false}/>
+            </AreaChart></ResponsiveContainer> : <div className="inm-empty">No historical client data. Configure collection plans to display the measured trend.</div>}
+          <p style={{fontSize:11,color:"#72839a",marginTop:10}}>Current connected clients: {d.summary.clients}</p>
+        </Panel>
+        <Panel title="Service availability & data integrity" href="/system" footer="These are collection indicators; see Platform health for per-service status.">
+          <div className="inm-row"><span className="inm-dot"/><span className="grow"><b>Collection jobs</b><small>{succeeded} succeeded of {polled} events in the last hour</small></span>
+            <Badge value={polled ? Math.round(100*succeeded/polled)+"% success" : "No runs"} kind={polled && succeeded===polled ? "good" : "warn"}/></div>
+          <div className="inm-row"><span className={"inm-dot "+(d.summary.stale_or_gap ? "warn" : "")}/><span className="grow"><b>Telemetry freshness</b>
+            <small>{d.summary.fresh} fresh / {d.summary.stale_or_gap} stale or gaps</small></span>
+            <Badge value={d.summary.stale_or_gap ? "Needs attention" : "Fresh"} kind={d.summary.stale_or_gap ? "warn" : "good"}/></div>
+          <div className="inm-row"><span className={"inm-dot "+(d.summary.never_polled ? "warn" : "")}/><span className="grow"><b>Never polled</b><small>Registered devices without a collected sample</small></span>
+            <Badge value={String(d.summary.never_polled)} kind={d.summary.never_polled ? "warn" : "good"}/></div>
+          <div className="inm-row"><span className={"inm-dot "+(d.summary.active_alerts ? "bad" : "")}/><span className="grow"><b>Open alerts</b><small>Review incident and source evidence</small></span>
+            <Badge value={String(d.summary.active_alerts)} kind={d.summary.active_alerts ? "bad" : "good"}/></div>
+        </Panel>
       </div>
-      <Card title={`Device wall (${tiles.length})`} right={<div className="flex gap-2">
-        <input aria-label="Filter devices" placeholder="Filter by name, site, model" className={`${inputCls} mt-0 w-56`} value={filter} onChange={e => setFilter(e.target.value)} />
-        <select aria-label="Health band" className={`${inputCls} mt-0 w-32`} value={band} onChange={e => setBand(e.target.value)}>
-          {["ALL", "GOOD", "FAIR", "POOR", "NO_DATA"].map(b => <option key={b}>{b}</option>)}</select></div>}>
-        {tiles.length ? <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-6">{tiles.map(t => <Tile key={t.device_id} t={t} />)}</div>
-          : <p className="py-6 text-center text-sm text-slate-500">No devices yet. Add one under <Link className="text-sky-300" to="/onboarding">Inventory → Add device</Link>, or load demo data from <Link className="text-sky-300" to="/data">Data management</Link>.</p>}
-      </Card>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Live event stream"><ul className="max-h-72 space-y-1 overflow-auto text-sm">{d.events.map((e, i) =>
-          <li key={i} className="flex gap-2"><span className="w-16 shrink-0 text-xs text-slate-500">{ago(e.at)}</span>
-            <Pill value={e.severity} tone={e.severity === "error" || e.severity === "critical" ? "poor" : e.severity === "warning" ? "fair" : "none"} />
-            {e.config_change && <Pill value="CONFIG" tone="fair" />}<span className="text-slate-300">{e.message}</span></li>)}
-          {!d.events.length && <li className="text-slate-500">No device syslog received yet. Point devices' syslog at this server.</li>}</ul></Card>
-        <Card title="Active alerts"><ul className="max-h-72 space-y-1 overflow-auto text-sm">{d.alerts.map(a =>
-          <li key={a.id} className="flex gap-2"><Pill value={a.severity} tone={a.severity === "critical" ? "poor" : "fair"} />
-            <span className="text-slate-300">{a.message}</span>{a.simulated && <SourceTag source="DEMO" />}</li>)}
-          {!d.alerts.length && <li className="text-slate-500">No active alerts.</li>}</ul></Card>
+      <div className="inm-panel-grid">
+        <Panel title="Priority incidents" href="/device-alerts" footer="Incidents are sourced from the alert service; demo events retain their labels.">
+          {d.alerts.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr><th>Severity</th><th>Issue</th><th>Detected</th></tr></thead><tbody>
+            {d.alerts.slice(0,5).map(a => <tr key={a.id}><td><Badge value={a.severity} kind={a.severity==="critical"?"bad":"warn"}/></td>
+              <td>{a.message} {a.simulated && <Badge value="DEMO" kind="info"/>}</td><td>{ago(a.created_at)}</td></tr>)}</tbody></table></div>
+            : <div className="inm-empty">No active incidents reported.</div>}
+        </Panel>
+        <Panel title="Site health" href="/sites" footer="Measured site experience only; unmeasured sites are excluded.">
+          {bySite.length ? bySite.map(s => <div className="inm-site-row" key={s.name}>
+            <span className="name" title={s.name}>{s.name}</span><div className="inm-sitebar"><span style={{width:s.score+"%",background:s.score<60?"#c96168":s.score<80?"#dea54b":"#3f85d9"}}/></div><b>{s.score}%</b>
+          </div>) : <div className="inm-empty">No measured site scores yet.</div>}
+        </Panel>
       </div>
+      <div className="inm-bottom-grid">
+        <Panel title="Change approvals" href="/changes" footer="All real-device writes remain approval and certification-gated.">
+          {openChanges.length ? openChanges.slice(0,5).map(p => <div className="inm-row" key={p.id}>
+            <span className="grow"><Link className="inm-link" to={"/changes?device="+encodeURIComponent(p.device_id)}>{p.title}</Link>
+              <small>Requested by {p.requester} · {ago(p.created_at)}</small></span>
+            <Badge value={p.state.replaceAll("_"," ")} kind={p.state==="PENDING_APPROVAL"?"warn":p.state==="APPROVED"?"good":"info"}/></div>)
+            : <div className="inm-empty">No outstanding change requests.</div>}
+        </Panel>
+        <Panel title="Onboarding & deployment" href="/onboarding" footer="Guided discovery, baseline, approvals and verified application.">
+          <div style={{fontSize:27,fontWeight:800}}>{activeWf.length}</div><p style={{fontSize:11,color:"#72849a"}}>active workflows</p>
+          {activeWf.slice(0,4).map(w => <div className="inm-row" key={w.id}><span className="grow">
+            <Link className="inm-link" to={"/onboarding?id="+w.id}>{w.title}</Link><small>{w.site} · {w.devices} devices</small></span>
+            <Badge value={w.step.replaceAll("_"," ")} kind="info"/></div>)}
+          {!activeWf.length && <div className="inm-empty">No active workflows.</div>}
+        </Panel>
+        <Panel title="Recent activity" href="/logs" footer="Monitoring and change events share correlation IDs.">
+          {d.events.length ? d.events.slice(0,6).map((e,i) => <div className="inm-row" key={i}>
+            <span className={"inm-dot "+((e.severity==="critical"||e.severity==="error")?"bad":e.severity==="warning"?"warn":"")}/>
+            <span className="grow"><b>{e.message}</b><small>{e.config_change?"Configuration":"Monitoring"} · {ago(e.at)}</small></span></div>)
+            : <div className="inm-empty">No collected events yet.</div>}
+        </Panel>
+      </div>
+      <section className="inm-card"><div className="inm-cardhead"><h2>Managed devices ({filtered.length})</h2>
+        <div className="inm-actionbar"><input aria-label="Filter device wall" placeholder="Name, model or site" value={query} onChange={e=>setQuery(e.target.value)}
+          style={{padding:"8px 10px",border:"1px solid #dfe6ed",borderRadius:7}}/>
+          <select aria-label="Operational state" value={filter} onChange={e=>setFilter(e.target.value)}
+            style={{padding:"8px 10px",border:"1px solid #dfe6ed",borderRadius:7}}>
+            {["ALL","ONLINE","DEGRADED","STALE","OFFLINE","UNKNOWN"].map(s=><option key={s}>{s}</option>)}</select></div>
+      </div><div className="inm-cardbody" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:"0 24px"}}>
+        {filtered.slice(0,36).map(t => <Link to={"/devices/"+t.device_id+"/360"} key={t.device_id} className="inm-row" style={{textDecoration:"none",color:"#243b57"}}>
+          <span className={"inm-dot "+tone(t.state)}/><span className="grow"><b>{t.hostname ?? t.device_id.slice(0,8)}</b>
+          <small>{t.site ?? "Unassigned"} · {t.model ?? t.family} {t.source_type==="DEMO"?"· DEMO":""}</small></span>
+          <Badge value={t.state} kind={tone(t.state)}/></Link>)}
+        {!filtered.length && <div className="inm-empty">No matching devices. <Link to="/onboarding">Start onboarding</Link>.</div>}
+      </div><div className="inm-cardfooter">Showing {Math.min(36,filtered.length)} of {filtered.length} devices · Select any device to open Device 360°.</div></section>
     </>}
   </div>;
 }

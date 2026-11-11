@@ -4,10 +4,10 @@ export const NA = <span className="text-slate-500" title="Not reported by the de
 
 export function Card({ title, children, right }: { title?: string; children: ReactNode; right?: ReactNode }) {
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
       {(title || right) && (
-        <header className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-300">{title}</h2>{right}
+        <header className="mb-4 flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <h2 className="text-sm font-bold text-slate-800">{title}</h2>{right}
         </header>
       )}
       {children}
@@ -16,10 +16,10 @@ export function Card({ title, children, right }: { title?: string; children: Rea
 }
 
 export function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: "ok" | "warn" | "bad" }) {
-  const color = tone === "bad" ? "text-red-400" : tone === "warn" ? "text-amber-400" : tone === "ok" ? "text-emerald-400" : "text-slate-100";
+  const color = tone === "bad" ? "text-red-700" : tone === "warn" ? "text-amber-700" : tone === "ok" ? "text-emerald-700" : "text-slate-800";
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-      <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="text-xs tracking-wide text-slate-500">{label}</div>
       <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
       {sub && <div className="mt-1 text-xs text-slate-500">{sub}</div>}
     </div>
@@ -27,14 +27,14 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
 }
 
 const TONES: Record<string, string> = {
-  up: "bg-emerald-500/15 text-emerald-300", good: "bg-emerald-500/15 text-emerald-300",
-  down: "bg-red-500/15 text-red-300", poor: "bg-red-500/15 text-red-300", critical: "bg-red-500/15 text-red-300",
-  fair: "bg-amber-500/15 text-amber-300", warning: "bg-amber-500/15 text-amber-300", acknowledged: "bg-amber-500/15 text-amber-300",
-  active: "bg-red-500/15 text-red-300", resolved: "bg-emerald-500/15 text-emerald-300",
+  up: "bg-emerald-50 border border-emerald-200 text-emerald-700", good: "bg-emerald-50 border border-emerald-200 text-emerald-700",
+  down: "bg-red-50 border border-red-200 text-red-700", poor: "bg-red-50 border border-red-200 text-red-700", critical: "bg-red-50 border border-red-200 text-red-700",
+  fair: "bg-amber-50 border border-amber-200 text-amber-700", warning: "bg-amber-50 border border-amber-200 text-amber-700", acknowledged: "bg-amber-50 border border-amber-200 text-amber-700",
+  active: "bg-red-50 border border-red-200 text-red-700", resolved: "bg-emerald-50 border border-emerald-200 text-emerald-700",
 };
 export function Badge({ value }: { value: string | null | undefined }) {
   const v = value ?? "unavailable";
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONES[v] ?? "bg-slate-700/40 text-slate-300"}`}>{v}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONES[v] ?? "bg-slate-100 border border-slate-200 text-slate-700"}`}>{v}</span>;
 }
 
 export function SimBadge() {
@@ -42,7 +42,7 @@ export function SimBadge() {
 }
 
 export function ErrorNote({ error }: { error: string | null }) {
-  return error ? <div className="rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">{error}</div> : null;
+  return error ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null;
 }
 
 export const fmtUptime = (s: number | null) => {
