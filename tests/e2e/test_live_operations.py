@@ -68,7 +68,7 @@ def test_live_platform_end_to_end(browser):
     pw = os.environ["INM_E2E_ADMIN_PASSWORD"]
     ctx, page, problems = session(browser, "admin", pw)
     # Live mode: no demo banner, real empty-state guidance
-    page.get_by_text("Network Operations Centre").wait_for()
+    page.get_by_text("Network command center").wait_for()
     assert page.get_by_text("DEMO MODE").count() == 0
     shot(page, "01_noc_live_empty")
 
@@ -97,7 +97,7 @@ def test_live_platform_end_to_end(browser):
 
     # NOC wall shows both live and demo devices; drill into Device 360
     page.goto(URL + "/")
-    page.get_by_text("Device wall").wait_for()
+    page.get_by_text(re.compile("Managed devices")).wait_for()
     assert page.locator("a[href$='/360']").count() >= 10
     page.locator(f"a[href='/devices/{real}/360']").first.click()
     page.get_by_text("Experience", exact=True).first.wait_for()
