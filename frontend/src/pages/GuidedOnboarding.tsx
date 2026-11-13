@@ -220,6 +220,10 @@ function ApproveApplyStep({ w, run, me, reload }: { w: Workflow; run: Run; me: R
   const act = useAction();
   const plans = useLoad(() => ops.changePlans(), [w.id], 10000, ["changes"]);
   const [ex, setEx] = useState<Record<string, Awaited<ReturnType<typeof rw.executions>>>>({});
+  const deniedHardwareWrites = Array.isArray(w.outcome.execution) &&
+    (w.outcome.execution as { decision: string; environment?: string }[]).length > 0 &&
+    (w.outcome.execution as { decision: string; environment?: string }[]).every(
+      r => r.decision === "DENY" && r.environment === "HARDWARE");
   useEffect(() => {
     w.plans.filter(p => p.execution).forEach(p => rw.executions(p.plan_id).then(e => setEx(x => ({ ...x, [p.plan_id]: e }))).catch(() => {}));
   }, [w.plans]);
@@ -240,7 +244,13 @@ function ApproveApplyStep({ w, run, me, reload }: { w: Workflow; run: Run; me: R
     {!w.plans.length && <p className="text-sm text-slate-400">No change was needed — the devices already match their templates.</p>}
     <div className="mt-2 flex gap-2">
       {me?.role === "admin" && <button className={btn} disabled={!w.plans.some(p => p.state === "APPROVED")} onClick={() => run(() => wf.execute(w.id), "Execution finished — see each device's readback.")}>Apply to device</button>}
-      <span className="self-center text-xs text-slate-400">Monitoring unlocks only after every selected device is verified as configured.</span>
+      {me?.role === "admin" && deniedHardwareWrites && <button className={btn2}
+        onClick={() => run(() => wf.monitor(w.id), "Read-only monitoring initiated. Configuration is NOT applied; approval and certification remain required.")}>
+        Start read-only monitoring (configuration pending)
+      </button>}
+      <span className="self-center text-xs text-slate-400">{deniedHardwareWrites
+        ? "Hardware writes were denied. Monitoring can proceed without applying configuration; plans remain pending."
+        : "Configuration completes only after each device is verified. No unapproved hardware writes."}</span>
     </div>
     {w.outcome.execution && <ul className="mt-2 text-xs">{(w.outcome.execution as { plan_id: string; decision: string; outcome: string | null; denial_reason: string | null }[]).map(r =>
       <li key={r.plan_id} className={r.outcome === "APPLIED_VERIFIED" ? "text-emerald-300" : "text-amber-300"}>{r.plan_id.slice(0, 8)}: {r.outcome ?? `${r.decision} — ${r.denial_reason}`}</li>)}</ul>}
