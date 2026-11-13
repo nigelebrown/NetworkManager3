@@ -170,9 +170,15 @@ def test_crash_mid_change_is_recovered_from_the_durable_journal(env, family):
         plan_row = db.get(ChangePlan, p["id"])
         assert plan_row.state == "EXECUTING"                       # committed before the first write
         from backend.database.models_remediation import ChangeRecoveryJournal
+        from backend.database.models_inm import JobLease
         row = db.get(ChangeRecoveryJournal, entry["id"])
         assert "777" not in row.payload_enc and "client" not in row.payload_enc   # encrypted at rest
-        row.heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+        # Simulate BOTH elapsed recovery heartbeat and the independently fenced
+        # write lease expiring. Otherwise recovery must refuse a still-active lease.
+        row.heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+        lease = db.get(JobLease, f"device-write:{dev['id']}")
+        assert lease is not None
+        lease.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     j = c.get("/api/v1/recovery/journal", headers=adm).json()
     entry = next(x for x in j if x["plan_id"] == p["id"])
     assert entry["state"] == "RECOVERY_REQUIRED"
