@@ -168,7 +168,7 @@ jobs:
           python3 -m pip install --disable-pip-version-check -r requirements.lock pytest pytest-asyncio playwright
           python3 -m playwright install --with-deps chromium
           export INM_E2E_ADMIN_PASSWORD="$(sed -n 's/^SIMS_ADMIN_PASSWORD=//p' .env.ci)"
-          python3 -m pytest -q tests/e2e/test_browser_live.py
+          python3 -m pytest -q tests/e2e/test_demo_gui.py
       - name: Verify restricted demo login and persistent real inventory
         run: |
           # Reproduce the security-critical post-install configuration performed
