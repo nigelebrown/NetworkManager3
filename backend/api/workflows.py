@@ -498,7 +498,12 @@ def wf_preview(wid: str, db: Session = Depends(get_db), user: User = Depends(req
     from ..infrastructure.change_executor import certification_map
     from .config_templates import intent_and_ops
     w = _wf(db, wid, user)
-    _require_stage(w, "PREVIEW", "DECIDE")
+    # A configuration preview is read-only. Operators must be able to compare
+    # effective intent with the live device AFTER an approved change, during
+    # monitoring and after completion. The stage gate only limits early access,
+    # not post-change verification.
+    if STEPS.index(w.step) < STEPS.index("PREVIEW"):
+        raise HTTPException(409, "Capture the baseline and choose templates before previewing.")
     out = []
     for did in w.device_ids or []:
         d = real_device(db, did)
