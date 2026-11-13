@@ -37,7 +37,7 @@ def test_wizard_supports_bounded_cidr_scans_and_retains_allowlist_checks():
     # The superseded single-IP-only UI was intentionally expanded to /24.
     assert "Management IP or CIDR (up to /24)" in ui
     assert 'wf.discover(w.id, scope.trim())' in ui
-    assert "net.num_addresses > max_addresses" in api
-    assert "max_addresses=256" in api
-    assert "body.batch_size" in api
-    assert "_permit_probe(ip)" in api
+    assert "net.num_addresses > 256" in api  # no more than one /24
+    assert "_permit_probe(ip)" in api  # ALL targets authorized before probing
+    assert "rate_per_s: int = Field(default=16, ge=1, le=64)" in api
+    assert "len(addresses) > 8" in api and "DJ.create(" in api  # durable background /24 scans
