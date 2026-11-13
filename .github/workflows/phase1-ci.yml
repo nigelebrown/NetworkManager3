@@ -55,7 +55,10 @@ jobs:
   full-stack-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    needs: [backend-tests, frontend-build]
+    # Run the integration gate independently once the GUI builds: backend
+    # failures must not hide full-stack defects behind a SKIPPED result.
+    # GitHub still requires BOTH jobs to pass for the workflow to be green.
+    needs: [frontend-build]
     steps:
       - uses: actions/checkout@v4
       - name: Check Git-only deployment entrypoint and shell syntax
