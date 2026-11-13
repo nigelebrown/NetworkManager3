@@ -32,16 +32,36 @@ def _at(e: EventEnvelope) -> datetime:
     return datetime.fromisoformat(e.occurred_at_utc)
 
 
-def _newer(device: InmDevice, at: datetime) -> bool:
-    """Late JetStream deliveries are auditable but must not reverse current operational state."""
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _newer(db: Session, device: InmDevice, at: datetime) -> bool:
+    """Use actual collection timestamps, not the manual-registration timestamp, to order device events.
+
+    A device may be manually imported at noon and then have a legitimate ten-minute-old
+    collection backfilled. That sample must produce alerts. Conversely, late JetStream
+    redeliveries must not overwrite a newer success or failure. All collection plans
+    for this device contribute to the authoritative high-water mark.
+    """
+    timestamps = [
+        _aware(ts)
+        for success, failure in db.execute(
+            select(CollectionPlan.last_success_at, CollectionPlan.last_failure_at)
+            .where(CollectionPlan.device_id == device.id)
+        )
+        for ts in (success, failure) if ts is not None
+    ]
+    if timestamps:
+        return _aware(at) >= max(timestamps)
     previous = device.last_observed_at
-    if previous is None:
-        return True
-    if previous.tzinfo is None:
-        previous = previous.replace(tzinfo=timezone.utc)
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
-    return at >= previous
+    return previous is None or _aware(at) >= _aware(previous)
+
+
+def _update_observed_at(device: InmDevice, at: datetime) -> None:
+    """A backfill must not move the device's public last-observed timestamp backwards."""
+    if device.last_observed_at is None or _aware(at) >= _aware(device.last_observed_at):
+        device.last_observed_at = at
 
 
 def _telemetry(db: Session, e: EventEnvelope) -> list[str]:
@@ -62,9 +82,10 @@ def _telemetry(db: Session, e: EventEnvelope) -> list[str]:
     device = db.get(InmDevice, e.device_id) if e.device_id else None
     if device is None:
         return topics
-    if not _newer(device, at):
+    if not _newer(db, device, at):
         return topics  # metric samples and event ledger remain persisted; live status/alerts stay authoritative
-    device.status, device.last_observed_at = "up", at
+    device.status = "up"
+    _update_observed_at(device, at)
     fw = e.payload.get("firmware")
     if fw and device.firmware and fw != device.firmware:
         from .phase_services import pause_enrollments
@@ -90,9 +111,9 @@ def _failure(db: Session, e: EventEnvelope) -> list[str]:
     device = db.get(InmDevice, e.device_id) if e.device_id else None
     if device is None:
         return ["devices"]
-    if not _newer(device, at):
+    if not _newer(db, device, at):
         return []  # late failure never creates a new outage or alert
-    device.last_observed_at = at
+    _update_observed_at(device, at)
     cat = e.payload.get("failure_category")
     # The device record reflects what collection proved: no answer = down; answered but unreadable = unknown.
     device.status = "down" if cat in C.UNREACHABLE_CATEGORIES else "unknown"
