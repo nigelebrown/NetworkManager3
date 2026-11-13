@@ -160,8 +160,10 @@ def test_emulated_workflow_reaches_applied_verified_monitored_done(demo):
     sws = [d for d in c.get("/api/v1/devices", headers=adm).json() if d["source_type"] == "DEMO" and d["family"] == "switch"]
     sw = sws[0]["id"]
     _certify(c, adm, appr, sw)
+    # A workflow cannot attach a device from another physical site. Use the
+    # demo switch's actual site rather than creating a different REAL site.
     wid = c.post("/api/v1/workflows", headers=adm, json={"title": "Demo core", "device_family": "switch",
-                                                         "site_name": "Training"}).json()["id"]
+                                                         "site_id": sws[0]["site_id"]}).json()["id"]
     c.post(f"/api/v1/workflows/{wid}/attach", headers=adm, json={"device_ids": [sw]})
     v = c.post(f"/api/v1/workflows/{wid}/baseline", headers=adm).json()
     assert v["step"] == "TEMPLATES"
