@@ -89,6 +89,11 @@ def test_out_of_order_failure_cannot_reverse_new_success(monkeypatch):
     class Db:
         def get(self, cls, key):
             return device if cls is InmDevice and key == "dev" else None
+
+        def execute(self, statement):
+            # No collection plans in this isolated unit fixture: the collector
+            # correctly falls back to the device's last-observed timestamp.
+            return []
     monkeypatch.setattr(event_effects, "apply_alerts", lambda *a, **kw: {"changed": False})
     older = new_event("device.poll.failed", source_service="collector", actor_id="collector", source_type="REAL",
                       device_id="dev", occurred_at=now-timedelta(minutes=20),
