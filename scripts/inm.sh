@@ -16,7 +16,7 @@ usage() {
   cat <<'HELP'
 Git-managed Intelligent Network Manager — Phase 1 demo (all device writes locked).
 
-  bash scripts/inm.sh install             Fetch GitHub main; clean install or same-commit repair
+  bash scripts/inm.sh install [--mode live|demo]  Fetch GitHub main; clean install or same-commit repair
   bash scripts/inm.sh update              Install the approved release tag in GitHub's demo channel
   bash scripts/inm.sh update --ref TAG    Update to a specific approved, immutable Git tag
   bash scripts/inm.sh doctor              CentOS preflight report
@@ -73,8 +73,18 @@ case "$COMMAND" in
         || fail "checkout changed since install (installed $INSTALLED); use tagged update"
       say "Re-running same Git commit idempotently; secrets and named data volumes preserved"
     fi
-    say "Installing $(cat "$ROOT/VERSION") at $(git -C "$ROOT" rev-parse --short HEAD)"
-    exec bash "$APP/install.sh" --mode demo
+    MODE="${INM_INSTALL_MODE:-}"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --mode) [[ $# -ge 2 ]] || fail "--mode requires live or demo"; MODE="$2"; shift 2 ;;
+        *) fail "unknown install argument $1" ;;
+      esac
+    done
+    if [[ -z "$MODE" && -f "$ENV_FILE" ]]; then MODE="$(sed -n 's/^INM_MODE=//p' "$ENV_FILE" | tail -1)"; fi
+    MODE="${MODE:-demo}"
+    [[ "$MODE" == live || "$MODE" == demo ]] || fail "--mode must be live or demo"
+    say "Installing $(cat "$ROOT/VERSION") at $(git -C "$ROOT" rev-parse --short HEAD) in $MODE mode"
+    exec bash "$APP/install.sh" --mode "$MODE"
     ;;
   update)
     [[ -n "$INSTALLED" ]] || fail "not installed; use install first"
