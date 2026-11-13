@@ -51,10 +51,27 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
         page.goto(URL + "/")
         page.get_by_role("heading", name="Network command center").wait_for()
         token = page.evaluate("JSON.parse(sessionStorage.getItem('sims_session')).access_token")
-        response = page.request.get(URL + "/api/v1/devices",
-                                    headers={"Authorization": "Bearer " + token})
+        auth = {"Authorization": "Bearer " + token}
+        # Preserve the original CI cross-restart acceptance check: import two
+        # explicitly REAL manual records. This does NOT contact Aruba hardware.
+        # A later CI step recreates the API and checks these exact records survive.
+        for family, hostname, serial, model in (
+            ("access_point", "CI-AP-535", "CI-SMOKE-AP535", "AP-535"),
+            ("switch", "CI-CX6200F", "CI-SMOKE-CX6200", "CX 6200F 48G"),
+        ):
+            imported = page.request.post(URL + "/api/v1/quick-devices", headers=auth,
+                data={"family": family, "site_name": "CI Live Inventory",
+                      "hostname": hostname, "serial_number": serial, "model": model,
+                      "firmware": "8.10.0.21" if family == "access_point" else "10.14.1020",
+                      "status": "unknown", "metrics": {}})
+            assert imported.status == 201, imported.text()
+            assert imported.json()["source_type"] == "REAL"
+        response = page.request.get(URL + "/api/v1/devices", headers=auth)
         assert response.status == 200, response.text()
-        assert isinstance(response.json(), list)
+        devices = response.json()
+        assert isinstance(devices, list)
+        assert {"CI-AP-535", "CI-CX6200F"} <= {
+            d["hostname"] for d in devices if d.get("source_type") == "REAL"}
         assert not faults, faults
 
         page.get_by_role("button", name="Sign out").click()
