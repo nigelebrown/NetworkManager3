@@ -41,7 +41,7 @@ def snap(page, name):
 def test_guided_workflow_live_mode_end_to_end(browser):
     pw = os.environ["INM_E2E_ADMIN_PASSWORD"]
     ctx, page, problems = session(browser, "admin", pw)
-    page.get_by_text("Network Operations Centre").wait_for()
+    page.get_by_text("Network command center").wait_for()
     assert page.get_by_text("DEMO MODE").count() == 0 and page.get_by_text("DEMO DATA LOADED").count() == 0
     devs = api(page, "GET", "/v1/devices")
     assert not [d for d in devs if d["source_type"] == "DEMO"]            # live mode: no demo records
