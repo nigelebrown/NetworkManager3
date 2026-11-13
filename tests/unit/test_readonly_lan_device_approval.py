@@ -31,11 +31,12 @@ def test_readonly_helper_supports_approved_lan_without_opening_login_to_all_netw
     assert "down -v" not in script
 
 
-def test_wizard_has_single_ip_discovery_and_retains_small_scan_safety():
+def test_wizard_supports_bounded_cidr_scans_and_retains_allowlist_checks():
     ui = (ROOT / "frontend/src/pages/GuidedOnboarding.tsx").read_text()
     api = (ROOT / "backend/api/onboarding_workflow.py").read_text()
-    assert "Discover test IP only" in ui
-    assert 'onClick={() => scan(testIp.trim() + (testIp.includes("/") ? "" : "/32"))}' in ui
+    # The superseded single-IP-only UI was intentionally expanded to /24.
+    assert "Management IP or CIDR (up to /24)" in ui
+    assert 'wf.discover(w.id, scope.trim())' in ui
     assert "net.num_addresses > max_addresses" in api
     assert "max_addresses=256" in api
     assert "body.batch_size" in api
