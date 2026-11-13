@@ -176,6 +176,13 @@ def _subject(p: dict) -> str:
 def _public_send_error(ch: NotificationChannel, exc: Exception) -> str:
     """Never persist a webhook exception's URL, which can contain an API token in its path or query."""
     if ch.kind == "webhook":
+        # The numerical HTTP status is safe and operationally useful; URLs, paths,
+        # query strings and exception bodies may hold secrets and stay redacted.
+        import re
+        status = re.fullmatch(r"webhook answered HTTP ([3-5][0-9]{2})", str(exc)) \
+            if isinstance(exc, RuntimeError) else None
+        if status:
+            return f"HTTP {status.group(1)}: webhook delivery failed; check receiver configuration and reachability"
         return f"{type(exc).__name__}: webhook delivery failed; check receiver configuration and reachability"
     return f"{type(exc).__name__}: {str(exc)[:240]}"[:300]
 
