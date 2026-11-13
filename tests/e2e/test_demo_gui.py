@@ -30,10 +30,32 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
                 if r.status >= 500 else None)
 
         page.goto(URL + "/login")
+        pw = os.environ["INM_E2E_ADMIN_PASSWORD"]
         page.get_by_label("Username").fill("admin")
-        page.get_by_label("Password").fill(os.environ["INM_E2E_ADMIN_PASSWORD"])
+        page.get_by_label("Password").fill(pw)
         page.get_by_role("button", name="Sign in").click()
-        page.get_by_role("heading", name="Network command center").wait_for(timeout=30000)
+        page.wait_for_timeout(1200)
+        if page.url.endswith("/change-password"):
+            # Also exercise the mandatory first-login password-change workflow
+            # if a deployment enforces it. Never print the secret to CI logs.
+            token = page.evaluate("JSON.parse(sessionStorage.getItem('sims_session')).access_token")
+            next_pw = pw + "-Changed!"
+            changed = page.request.post(URL + "/api/auth/change-password",
+                headers={"Authorization": "Bearer " + token},
+                data={"current_password": pw, "new_password": next_pw})
+            assert changed.status == 200, f"First-login change rejected: {changed.status}"
+            page.goto(URL + "/login")
+            page.get_by_label("Username").fill("admin")
+            page.get_by_label("Password").fill(next_pw)
+            page.get_by_role("button", name="Sign in").click()
+        try:
+            page.get_by_role("heading", name="Network command center").wait_for(timeout=12000)
+        except Exception as exc:
+            page.screenshot(path=str(EVID / "login-diagnostic.png"), full_page=True)
+            headings = page.locator("h1").all_inner_texts()
+            visible = page.locator("body").inner_text()[:850]
+            raise AssertionError(f"After login: url={page.url!r}; h1={headings!r}; "
+                                 f"browser_errors={faults[:4]!r}; visible={visible!r}") from exc
         page.screenshot(path=str(EVID / "command-center.png"), full_page=True)
 
         screens = {
