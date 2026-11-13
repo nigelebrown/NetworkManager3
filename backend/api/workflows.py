@@ -580,8 +580,18 @@ def wf_monitor(wid: str, request: Request, db: Session = Depends(get_db), user: 
     from ..infrastructure.collection_runner import run_due
     from ..infrastructure.device_state import plans_by_device, state_of
     w = _wf(db, wid, user)
-    _require_stage(w, "MONITOR")
-    if w.mode == "NOW" and not _plans_fully_applied(db, w):
+    # Configuration refusal (e.g. uncertified HARDWARE, global write lock) must
+    # not prevent read-only monitoring. It must also NEVER advance that workflow
+    # to DONE or imply configuration was applied. Leave plans independently
+    # approved/pending so they may be re-evaluated after certification.
+    fully_applied = _plans_fully_applied(db, w)
+    attempts = (w.outcome or {}).get("execution") or []
+    monitoring_while_locked = (w.mode == "NOW" and w.step in ("APPROVAL", "EXECUTE")
+        and bool(attempts) and all(r.get("decision") == "DENY" and
+                                   r.get("environment") == "HARDWARE" for r in attempts))
+    _require_stage(w, "MONITOR", "APPROVAL" if monitoring_while_locked else "MONITOR",
+                   "EXECUTE" if monitoring_while_locked else "MONITOR")
+    if w.mode == "NOW" and not fully_applied and not monitoring_while_locked:
         raise HTTPException(409, "Configuration is not fully applied and verified. Resolve pending, failed, "
                                  "rejected or uncertified plans before completing monitoring.")
     if w.mode not in ("NOW", "LATER"):
@@ -606,14 +616,16 @@ def wf_monitor(wid: str, request: Request, db: Session = Depends(get_db), user: 
     summary = run_due(db, worker=f"workflow-{w.id[:8]}", plan_ids=plan_ids, manual=True)
     cplans = plans_by_device(db)
     states = {did: state_of(db.get(InmDevice, did), cplans.get(did))["state"] for did in w.device_ids or []}
-    w.outcome = {**(w.outcome or {}), "monitoring": {"poll": summary, "states": states}}
-    _advance(w, "MONITOR")
+    w.outcome = {**(w.outcome or {}), "monitoring": {"poll": summary, "states": states,
+                      "configuration_pending": monitoring_while_locked}}
+    if not monitoring_while_locked:
+        _advance(w, "MONITOR")
     if states and all(s in ("ONLINE", "DEGRADED") for s in states.values()):
-        if w.mode == "NOW" and _plans_fully_applied(db, w):
+        if w.mode == "NOW" and fully_applied:
             _advance(w, "DONE")
             w.state = "DONE"
         else:
-            w.state = "WAITING"  # monitor only; configuration remains explicitly deferred
+            w.state = "WAITING"  # monitoring only; locked/uncertified plans remain pending
 
     names = ", ".join(f"{(lambda d: (d.hostname or d.serial_number) if d else did[:8])(db.get(InmDevice, did))} {st}"
                       for did, st in states.items())
