@@ -77,7 +77,7 @@ restore_on_failure() {
   rm -f "$backup"
   echo "[inm] Restored previous allowlist after API restart failure." >&2
   docker compose --project-name inm --project-directory "$ROOT" -f "$ROOT/compose.yaml" \
-    --env-file "$ENV" up -d --no-deps --force-recreate api >/dev/null 2>&1 || true
+    --env-file "$ENV" up -d --no-deps --force-recreate api worker >/dev/null 2>&1 || true
   exit "$rc"
 }
 trap restore_on_failure EXIT
@@ -90,8 +90,8 @@ chmod 0600 "$ENV"
 docker compose --project-name inm --project-directory "$ROOT" -f "$ROOT/compose.yaml" \
   --env-file "$ENV" config --quiet || die "Compose validation failed"
 docker compose --project-name inm --project-directory "$ROOT" -f "$ROOT/compose.yaml" \
-  --env-file "$ENV" up -d --no-deps --force-recreate --wait --wait-timeout 120 api \
-  || die "API failed its health check; the old allowlist will be restored"
+  --env-file "$ENV" up -d --no-deps --force-recreate --wait --wait-timeout 120 api worker \
+  || die "API/worker failed their health checks; the old allowlist will be restored"
 trap - EXIT
 rm -f "$backup"
 echo "Read-only API targets approved: $CIDRS"
