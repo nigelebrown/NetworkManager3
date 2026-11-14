@@ -252,6 +252,10 @@ class PrinterProfile(BaseModel):
     privacy_passphrase: str = Field(default="", max_length=200)
 
 
+class ProfileRange(BaseModel):
+    management_range: IPv4Network
+
+
 class ProfileTarget(BaseModel):
     management_ip: IPv4Address
 
@@ -337,7 +341,30 @@ discovery_lock = asyncio.Lock()
 @router.post("/discover-snmpv3")
 async def discover_snmp(body: DiscoveryInput, request: Request, db: Session = Depends(get_db),
                         admin: User = admin_only):
-    network = body.management_range
+    async def read(host):
+        return await read_snmpv3(host, body.username, body.auth_passphrase, body.privacy_passphrase)
+
+    return await _discover_printers(body.management_range, read, request, db, admin)
+
+
+@router.post("/credential-profiles/{profile_id}/discover")
+async def discover_with_profile(profile_id: str, body: ProfileRange, request: Request,
+                                db: Session = Depends(get_db), admin: User = admin_only):
+    row = db.get(AppSetting, PROFILE_PREFIX + profile_id)
+    if row is None:
+        raise HTTPException(404, "Printer credential profile not found")
+    try:
+        secrets = json.loads(decrypt_secret(row.value["encrypted"]))
+    except (ValueError, RuntimeError):
+        raise HTTPException(409, "Recreate this printer credential profile before using it") from None
+
+    async def read(host):
+        return await read_printer(host, row.value["version"], *secrets)
+
+    return await _discover_printers(body.management_range, read, request, db, admin)
+
+
+async def _discover_printers(network, read, request, db, admin):
     if network.prefixlen < 24:
         raise HTTPException(422, "Use a /24 or smaller range")
     hosts = [str(host) for host in network.hosts()]
@@ -352,7 +379,7 @@ async def discover_snmp(body: DiscoveryInput, request: Request, db: Session = De
             async with concurrency:
                 try:
                     details = await asyncio.wait_for(
-                        read_snmpv3(host, body.username, body.auth_passphrase, body.privacy_passphrase),
+                        read(host),
                         timeout=4,
                     )
                 except (RuntimeError, TimeoutError, OSError):
@@ -363,7 +390,7 @@ async def discover_snmp(body: DiscoveryInput, request: Request, db: Session = De
 
         results = [item for item in await asyncio.gather(*(identify(host) for host in hosts)) if item]
         audit(db, "printer_discovery", username=admin.username, target=str(network),
-              detail=f"Read-only SNMPv3 discovery: {len(results)} printers among {len(hosts)} targets",
+              detail=f"Read-only SNMP discovery: {len(results)} printers among {len(hosts)} targets",
               request=request)
         db.commit()
         return {"scanned": len(hosts), "printers": results}
