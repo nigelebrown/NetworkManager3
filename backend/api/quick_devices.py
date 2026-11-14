@@ -231,6 +231,13 @@ class QuickProbe(BaseModel):
 
 def _permit_probe(ip: ipaddress.IPv4Address) -> None:
     cidrs = os.environ.get("INM_READONLY_DEVICE_CIDRS", "").strip()
+    exact = os.environ.get("INM_APPROVED_DEVICE_IPS", "").split(",")
+    private = any(ip in net for net in (
+        ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
+        ipaddress.IPv4Network("192.168.0.0/16"),
+    ))
+    if private and len(exact) <= 1000 and str(ip) in exact:
+        return
     if not cidrs:
         raise HTTPException(403, "Live polling is disabled. Add approved target CIDRs to INM_READONLY_DEVICE_CIDRS; manual intake works without network access.")
     if not ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
