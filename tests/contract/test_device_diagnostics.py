@@ -14,7 +14,7 @@ def test_cx_diagnostics_are_show_only_with_protocol_catalogue_and_no_write():
         w = emu.writer()
         w.open()
         try:
-            for kind in ("port_auth", "poe", "qos", "lacp"):
+            for kind in ("port_auth", "poe", "qos", "lacp", "transceivers", "optical_dom"):
                 result = w.read_diagnostics(kind=kind)
                 assert result["command"].startswith("show ")
                 assert result["source"] == "CX_REST_ANYCLI"
