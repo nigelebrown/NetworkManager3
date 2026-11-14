@@ -33,6 +33,7 @@ from ..database.models_onboarding import (
     OnboardingConfigSnapshot, OnboardingConfigDraft,
 )
 from ..database.session import get_db
+from ..database.models_phases import CollectionPlan
 from ..security.crypto import encrypt_secret, decrypt_secret
 from ..security.deps import audit, require_role
 from .quick_devices import QuickDevice, QuickProbe, _permit_probe, _probe_ap, _probe_cx, record_observation
@@ -71,6 +72,40 @@ def _public_profile(p: OnboardingCredential) -> dict:
         "last_test_status": p.last_test_status,
         "last_tested_at": p.last_tested_at.isoformat() if p.last_tested_at else None,
     }
+
+
+class CredentialAssignment(BaseModel):
+    credential_id: str = Field(min_length=1, max_length=36)
+    device_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post("/credentials/assign")
+def assign_credentials(body: CredentialAssignment, request: Request, db: Session = Depends(get_db),
+                       admin: User = Depends(require_role("admin"))):
+    profile = _profile(db, body.credential_id)
+    ids = set(body.device_ids)
+    devices = list(db.scalars(select(InmDevice).where(InmDevice.id.in_(ids))
+                              .order_by(InmDevice.id).with_for_update()))
+    if len(devices) != len(ids) or any(d.source_type != "REAL" for d in devices):
+        raise HTTPException(404, "Select registered real devices")
+    if any(d.family != profile.device_family for d in devices):
+        raise HTTPException(422, "All selected devices must match the profile's device family")
+    bindings = {b.device_id: b for b in db.scalars(select(OnboardingDeviceCredential).where(
+        OnboardingDeviceCredential.device_id.in_(ids)))}
+    for device in devices:
+        binding = bindings.get(device.id)
+        if binding is None:
+            db.add(OnboardingDeviceCredential(device_id=device.id, credential_id=profile.id, bound_by=admin.username))
+        elif binding.credential_id != profile.id:
+            binding.credential_id = profile.id
+            binding.bound_by = admin.username
+            binding.bound_at = datetime.now(timezone.utc)
+    for plan in db.scalars(select(CollectionPlan).where(CollectionPlan.device_id.in_(ids))):
+        plan.credential_profile_id = profile.id
+    audit(db, "onboarding_credentials_assigned", username=admin.username, target=profile.id,
+          detail=f"Assigned profile to {len(ids)} devices", request=request)
+    db.commit()
+    return {"assigned": len(ids), "credential_id": profile.id}
 
 
 class CredentialInput(BaseModel):
