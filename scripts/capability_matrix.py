@@ -41,7 +41,14 @@ def main() -> int:
            "columns are SOFTWARE PASS ONLY (strict protocol emulators); an operation becomes executable on a real "
            "device only after it is certified on that model/firmware train in a lab, independently approved, and "
            "the owner unlocks writes (`INM_DEVICE_WRITE_LOCK=false` + `INM_ALLOW_CONFIG_CHANGES=true`). Hardware "
-           "writes stayed locked for this whole campaign.", ""]
+           "writes stayed locked for this whole campaign.", "",
+           "**Device-originated log reads:** Aruba Instant implements read-only show log system/security/user; "
+           "CX implements REST /logs/audit and /logs/event. Normalized output is bounded (100 entries), "
+           "credential-redacted, and restricted to operator/auditor/administrator. The fixed diagnostic "
+           "operations cover RF/clients/system on Instant and port authentication/VSF/PoE/QoS/LACP on CX. "
+           "Both are software/emulator tested only; actual device responses remain UNCERTIFIED. "
+           "The Device 360 Operations screen uses the protected device-logs and diagnostics APIs. "
+           "These are distinct from the platform hash-chained audit trail.", ""]
     for spec in A.REGISTRY:
         p = A.public(spec)
         out += [f"## {p['vendor']} {p['family']} — `{p['key']}`", "",
