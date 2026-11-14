@@ -7,7 +7,7 @@ import { COLORS, Gauge, PageHeader, Pill, SourceTag, TT, ago, statusTone } from 
 import { RuleTable } from "./Compliance";
 import Faceplate from "../components/Faceplate";
 import { Notice, btn2, useAction } from "../components/viz";
-import { rw } from "../services/ops";
+import { rw, type DeviceOriginLogs } from "../services/ops";
 import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
@@ -39,6 +39,8 @@ export default function Device360() {
   const act = useAction();
   const [fp, setFp] = useState("");
   const [vc, setVc] = useState("");
+  const [logKind, setLogKind] = useState<"audit" | "event" | "system" | "security" | "user">("audit");
+  const [deviceLogs, setDeviceLogs] = useState<DeviceOriginLogs | null>(null);
   const metricsFor = METRICS[d?.family ?? "switch"] ?? METRICS.switch;
   const data = (series.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
   return <div className="space-y-4">
@@ -84,6 +86,40 @@ export default function Device360() {
             const r = await rw.captureDevice(id); ver.reload(); comp.reload(); return `Captured full configuration (${r.size} bytes, SHA-256 ${r.sha256.slice(0, 12)}…) into the encrypted vault.`; })}>Capture configuration from device</button>
           <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { await rw.schedule(id, 24); return "Daily scheduled capture enabled (drift and compliance alerts after each capture)."; })}>Schedule daily backup</button>
         </div>
+      </Card>
+      <Card title="Device-originated logs (read-only)">
+        <p className="text-xs text-slate-500">Retrieve authenticated device accounting, security or system logs.
+          Responses are bounded and credential-redacted. These are distinct from the platform audit trail.
+          Hardware log formats still require device-specific verification.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-xs" htmlFor="device-log-kind">Log category</label>
+          <select id="device-log-kind" className="inm-form-control"
+            value={(d?.family === "switch" ? ["audit", "event"] : ["system", "security", "user"]).includes(logKind)
+              ? logKind : d?.family === "switch" ? "audit" : "system"}
+            onChange={e => { setLogKind(e.target.value as typeof logKind); setDeviceLogs(null); }}>
+            {(d?.family === "switch" ? ["audit", "event"] : ["system", "security", "user"]).map(kind =>
+              <option key={kind} value={kind}>{kind}</option>)}
+          </select>
+          <button className={btn2} disabled={!d || act.busy}
+            onClick={() => act.run(async () => {
+              const kind = d?.family === "switch"
+                ? (["audit", "event"].includes(logKind) ? logKind : "audit")
+                : (["system", "security", "user"].includes(logKind) ? logKind : "system");
+              const result = await rw.deviceLogs(id, kind, 50);
+              setDeviceLogs(result);
+              return `Read ${result.count} device log record(s) from ${result.environment}. No configuration writes occurred.`;
+            })}>Fetch device logs</button>
+        </div>
+        {deviceLogs?.device_id === id && <div className="mt-3 max-h-64 overflow-auto">
+          <div className="mb-2 text-xs text-slate-500">{deviceLogs.count} records · {deviceLogs.environment} ·
+            hardware-verified: {deviceLogs.hardware_verified ? "yes" : "not yet"}</div>
+          <table className="inm-table"><thead><tr><th>Time</th><th>Actor</th><th>Message</th></tr></thead>
+            <tbody>{deviceLogs.records.map(item => <tr key={item.id}>
+              <td className="text-xs">{item.timestamp || "—"}</td>
+              <td className="text-xs">{item.actor || "Unknown"}</td>
+              <td className="font-mono text-xs break-words">{item.message}</td></tr>)}</tbody></table>
+          {!deviceLogs.count && <div className="inm-empty">No log entries returned by the device.</div>}
+        </div>}
       </Card>
       <Card title="Templates → deployment">
         <p className="text-sm text-slate-400">Compare the inherited template with what is installed and create an approvable change plan containing only the needed operations.</p>
