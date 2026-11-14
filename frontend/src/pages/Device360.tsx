@@ -42,7 +42,7 @@ export default function Device360() {
   const metricsFor = METRICS[d?.family ?? "switch"] ?? METRICS.switch;
   const data = (series.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
   return <div className="space-y-4">
-    <PageHeader title={d ? `${d.hostname ?? d.serial_number}` : "Device"} subtitle={d ? `${d.vendor} ${d.model ?? ""} · serial ${d.serial_number} · firmware ${d.firmware ?? "unknown"}` : undefined}
+    <PageHeader eyebrow="Monitoring & diagnostics · Device 360°" title={d ? `${d.hostname ?? d.serial_number}` : "Device"} subtitle={d ? `${d.vendor} ${d.model ?? ""} · serial ${d.serial_number} · firmware ${d.firmware ?? "unknown"}` : undefined}
       right={d && <div className="flex items-center gap-2"><SourceTag source={d.source_type} />
         <span title={(d as { state_reason?: string }).state_reason}><Pill value={(d as { state?: string }).state ?? d.status}
           tone={statusTone((d as { state?: string }).state === "ONLINE" ? "PASS" : (d as { state?: string }).state ?? d.status)} /></span>
@@ -58,14 +58,15 @@ export default function Device360() {
         <p className="text-xs text-slate-400">Recommendations only. Automatic optimization is disabled by policy; changes go through engineer change plans.</p>
         <Link to="/optimization" className="text-xs text-sky-300">Shadow simulation →</Link></div></Card>
     </div>
-    <div className="flex gap-1 border-b border-slate-800">{TABS.map(t => <button key={t} onClick={() => setTab(t)}
-      className={`px-3 py-2 text-sm ${tab === t ? "border-b-2 border-sky-500 text-sky-200" : "text-slate-400"}`}>{t}</button>)}</div>
+    <div className="inm-tabs" role="tablist" aria-label="Device 360 sections">{TABS.map(t => <button
+      key={t} role="tab" type="button" aria-selected={tab === t} onClick={() => setTab(t)}
+      className={`inm-tab ${tab === t ? "active" : ""}`}>{t}</button>)}</div>
     {tab === "Performance" && <Card title="History" right={<div className="flex gap-2">
       <select aria-label="Metric" className="rounded bg-slate-950 px-2 py-1 text-sm" value={metric} onChange={e => setMetric(e.target.value)}>{metricsFor.map(m => <option key={m}>{m}</option>)}</select>
       <select aria-label="Range" className="rounded bg-slate-950 px-2 py-1 text-sm" value={hours} onChange={e => setHours(Number(e.target.value))}>{[1, 6, 24, 168].map(h => <option key={h} value={h}>{h < 24 ? `${h} h` : `${h / 24} d`}</option>)}</select></div>}>
       {data.length > 1 ? <ResponsiveContainer width="100%" height={260}><AreaChart data={data}>
         <defs><linearGradient id="m" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.info} stopOpacity={0.45} /><stop offset="100%" stopColor={COLORS.info} stopOpacity={0} /></linearGradient></defs>
-        <CartesianGrid stroke="#1e293b" /><XAxis dataKey="t" stroke="#64748b" fontSize={11} minTickGap={30} /><YAxis stroke="#64748b" fontSize={11} /><Tooltip {...TT} />
+        <CartesianGrid stroke="#e6edf6" /><XAxis dataKey="t" stroke="#74879b" fontSize={11} minTickGap={30} /><YAxis stroke="#74879b" fontSize={11} /><Tooltip {...TT} />
         <Area dataKey="v" name={metric} stroke={COLORS.info} fill="url(#m)" connectNulls={false} /></AreaChart></ResponsiveContainer>
         : <p className="py-10 text-center text-sm text-slate-500">No {metric} readings in this window. Create a collection plan under <Link className="text-sky-300" to="/collection">Monitoring → Collection</Link>.</p>}
     </Card>}
