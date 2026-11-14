@@ -56,3 +56,24 @@ def test_worker_approval_is_readonly_without_docker_socket():
     install = (ROOT / "deployment/centos9/install.sh").read_text()
     assert "inm_management_approval_agent.py" in install
     assert "--install" in install
+
+
+def test_live_installer_migrates_legacy_missing_write_lock_settings_fail_closed():
+    """Legacy env files used Compose locked defaults without persisting them.
+
+    The host reconciler must receive explicit locked flags, while any explicit
+    operator override remains untouched and causes installation to stop.
+    """
+    install = (ROOT / "deployment/centos9/install.sh").read_text()
+    guard = (ROOT / "scripts/inm_management_approval_agent.py").read_text()
+    assert 'if ! grep -q \'^INM_DEVICE_WRITE_LOCK=\' "$ENV_FILE"; then' in install
+    assert 'set_env_value INM_DEVICE_WRITE_LOCK true' in install
+    assert 'if ! grep -q \'^INM_ALLOW_CONFIG_CHANGES=\' "$ENV_FILE"; then' in install
+    assert 'set_env_value INM_ALLOW_CONFIG_CHANGES false' in install
+    assert '"$(env_get INM_DEVICE_WRITE_LOCK)" == true' in install
+    assert '"$(env_get INM_ALLOW_CONFIG_CHANGES)" == false' in install
+    assert 'die "live/lab-readonly installation requires device writes LOCKED' in install
+    assert 'data.get("INM_DEVICE_WRITE_LOCK") != "true"' in guard
+    assert 'data.get("INM_ALLOW_CONFIG_CHANGES") == "true"' in guard
+    assert "docker volume rm" not in install
+    assert "down -v" not in install
