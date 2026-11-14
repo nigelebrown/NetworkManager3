@@ -5,6 +5,7 @@ A passing evaluator test validates integrity rules, not hardware readiness.
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import subprocess
@@ -29,6 +30,14 @@ def build(tmp_path):
     f = root / "artifacts.txt"
     f.write_text("SYNTHETIC TEST FIXTURE — NOT REAL DEVICE ACCEPTANCE", encoding="utf-8")
     digest = hashlib.sha256(f.read_bytes()).hexdigest()
+    register = root / "acceptance.csv"
+    with register.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("test_id", "phase", "status", "actual_result", "artifact_link"))
+        for i in range(220):
+            writer.writerow((f"TEST-{i:03d}", f"P{1 + i % 11}", "PASS",
+                             "SYNTHETIC UNIT FIXTURE - NOT PHYSICAL EVIDENCE", "artifacts.txt"))
+    register_hash = hashlib.sha256(register.read_bytes()).hexdigest()
     pass_ref = {"status": "PASS", "evidence": ["artifacts.txt"]}
     m = {
         "schema_version": 1, "release_commit": SHA, "deployment_profile": "live",
@@ -37,7 +46,8 @@ def build(tmp_path):
         "ci": {"commit": SHA, "conclusion": "success",
                "run_url": "https://github.com/org/repo/actions/runs/1",
                "completed_at": (NOW - timedelta(minutes=10)).isoformat()},
-        "artifacts": {"artifacts.txt": digest},
+        "artifacts": {"artifacts.txt": digest, "acceptance.csv": register_hash},
+        "acceptance_register": "acceptance.csv",
         "phases": {key: dict(pass_ref) for key in R.PHASES},
         "deployment_gates": {key: dict(pass_ref) for key in R.DEPLOYMENT_GATES},
         "gap_closure": {key: dict(pass_ref) for key in R.PRIMARY_GAPS},
@@ -88,7 +98,8 @@ def test_valid_synthetic_signed_input_exercises_gate_only(tmp_path):
     sign(m, private)
     result = verdict(m, root, trusted)
     assert result["decision"] == "GO", result["failures"]
-    assert result["verified_artifacts"] == 1
+    assert result["verified_artifacts"] == 2
+    assert result["acceptance_register"]["passed"] == 220
     assert result["models_required"] == list(R.MODELS)
     # GO here asserts the evaluator's *fixture*, not external-device evidence.
 
@@ -173,3 +184,22 @@ def test_cli_fails_closed_on_missing_inputs(tmp_path):
     assert p.returncode == 3, p.stderr
     result = json.loads(p.stdout)
     assert result["decision"] == "NO_GO"
+
+
+def test_acceptance_register_rejects_partial_missing_actual_and_duplicates(tmp_path):
+    m, root, trusted, private = build(tmp_path)
+    register = root / "acceptance.csv"
+    rows = register.read_text().splitlines()
+    rows[1] = rows[1].replace("PASS", "PARTIAL")
+    register.write_text("\n".join(rows) + "\n")
+    m["artifacts"]["acceptance.csv"] = hashlib.sha256(register.read_bytes()).hexdigest()
+    sign(m, private)
+    assert any("acceptance" in e for e in verdict(m, root, trusted)["failures"])
+
+    m, root, trusted, private = build(tmp_path)
+    rows = (root / "acceptance.csv").read_text().splitlines()
+    rows.pop()
+    (root / "acceptance.csv").write_text("\n".join(rows) + "\n")
+    m["artifacts"]["acceptance.csv"] = hashlib.sha256((root / "acceptance.csv").read_bytes()).hexdigest()
+    sign(m, private)
+    assert any("minimum 220" in e for e in verdict(m, root, trusted)["failures"])
