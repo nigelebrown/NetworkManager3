@@ -12,14 +12,16 @@ export default function DeviceInventory() {
   const [params, setParams] = useSearchParams();
   const handoff = useLocation().state as {credentialDeviceIds?: string[]; family?: string} | null;
   const [family, setFamily] = useState(handoff?.family ?? "ALL");
+  const [site, setSite] = useState("");
   const query = params.get("q") ?? "";
   const devices = useLoad(v1.devices, [], 30000, ["devices"]);
   const sites = useLoad(() => v1.physicalSites().catch(() => ({ sites: [] })), [], 60000, ["sites"]);
   const siteNames = useMemo(() => new Map((sites.data?.sites ?? []).map(s => [s.id, s.name])), [sites.data]);
   const rows = useMemo(() => (devices.data ?? []).filter(d =>
     (family === "ALL" || d.family === family) &&
-    (!query || [d.hostname,d.model,d.serial_number,d.firmware,d.site_id,...(d.management_addresses ?? [])]
-      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query]);
+    (!site || (d.site_id ?? "unassigned") === site) &&
+    (!query || [d.hostname,d.model,d.serial_number,d.firmware,siteNames.get(d.site_id ?? ""),...(d.management_addresses ?? [])]
+      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query, site, siteNames]);
   const admin = getSession()?.role === "admin";
   const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
   const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
@@ -28,6 +30,10 @@ export default function DeviceInventory() {
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
   const selectedFamily = devices.data?.find(d => d.id === selected[0])?.family;
   const eligible = rows.filter(d => d.source_type === "REAL" && d.family === (selectedFamily ?? family));
+  const allVisibleSelected = eligible.length > 0 && eligible.every(d => selected.includes(d.id));
+  const toggleVisible = () => changeSelection(allVisibleSelected
+    ? selected.filter(id => !eligible.some(d => d.id === id))
+    : [...new Set([...selected, ...eligible.map(d => d.id)])].slice(0, 500));
   const matchingProfiles = profiles.data?.filter(p => p.enabled && p.device_family === selectedFamily) ?? [];
   const changeSelection = (ids: string[]) => {
     setSelected(ids);
@@ -35,6 +41,7 @@ export default function DeviceInventory() {
     setFeedback({});
   };
   const update = (value: string) => { const p = new URLSearchParams(params);
+    changeSelection([]);
     if (value) p.set("q",value); else p.delete("q"); setParams(p,{replace:true}); };
   return <div className="space-y-4">
     <div className="inm-titlebar"><div><div className="inm-section-label">Sites & inventory</div>
@@ -55,11 +62,17 @@ export default function DeviceInventory() {
         <div style={{color:"#63748b",fontSize:11}}>{label}</div><div className="inm-kpi-value">{value}</div></div>)}
     </div>
     <section className="inm-card"><div className="inm-cardhead"><h2>Registered equipment ({rows.length})</h2>
-      <div className="inm-actionbar"><input aria-label="Search inventory" value={query} onChange={e=>update(e.target.value)}
+      <div className="inm-actionbar"><input aria-label="Search inventory" disabled={busy} value={query} onChange={e=>update(e.target.value)}
         placeholder="Hostname, serial, model or IP" style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}/>
-        <select aria-label="Device family" value={family} onChange={e=>{setFamily(e.target.value); changeSelection([]);}}
+        <select aria-label="Device family" disabled={busy} value={family} onChange={e=>{setFamily(e.target.value); changeSelection([]);}}
           style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}>
-          <option value="ALL">All equipment</option><option value="access_point">Access points</option><option value="switch">CX switches</option></select></div>
+          <option value="ALL">All equipment</option><option value="access_point">Access points</option><option value="switch">CX switches</option></select>
+        <select className={inputCls} aria-label="Physical site" disabled={busy} value={site}
+          onChange={e => {setSite(e.target.value); changeSelection([]);}}>
+          <option value="">All sites</option><option value="unassigned">Unassigned</option>
+          {[...(sites.data?.sites ?? [])].sort((a,b) => a.name.localeCompare(b.name)).map(s =>
+            <option key={s.id} value={s.id}>{s.name}{s.source_type === "DEMO" ? " (Demo)" : ""}</option>)}
+        </select></div>
     </div>
       {admin && <form className="inm-cardbody flex flex-wrap items-end gap-3" onSubmit={async e => {
         e.preventDefault();
@@ -77,7 +90,7 @@ export default function DeviceInventory() {
       }}>
         <p>{selected.length} selected</p>
         <button type="button" className={btn} disabled={busy || !eligible.length}
-          onClick={() => changeSelection([...new Set([...selected, ...eligible.map(d => d.id)])].slice(0, 500))}>Select visible</button>
+          onClick={toggleVisible}>{allVisibleSelected ? "Deselect visible" : "Select visible"}</button>
         <button type="button" className={btn} disabled={busy || !selected.length}
           onClick={() => changeSelection([])}>Clear selection</button>
         <label>Saved credential profile<select className={inputCls} value={profile} disabled={busy || !selected.length}
@@ -87,7 +100,7 @@ export default function DeviceInventory() {
         <button className={btn} disabled={busy || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
           {busy ? "Assigning…" : "Assign profile"}
         </button>
-        <p className="basis-full text-sm text-slate-600">Select devices of one type. The new profile replaces any previous assignment.</p>
+        <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
       </form>}
       {admin && selectedFamily && <details className="inm-cardbody">
         <summary className="cursor-pointer font-medium">Create a credential profile for selected devices</summary>
@@ -116,7 +129,8 @@ export default function DeviceInventory() {
         </form>
       </details>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
-        {admin && <th scope="col">Select</th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
+        {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
+          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
       </tr></thead><tbody>{rows.map(d=><tr key={d.id}>
         {admin && <td><input type="checkbox" aria-label={`Select ${d.hostname || d.serial_number}`}
           checked={selected.includes(d.id)} disabled={busy || d.source_type !== "REAL" ||
