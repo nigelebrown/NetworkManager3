@@ -87,6 +87,7 @@ export default function Layout() {
   const [demo, setDemo] = useState<DemoStatus | null>(null);
   useEffect(() => { const f = () => ops.demo().then(setDemo).catch(() => {}); f(); const t = setInterval(f, 30000); return () => clearInterval(t); }, []);
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [ls, setLs] = useState<LiveState>(live.state);
   useEffect(() => { api.status().then(setStatus).catch(() => {}); }, []);
@@ -128,10 +129,19 @@ export default function Layout() {
             <div className="inm-breadcrumbs">Platform <span className="mx-2">›</span> <b>{current?.label ?? "Device details"}</b></div>
           </div>
           <div className="inm-topright">
+            <form className="inm-topsearch" role="search"
+              onSubmit={e => { e.preventDefault(); if (search.trim()) nav("/inventory?q=" + encodeURIComponent(search.trim())); }}>
+              <span aria-hidden="true">⌕</span>
+              <input aria-label="Search inventory" value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search equipment…" />
+              <button type="submit" aria-label="Submit inventory search" className="inm-search-submit">Search</button>
+            </form>
+            {s?.role === "admin" && <NavLink to="/onboarding" className="inm-header-action">＋ Add device</NavLink>}
             <span className={`inm-runtime ${ls}`} data-testid="live-indicator" data-state={ls}>
               <span className={`inm-green-dot ${dot}`} />{label}
             </span>
-            <span className="hidden text-slate-400 sm:inline">{s?.username} <span className="text-slate-600">({s?.role})</span></span>
+            <span className="inm-account" title={s?.role}><span className="inm-avatar" aria-hidden="true">{s?.username?.slice(0, 2).toUpperCase() ?? "IN"}</span>
+              <span className="inm-account-label">{s?.username}<small>{s?.role}</small></span></span>
             <button onClick={logout} className="inm-signout">Sign out</button>
           </div>
         </div>
