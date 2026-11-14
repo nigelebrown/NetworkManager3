@@ -55,7 +55,7 @@ export default function Configuration() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Configuration</h1>
+        <div><div className="inm-section-label">Configuration & changes</div><h1 className="inm-pagetitle">Legacy WLAN configuration</h1></div>
         <select aria-label="Site" className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={siteId ?? ""} onChange={(e) => { setSiteId(Number(e.target.value)); setForm(null); }}>
           {sites?.map((s) => <option key={s.id} value={s.id}>{s.name}{s.simulated ? " (simulated)" : ""}</option>)}
         </select>
