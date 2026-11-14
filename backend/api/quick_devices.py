@@ -134,7 +134,9 @@ def record_observation(db: Session, body: QuickDevice, actor: str, request: Requ
 @router.post("", status_code=201)
 def create_device(body: QuickDevice, request: Request, db: Session = Depends(get_db),
                   admin: User = Depends(require_role("admin"))):
-    return record_observation(db, body, admin.username, request)
+    result = record_observation(db, body, admin.username, request)
+    db.commit()  # Visibility must precede HTTP 201; FastAPI yield cleanup can run after response.
+    return result
 
 
 class BulkQuickDeviceInput(BaseModel):
@@ -175,6 +177,7 @@ def create_device_batch(body: BulkQuickDeviceInput, request: Request,
         results.append({"id": result["id"], "hostname": result["hostname"],
                         "serial_number": row.serial_number,
                         "action": "UPDATED" if already else "ADDED"})
+    db.commit()  # Keep the bulk import atomic and visible before responding.
     return {"count": len(results), "added": sum(x["action"] == "ADDED" for x in results),
             "updated": sum(x["action"] == "UPDATED" for x in results),
             "source_type": "REAL", "collection_method": "MANUAL",
