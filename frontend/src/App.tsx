@@ -1,3 +1,4 @@
+import PortGroups from "./pages/PortGroups";
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { getSession } from "./services/api";
@@ -114,6 +115,7 @@ export default function App() {
         <Route path="data" element={<DataManagement />} />
         {/* Approved full-system wireframe workspaces: reuse existing APIs and change safeguards. */}
         <Route path="rf-health" element={<WireframeWorkspace kind="rf" />} />
+        <Route path="port-groups" element={<PortGroups />} />
         <Route path="port-health" element={<WireframeWorkspace kind="ports" />} />
         <Route path="client-journeys" element={<WireframeWorkspace kind="journeys" />} />
         <Route path="approvals" element={<WireframeWorkspace kind="approvals" />} />

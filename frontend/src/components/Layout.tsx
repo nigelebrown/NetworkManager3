@@ -21,6 +21,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Monitoring & diagnostics", items: [
     { to: "/collection", label: "Live collection", roles: ["admin","operator"] },
     { to: "/rf-health", label: "Wireless & RF health" }, { to: "/port-health", label: "Ports, PoE & LLDP" },
+    { to: "/port-groups", label: "Port monitoring groups", roles: ["admin"] },
     { to: "/client-journeys", label: "Client connectivity", tag: "CONCEPT" },
     { to: "/device-alerts", label: "Alerts & incidents" }, { to: "/topology", label: "Network topology" },
     { to: "/logs", label: "Logs & events", roles: ["admin","auditor","operator"] },
