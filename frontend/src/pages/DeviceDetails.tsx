@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
@@ -40,7 +41,7 @@ export default function DeviceDetails() {
     <div className="space-y-4">
       <Link to="/onboarding/manual" className="text-sm text-sky-400 hover:underline">← Back to device inventory</Link>
       <div>
-        <h1 className="text-xl font-semibold">{d?.hostname ?? "Device details"}</h1>
+        <PageHeader eyebrow="Sites & inventory" title={d?.hostname ?? "Device details"} subtitle="Device identity, provenance, observations and management details." />
         <p className="mt-1 text-sm text-slate-400">
           {d?.family === "switch" ? "Aruba CX switch" : "Aruba access point"} · {site}
         </p>
