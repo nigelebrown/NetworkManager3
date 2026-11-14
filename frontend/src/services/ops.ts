@@ -175,6 +175,15 @@ export interface InmAlert { id: string; device_id: string; rule_id: string; seve
   threshold: number | null; state: string; suppressed: boolean; opened_at: string; last_seen_at: string; resolved_at: string | null;
   acked_by: string | null; source_type: string }
 
+export interface DeviceOriginLog {
+  id: string; source: string; timestamp: string | null; level: string | null;
+  actor: string | null; action: string | null; message: string;
+}
+export interface DeviceOriginLogs {
+  device_id: string; environment: string; kind: string; count: number;
+  hardware_verified: boolean; records: DeviceOriginLog[];
+}
+
 export const rw = {
   render: (id: string) => request<{ environment: string; operations: { op: Record<string, unknown>; requests?: unknown[]; error?: string }[];
     certification: Record<string, string> }>(`/v1/changes/plans/${enc(id)}/render`),
@@ -186,6 +195,8 @@ export const rw = {
   decideCert: (id: string, action: "approve" | "revoke") => post<Cert>(`/v1/certification/${enc(id)}/${action}`),
   deviceCert: (id: string) => request<{ environment: string; model_family: string; firmware_train: string; operations: Record<string, string> }>(`/v1/devices/${enc(id)}/certification`),
   ports: (id: string) => request<Ports>(`/v1/devices/${enc(id)}/ports`),
+  deviceLogs: (id: string, kind: "audit" | "event" | "system" | "security" | "user", limit = 50) =>
+    request<DeviceOriginLogs>(`/v1/devices/${enc(id)}/device-logs?kind=${enc(kind)}&limit=${limit}`),
   authority: (id: string) => request<{ authority: string; detail: string; environment: string }>(`/v1/devices/${enc(id)}/authority`),
   scanKey: (id: string) => post<{ fingerprint?: string; sha256?: string; environment: string }>(`/v1/devices/${enc(id)}/ssh-key/scan`),
   pinKey: (id: string, fingerprint: string, vc_host?: string) => post(`/v1/devices/${enc(id)}/ssh-key/pin`, { fingerprint, vc_host: vc_host || null }),
