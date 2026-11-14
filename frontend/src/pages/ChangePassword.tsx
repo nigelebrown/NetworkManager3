@@ -12,7 +12,7 @@ export default function ChangePassword() {
     e.preventDefault(); setErr(null);
     if (next !== again) { setErr("The new passwords do not match."); return; }
     setBusy(true);
-    try { await api.changePassword(cur, next); if (s) setSession({ ...s, must_change_password: false }); nav("/"); }
+    try { const rotated = await api.changePassword(cur, next); setSession(rotated); nav("/", { replace: true }); }
     catch (x) { setErr(x instanceof Error ? x.message : "Change failed"); }
     finally { setBusy(false); }
   };
