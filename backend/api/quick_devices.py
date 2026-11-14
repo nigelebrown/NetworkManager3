@@ -22,9 +22,10 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..aruba.errors import ArubaError
-from ..database.models import User
+from ..database.models import AppSetting, User
 from ..database.models_inm import DeviceCapability, InmDevice, InmSite
 from ..database.session import get_db
+from ..database.models_phases import CollectionPlan
 from ..domain.model import DataQuality, SourceType, TelemetryPoint
 from ..infrastructure.runtime import telemetry_store
 from ..security.deps import audit, require_role
@@ -78,16 +79,48 @@ class QuickDevice(BaseModel):
         return v
 
 
+def _real_site(db: Session, name: str) -> InmSite:
+    site = db.scalar(select(InmSite).where(InmSite.name == name, InmSite.source_type == "REAL"))
+    if site is None:
+        site = InmSite(name=name, source_type="REAL")
+        db.add(site)
+        db.flush()
+    return site
+
+
+class SiteAssignment(BaseModel):
+    site_name: str = Field(min_length=1, max_length=100, pattern=r"\S")
+
+
+@router.patch("/{device_id}/site")
+def assign_site(device_id: str, body: SiteAssignment, request: Request, db: Session = Depends(get_db),
+                admin: User = Depends(require_role("admin"))):
+    device = db.get(InmDevice, device_id)
+    if device is None or device.source_type != "REAL":
+        raise HTTPException(404, "Real device not found")
+    site = _real_site(db, body.site_name.strip())
+    if device.site_id != site.id:
+        old = device.site_id
+        device.site_id = site.id
+        for plan in db.scalars(select(CollectionPlan).where(CollectionPlan.device_id == device.id)):
+            plan.site_id = site.id
+        audit(db, "device_site_assigned", username=admin.username, target=device.id,
+              detail=f"physical site {old or 'unassigned'} → {site.id}", request=request)
+    key = f"device-site:{device.id}"
+    assignment = db.get(AppSetting, key) or AppSetting(key=key)
+    assignment.value = {"site_id": site.id}
+    assignment.updated_by = admin.username
+    assignment.updated_at = datetime.now(timezone.utc)
+    db.add(assignment)
+    db.commit()
+    return {"site_id": site.id, "site_name": site.name}
+
+
 def record_observation(db: Session, body: QuickDevice, actor: str, request: Request,
                        *, evidence: str = "MANUAL", notes: str = "") -> dict:
     """Idempotent device upsert. All real inventory isolated from demo fixture identities."""
     now = datetime.now(timezone.utc)
-    site = db.scalar(select(InmSite).where(InmSite.name == body.site_name, InmSite.source_type == "REAL"))
-    if site is None:
-        site = InmSite(name=body.site_name, source_type="REAL",
-                       description="Imported real device inventory; no device writes")
-        db.add(site)
-        db.flush()
+    site = _real_site(db, body.site_name)
 
     dev = db.scalar(select(InmDevice).where(InmDevice.source_type == "REAL",
                                            InmDevice.vendor == "Aruba",
