@@ -48,6 +48,8 @@ READ_ONLY_COMMANDS = (
     "show ap debug client-table",
     "show ap debug system-status",
     "show log system",
+    "show log security",
+    "show log user",
     "show alert",
     "show ap association",
     "show running-config",
