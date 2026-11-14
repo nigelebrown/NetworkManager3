@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..aruba.errors import ArubaError
-from ..database.models import User
+from ..database.models import AppSetting, User
 from ..database.models_inm import DeviceCapability, InmDevice, InmSite
 from ..database.session import get_db
 from ..database.models_phases import CollectionPlan
@@ -106,6 +106,12 @@ def assign_site(device_id: str, body: SiteAssignment, request: Request, db: Sess
             plan.site_id = site.id
         audit(db, "device_site_assigned", username=admin.username, target=device.id,
               detail=f"physical site {old or 'unassigned'} → {site.id}", request=request)
+    key = f"device-site:{device.id}"
+    assignment = db.get(AppSetting, key) or AppSetting(key=key)
+    assignment.value = {"site_id": site.id}
+    assignment.updated_by = admin.username
+    assignment.updated_at = datetime.now(timezone.utc)
+    db.add(assignment)
     db.commit()
     return {"site_id": site.id, "site_name": site.name}
 
