@@ -218,7 +218,7 @@ def _probe_ap(body: QuickProbe) -> dict:
     from ..aruba.monitoring import collect_snapshot
     s = get_settings()
     with ArubaClient(ArubaTarget(str(body.management_ip), 4343, body.username, body.password),
-                     timeout=min(s.aruba_timeout_seconds, 8), verify=s.tls_verify_arg) as client:
+                     timeout=min(s.aruba_timeout_seconds, 8), verify=s.tls_verify_for(str(body.management_ip))) as client:
         client.login()
         snap = collect_snapshot(client)
     ap = next((a for a in snap.aps if a.get("ip") == str(body.management_ip)), None)
@@ -242,7 +242,7 @@ def _probe_cx(body: QuickProbe) -> dict:
     from ..infrastructure.writers.aruba_cx import CxSession, PORT_RE
     try:
         with CxSession(body.management_ip, body.username, body.password, timeout=8.0,
-                       verify=get_settings().tls_verify_arg) as s:
+                       verify=get_settings().tls_verify_for(str(body.management_ip))) as s:
             data = s.request("GET", "/system", params={"attributes": "hostname,platform_name,software_version,"
                                                                      "serial_number"}).json()
             if not isinstance(data, dict):

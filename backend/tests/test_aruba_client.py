@@ -59,3 +59,27 @@ def test_secrets_never_logged(caplog):
         collect_snapshot(c)
     assert "UNIQUE-PASSWORD-123" not in caplog.text
     assert "sid-1" not in caplog.text
+
+
+def test_untrusted_tls_exception_is_scoped_to_exact_private_ip():
+    from backend.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        aruba_verify_tls=True,
+        aruba_untrusted_tls_hosts="10.192.57.55",
+    )
+    assert settings.tls_verify_for("10.192.57.55") is False
+    assert settings.tls_verify_for("10.192.57.56") is True
+    assert settings.tls_verify_for("8.8.8.8") is True
+
+
+def test_untrusted_tls_malformed_allowlist_fails_closed():
+    from backend.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        aruba_verify_tls=True,
+        aruba_untrusted_tls_hosts="10.192.57.55,not-an-ip",
+    )
+    assert settings.tls_verify_for("10.192.57.55") is True
