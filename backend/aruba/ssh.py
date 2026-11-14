@@ -36,8 +36,8 @@ _ERRORS = ("% parse error", "parse error", "invalid input", "command not found",
 LEGACY_SSH_HELP = (
     "SIMS tried modern SSH algorithms and then the legacy ssh-rsa / SHA-1 set, and the AP accepted neither, "
     "so SIMS cannot enable the REST API for you on this AP. Do it by hand from a terminal: "
-    "ssh -o HostKeyAlgorithms=+ssh-rsa admin@{host}   "
-    "(add -o PubkeyAcceptedAlgorithms=+ssh-rsa only if you log in with a key), then enter: "
+    "ssh -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 admin@{host}   "
+    "(add -o PubkeyAcceptedAlgorithms=+ssh-rsa only for public-key login), then enter: "
     "configure terminal / allow-rest-api / end / commit apply. Then use Check again."
 )
 _PROMPT = re.compile(r"[#>]\s?$")
