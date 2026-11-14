@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card, ErrorNote } from "../components/ui";
@@ -27,7 +28,7 @@ export default function DiscoveryRanges() {
     finally { setBusy(false); }
   };
   return <div className="space-y-4">
-    <h1 className="text-xl font-semibold">Discovery range planner</h1>
+    <PageHeader eyebrow="Sites & inventory" title="Discovery jobs" subtitle="Plan authorized ranges from /9 to /32; execute bounded read-only /24 batches through guided onboarding." />
     <p className="text-sm text-slate-400">
       Define IPv4 ranges from /9 to /32 without flooding the network. This page
       previews bounded /24 batches. It does not send probes or configure devices.
