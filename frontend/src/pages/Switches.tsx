@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Card, ErrorNote, NA, fmtTime } from "../components/ui";
@@ -25,7 +26,7 @@ export default function Switches() {
     : (d.site_id ? physical.data?.sites.find((s) => s.id === d.site_id)?.name ?? "Real inventory" : "—");
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Switches</h1>
+      <PageHeader eyebrow="Sites & inventory" title="CX switches" subtitle="Aruba CX switch inventory, port health and managed device configuration." />
       <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 text-sm text-slate-200">
         DEMO switches are simulated. REAL devices are imported from actual readings or a read-only Aruba CX REST probe.
         No switch configuration changes are permitted.
