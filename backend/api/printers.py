@@ -6,9 +6,10 @@ never the printer configuration, spool or firmware. No print contents/job metada
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Network
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -112,11 +113,18 @@ class MaintenanceInput(BaseModel):
     currency: Literal["JMD", "USD"] = "JMD"
 
 
-class ProbeInput(BaseModel):
-    management_ip: IPv4Address
+class SnmpCredentials(BaseModel):
     username: str = Field(min_length=1, max_length=100)
     auth_passphrase: str = Field(min_length=8, max_length=200)
     privacy_passphrase: str = Field(min_length=8, max_length=200)
+
+
+class ProbeInput(SnmpCredentials):
+    management_ip: IPv4Address
+
+
+class DiscoveryInput(SnmpCredentials):
+    management_range: IPv4Network
 
 
 def _dt(value: datetime | None) -> str | None:
@@ -246,6 +254,45 @@ async def probe_snmp(body: ProbeInput, request: Request, db: Session = Depends(g
     audit(db, "printer_snmp_probe", username=admin.username, target=host,
           detail="SNMPv3 authPriv standard system and marker data read; no device writes", request=request)
     return details
+
+
+# One in-flight range job per API process. Other read-only calls remain available.
+discovery_lock = asyncio.Lock()
+
+
+@router.post("/discover-snmpv3")
+async def discover_snmp(body: DiscoveryInput, request: Request, db: Session = Depends(get_db),
+                        admin: User = admin_only):
+    network = body.management_range
+    if network.prefixlen < 24:
+        raise HTTPException(422, "Use a /24 or smaller range")
+    hosts = [str(host) for host in network.hosts()]
+    if not all(permitted_target(host) for host in hosts):
+        raise HTTPException(403, "The entire range must be within approved management ranges")
+    if discovery_lock.locked():
+        raise HTTPException(409, "A printer discovery is already running")
+    async with discovery_lock:
+        concurrency = asyncio.Semaphore(24)
+
+        async def identify(host: str):
+            async with concurrency:
+                try:
+                    details = await asyncio.wait_for(
+                        read_snmpv3(host, body.username, body.auth_passphrase, body.privacy_passphrase),
+                        timeout=4,
+                    )
+                except (RuntimeError, TimeoutError, OSError):
+                    return None
+                if not details.get("printer_mib"):
+                    return None
+                return {"management_ip": host, **details}
+
+        results = [item for item in await asyncio.gather(*(identify(host) for host in hosts)) if item]
+        audit(db, "printer_discovery", username=admin.username, target=str(network),
+              detail=f"Read-only SNMPv3 discovery: {len(results)} printers among {len(hosts)} targets",
+              request=request)
+        db.commit()
+        return {"scanned": len(hosts), "printers": results}
 
 
 @router.get("/{printer_id}")
