@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import { PageHeader, Pill, ago, statusTone } from "../components/viz";
 import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
+import { getSession } from "../services/api";
 import { ops, type ChangePlan, type NocTile, type LearningItem } from "../services/ops";
 import { v1, type Device } from "../services/inm";
 import { onboardingApi, type CredentialProfile } from "../services/onboarding";
@@ -74,7 +75,7 @@ function DeviceRows({ rows, mode }: { rows: NocTile[]; mode: WorkspaceKind }) {
         : percent(d.health.score)}</td>
       <td>{ago(d.last_persisted_at)}</td>
       <td><Link className="inm-link" to={`/devices/${d.device_id}/360`}>Device 360°</Link>
-        {(mode === "ssid" || mode === "switchconfig") &&
+        {(mode === "ssid" || mode === "switchconfig") && getSession()?.role === "admin" &&
           <Link className="inm-link ml-3" to={`/devices/${d.device_id}/config`}>Configure</Link>}
       </td></tr>)}</tbody>
   </table>{!rows.length && <div className="inm-empty">No matching managed devices or observations are available.</div>}</div>;
