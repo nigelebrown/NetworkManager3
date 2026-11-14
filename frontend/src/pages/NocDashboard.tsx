@@ -61,7 +61,40 @@ export default function NocDashboard() {
       <div className="inm-actionbar">{getSession()?.role === "admin" && <Link to="/onboarding" className="inm-header-action">＋ Add / configure devices</Link>}
         <Link to="/device-alerts" className="inm-link">View incidents</Link></div></div>
     <ErrorNote error={noc.error}/>
-    {!d && !noc.error && <div className="inm-notice">Loading measured information from the NOC API…</div>}
+    {!d && <>
+      <div className="inm-notice" role="status">
+        {noc.error ? "Live NOC observations are unavailable. Open Platform health for service diagnostics." :
+          "Loading measured information from the NOC API…"}
+      </div>
+      <div className="inm-kpis" aria-label="Network summary awaiting live observations">
+        <Kpi label="Network experience" value="—" sub="Awaiting measured health" href="/experience"/>
+        <Kpi label="Access points" value="—" sub="Awaiting device state" href="/aps"/>
+        <Kpi label="CX switches" value="—" sub="Awaiting device state" href="/switches"/>
+        <Kpi label="Connected clients" value="—" sub="Awaiting persisted counts" href="/clients"/>
+        <Kpi label="Active incidents" value="—" sub="Awaiting alert feed" href="/device-alerts"/>
+        <Kpi label="Pending changes" value={plans.data ? plans.data.filter(p => p.state === "PENDING_APPROVAL").length : "—"}
+          sub={plans.data ? "From change-control service" : "Awaiting change-control service"} href="/changes"/>
+      </div>
+      <div className="inm-panel-grid">
+        <Panel title="Client sessions — last 24 hours" href="/executive">
+          <div className="inm-empty">Waiting for historical client observations. No values estimated.</div>
+        </Panel>
+        <Panel title="Service availability & data integrity" href="/system">
+          <div className="inm-empty">Waiting for NOC collection indicators. Platform health has live service checks.</div>
+        </Panel>
+      </div>
+      <div className="inm-bottom-grid">
+        <Panel title="Priority incidents" href="/device-alerts">
+          <div className="inm-empty">Awaiting incident feed.</div>
+        </Panel>
+        <Panel title="Site health" href="/sites">
+          <div className="inm-empty">Awaiting measured site scores.</div>
+        </Panel>
+        <Panel title="Recent activity" href="/logs">
+          <div className="inm-empty">Awaiting persisted events.</div>
+        </Panel>
+      </div>
+    </>}
     {d && <>
       {devices.some(x => x.source_type === "DEMO") && <div className="inm-notice">This view includes DEMO-labelled devices. Sample observations remain distinguishable from real equipment.</div>}
       <div className="inm-kpis">
