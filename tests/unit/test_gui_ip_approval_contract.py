@@ -26,4 +26,11 @@ def test_one_click_update_detects_old_web_bundle_and_checks_host_timer():
     assert "inm-management-approval.timer" in updater
     assert "Refusing" not in updater or "untracked" not in updater
     assert "down -v" not in updater
-    assert "git -C" in updater and "merge --ff-only" in updater
+    assert "inm_safe_sync_main.sh" in updater
+    sync = (ROOT / "scripts/inm_safe_sync_main.sh").read_text()
+    assert "git bundle create" in sync and "git bundle verify" in sync
+    assert "git update-ref" in sync and 'git reset --hard "$TARGET"' in sync
+    assert "git status --porcelain --untracked-files=normal" in sync
+    assert "merge --ff-only" in sync
+    assert "docker volume rm" not in updater + sync
+    assert "down -v" not in updater + sync
