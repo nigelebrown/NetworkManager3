@@ -132,6 +132,24 @@ class ArubaInstantWriter:
         except ArubaError as exc:
             raise WriterError("DEVICE_REJECTED", str(exc)[:200]) from None
 
+    def read_audit_logs(self, *, kind: str = "system", limit: int = 50) -> list[dict]:
+        """Read a bounded Instant VC log view via the documented GET show-cmd API.
+
+        No SSH or configuration request; the command and count are fixed/typed.
+        The response is redacted before leaving the adapter.
+        """
+        from ..device_audit import normalize_instant
+        from ...aruba.errors import ArubaError
+        if kind not in ("system", "security", "user") or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise WriterError("INVALID", "Unsupported log category or count.")
+        try:
+            payload = self.client.show(f"show log {kind} {limit}")
+            return normalize_instant(payload, kind=kind, limit=limit)
+        except ArubaError as exc:
+            raise WriterError("DEVICE_REJECTED", f"Instant log retrieval failed: {type(exc).__name__}") from None
+        except ValueError:
+            raise WriterError("PARSE_ERROR", "Instant returned an unexpected log format.") from None
+
     def management_authority(self) -> dict:
         """Instant clusters managed by Aruba Central / AirWave carry that in the running configuration."""
         text = self._running()
