@@ -66,3 +66,20 @@ def test_batch_test_and_onboard_are_admin_only_read_only_and_status_gated():
     assert "enableRestApi(" not in page
     assert "executeChange(" not in page
     assert "deleteDevice(" not in page
+
+
+
+def test_unreachable_ap_has_explicit_ssh_diagnostic_and_rest_only_button():
+    page = (ROOT / "frontend/src/pages/DeviceInventory.tsx").read_text()
+    bootstrap = (ROOT / "frontend/src/components/DeviceRestBootstrap.tsx").read_text()
+    api = (ROOT / "backend/api/onboarding_workflow.py").read_text()
+    assert "Check SSH / Enable REST" in page
+    assert "DeviceRestBootstrap" in page
+    assert 'deviceId={target.id}' in page
+    assert 'checkRestApi(profileId, d.address!, d.id)' in page
+    assert "ap_rest_only_authorized" in bootstrap
+    assert "device_id: deviceId" in bootstrap
+    assert "Ping alone cannot enable REST" in bootstrap
+    assert "approved_ap_rest_only=ap_rest_only" in api
+    assert "host_applied_ips()" in api
+    assert "AP[-" in api
