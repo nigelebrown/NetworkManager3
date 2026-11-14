@@ -11,7 +11,9 @@ RUN pip install --no-cache-dir -r /app/requirements.lock \
 COPY VERSION release.json /app/
 COPY backend /app/backend
 COPY workers /app/workers
-RUN rm -rf /app/backend/tests && python -m compileall -q /app/backend /app/workers
+RUN rm -rf /app/backend/tests && python -m compileall -q /app/backend /app/workers \
+ && chmod -R a+rX /app/backend /app/workers \
+ && chmod a+r /app/VERSION /app/release.json
 ARG INM_GIT_COMMIT=unknown
 ENV INM_GIT_COMMIT=${INM_GIT_COMMIT} SIMS_DATA_DIR=/data
 USER 10001:10001
