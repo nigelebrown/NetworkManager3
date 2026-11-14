@@ -61,7 +61,7 @@ export default function APs() {
             <td className="px-2 py-2">{physicalSites.data?.sites.find((site) => site.id === d.site_id)?.name ?? "—"}</td>
             <td className="px-2 py-2">{d.model}</td><td className="px-2 py-2 font-mono text-xs">{d.serial_number}</td>
             <td className="px-2 py-2">{d.firmware ?? "—"}</td><td className="px-2 py-2"><Badge value={d.status} /></td>
-            <td className="px-2 py-2">{importedMetrics[d.id]?.clients ?? "—"}</td>
+            <td className="px-2 py-2">{importedMetrics[d.id]?.clients ?? importedMetrics[d.id]?.client_count ?? "—"}</td>
             <td className="px-2 py-2">{importedMetrics[d.id]?.util_5g_percent != null ? `${importedMetrics[d.id].util_5g_percent}%` : "—"}</td>
             <td className="px-2 py-2">{importedMetrics[d.id]?.cpu_percent != null ? `${importedMetrics[d.id].cpu_percent}%` : "—"}</td>
             <td className="px-2 py-2 text-emerald-300">{d.adapter === "manual_snapshot" ? "REAL · MANUAL" : "REAL · REST READ"}</td>

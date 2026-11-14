@@ -183,7 +183,7 @@ def synthetic_trace(correlation_id: str, db: Session = Depends(get_db), _: User 
 _NO_PLAN = object()
 
 
-def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None, plan=_NO_PLAN) -> dict:
+def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None, plan=_NO_PLAN, controller=None) -> dict:
     out = {"id": d.id, "source_type": d.source_type, "environment": d.environment, "vendor": d.vendor,
            "family": d.family, "model": d.model, "serial_number": d.serial_number, "hostname": d.hostname,
            "firmware": d.firmware, "status": d.status, "adapter": d.adapter, "site_id": d.site_id,
@@ -194,7 +194,7 @@ def _device_out(d: InmDevice, caps: list[DeviceCapability] | None = None, plan=_
         out["capabilities"] = [{"operation": c.operation, "status": c.status, "evidence": c.evidence} for c in caps]
     if plan is not _NO_PLAN:
         from ..infrastructure.device_state import state_of
-        out.update(state_of(d, plan))
+        out.update(state_of(d, plan, controller=controller))
     return out
 
 
@@ -226,9 +226,11 @@ def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$
     caps: dict[str, list] = {}
     for c in db.scalars(select(DeviceCapability).where(DeviceCapability.device_id.in_([d.id for d in devs]))):
         caps.setdefault(c.device_id, []).append(c)
-    from ..infrastructure.device_state import plans_by_device
+    from ..infrastructure.device_state import canonical_inventory, plans_by_device
     plans = plans_by_device(db)
-    return [_device_out(d, caps.get(d.id, []), plans.get(d.id)) for d in devs]
+    controllers = {s.id: s for s in db.scalars(select(Site).where(Site.id.in_(ids)))}
+    return [_device_out(d, caps.get(d.id, []), plans.get(d.id), controllers.get(d.legacy_site_id))
+            for d in canonical_inventory(devs)]
 
 
 def _visible_device(db: Session, device_id: str) -> InmDevice:
@@ -245,7 +247,7 @@ def v1_device(device_id: str, db: Session = Depends(get_db), _: User = Depends(r
     d = _visible_device(db, device_id)
     caps = list(db.scalars(select(DeviceCapability).where(DeviceCapability.device_id == d.id)))
     from ..infrastructure.device_state import plans_by_device
-    return _device_out(d, caps, plans_by_device(db).get(d.id))
+    return _device_out(d, caps, plans_by_device(db).get(d.id), db.get(Site, d.legacy_site_id) if d.legacy_site_id else None)
 
 
 @router.get("/devices/{device_id}/metrics")

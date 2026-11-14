@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database.models import Alert, AuditLog, User
+from ..database.models import Alert, AuditLog, ClientRecord, Site, User
 from ..database.models_inm import InmDevice, InmSite, RecommendationRecord
 from ..database.models_phases import (ChangeAttribution, ChangePlan, CollectionPlan, CollectionRun,
                                       ConfigArtifact, DeviceLogEvent)
@@ -126,18 +126,29 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     t = now()
     store = telemetry_store()
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
-    from ..infrastructure.device_state import plans_by_device, state_of
+    from ..infrastructure.device_state import canonical_inventory, plans_by_device, state_of
     plans = plans_by_device(db)
     tiles = []
-    for d in db.scalars(select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"])).order_by(InmDevice.hostname)):
+    controllers = {s.id: s for s in db.scalars(select(Site))}
+    devices = list(db.scalars(select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"]))
+                              .order_by(InmDevice.hostname)))
+    projected_ids = {d.id for d in devices if d.legacy_ap_id is not None}
+    active_sites = set()
+    for d in canonical_inventory(devices):
+        controller = controllers.get(d.legacy_site_id)
         p = plans.get(d.id)
         fresh = C.freshness(p.last_success_at, p.interval_seconds, t) if p else ("MANUAL" if d.last_observed_at else "NEVER")
         rows = store.query(device_id=d.id, metric_name=None, since=t - timedelta(hours=1), limit=2000,
                            entity_type="device") if store else []
         latest = N.latest_by_metric(rows)
-        st = state_of(d, p, now=t)
-        h = N.health(d.family, latest, fresh, "down" if st["state"] == "OFFLINE" else d.status)
-        st = state_of(d, p, now=t, health_band=h["band"])
+        st = state_of(d, p, now=t, controller=controller)
+        if controller and d.legacy_ap_id is not None:
+            fresh = st["freshness"]
+            if fresh == "FRESH" and controller.last_poll_ok:
+                active_sites.add(controller.id)
+        health_inputs = latest if st["state"] in ("ONLINE", "DEGRADED") else {}
+        h = N.health(d.family, health_inputs, fresh, "down" if st["state"] == "OFFLINE" else None)
+        st = state_of(d, p, now=t, health_band=h["band"], controller=controller)
         tiles.append({"device_id": d.id, "hostname": d.hostname, "site": sites.get(d.site_id), "family": d.family,
                       "model": d.model, "firmware": d.firmware, "status": d.status, "source_type": d.source_type,
                       "freshness": fresh, "health": h, "state": st["state"], "state_reason": st["state_reason"],
@@ -161,7 +172,11 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
                 "simulated": a.simulated}
                for a in db.scalars(select(Alert).where(Alert.status != "resolved").order_by(Alert.raised_at.desc()).limit(25))]
     worst = sorted([x for x in tiles if x["health"]["score"] is not None], key=lambda x: x["health"]["score"])[:10]
-    clients = sum(x["metrics"].get("clients", 0) or 0 for x in tiles)
+    clients = db.scalar(select(func.count()).select_from(ClientRecord).where(
+        ClientRecord.site_id.in_(active_sites), ClientRecord.is_connected.is_(True))) or 0
+    clients += sum(x["metrics"].get("clients", x["metrics"].get("client_count", 0)) or 0
+                   for x in tiles if x["state"] in ("ONLINE", "DEGRADED")
+                   and x["device_id"] not in projected_ids)
     return {"generated_at": iso(t), "devices": tiles,
             "summary": {"devices": len(tiles), "up": status.get("up", 0), "down": status.get("down", 0),
                         "states": dict(Counter(x["state"] for x in tiles)),

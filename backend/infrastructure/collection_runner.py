@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..database.models import AppSetting
 from ..database.models_inm import InmDevice
 from ..database.models_phases import CollectionPlan, CollectionRun
 from ..domain import collection as C
@@ -206,7 +207,8 @@ def _port_snapshot(db: Session, device: InmDevice, result: dict, now: datetime, 
         snap = DevicePortSnapshot(device_id=device.id, ports=[], hardware={}, environment="")
         db.add(snap)
     for p in result["ports"]:          # per-interface state every poll (independent series per port, E2E-01/02)
-        port_points.append(("port_link_up", 1.0 if p.get("link") == "up" else 0.0, p["name"]))
+        if p.get("link") in ("up", "down"):
+            port_points.append(("port_link_up", 1.0 if p["link"] == "up" else 0.0, p["name"]))
         for k, metric in (("rx_errors", "port_rx_errors"), ("tx_errors", "port_tx_errors"), ("poe_w", "port_poe_w")):
             if isinstance(p.get(k), (int, float)):
                 port_points.append((metric, float(p[k]), p["name"]))
@@ -267,6 +269,10 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
                "skipped_window": 0, "points_written": 0}
     queued: list[str] = []
     collected: list[str] = []
+    monitored_ports: dict[str, set[str]] = {}
+    for group in db.scalars(select(AppSetting).where(AppSetting.key.startswith("port-group:"))):
+        for member in group.value.get("members", []):
+            monitored_ports.setdefault(member["device_id"], set()).add(member["port"])
     for plan in list(db.scalars(q)):
         if plan_ids is None and not C.due(now, plan.next_due_at):
             continue
@@ -340,6 +346,9 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
         if result.get("ports") is not None:
             metrics.update(_port_snapshot(db, device, result, now, port_points))
         pts = _points(device, runs[0].id, metrics, families, now, plan.interval_seconds)
+        selected_ports = monitored_ports.get(device.id)
+        if selected_ports is not None:
+            port_points = [(metric, value, port) for metric, value, port in port_points if port in selected_ports]
         if "interfaces" in families or "poe" in families:
             pts += [TelemetryPoint(device_id=device.id, metric_name=n, observed_at=now, value=v, unit=UNITS[n],
                                    collection_method=pts[0].collection_method if pts else

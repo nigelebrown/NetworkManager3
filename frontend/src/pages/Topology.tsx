@@ -34,7 +34,7 @@ export default function Topology() {
         </svg>
       </Card>;
     })}
-    {!switches.length && <Card><p className="text-sm text-slate-500">No LLDP neighbours collected yet. Topology appears after switches are polled.</p></Card>}
+    {g && !switches.length && <Card><p className="text-sm text-slate-600">No LLDP links have been collected. Register a switch and include LLDP in its collection plan.</p><div className="mt-2 flex gap-4"><Link className="text-blue-700 underline" to="/switches">Switch inventory</Link><Link className="text-blue-700 underline" to="/collection">Collection plans</Link></div></Card>}
     {!!unlinked.length && <Card title="Inventory devices without LLDP links">
       <div className="flex flex-wrap gap-2">{unlinked.map(n => <Link key={n.id} to={`/devices/${n.id}/360`}><Pill value={n.label} tone={n.source_type === "DEMO" ? "demo" : "none"} /></Link>)}</div></Card>}
   </div>;
