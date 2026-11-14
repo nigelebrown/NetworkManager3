@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
@@ -42,7 +43,7 @@ export default function Recovery() {
   const { data, error } = useLoad(() => v1.recovery(), [], 60000, ["config"]);
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Backups &amp; recovery</h1>
+      <PageHeader eyebrow="Configuration & changes" title="Recovery & restore" subtitle="Encrypted backups, durable recovery journals and independently approved restoration." />
       <ErrorNote error={error} />
       <RecoveryJournal />
       <div className="grid gap-4 md:grid-cols-2">
