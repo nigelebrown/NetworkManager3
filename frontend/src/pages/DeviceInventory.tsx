@@ -328,7 +328,7 @@ export default function DeviceInventory() {
           onChange={e => setProfile(e.target.value)}>
           <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
-        <button className={btn} disabled={busy || (!!testing || testingBatch) || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
+        <button className={btn} disabled={busy || (!!testing || testingBatch) || onboardingBusy || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
           {busy ? "Assigning…" : "Assign profile"}
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
@@ -375,21 +375,28 @@ export default function DeviceInventory() {
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
         <p className="text-sm text-slate-600">Blocked management IPs can be approved here by an administrator after confirmation. Each approval is only for that device's /32 address; the host applies its firewall rule before testing. Configuration writes remain locked.</p>
-        <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !result.devices.some(d => d.address)}
-          onClick={async () => {
-            const approveBlocked = window.confirm(
-              "Test all devices? If an IP is blocked, approve that individual registered /32 management IP " +
-              "automatically after your authorization. No device configuration writes will be enabled."
-            );
-            setTestingBatch(true);
-            try {
-              for (const device of result.devices) {
-                await testConnection(result.profileId, device, approveBlocked);
-              }
-            } finally { setTestingBatch(false); }
-          }}>{testingBatch ? "Testing devices…" : "Test all connections"}</button>
+        <div className="flex flex-wrap items-center gap-2" aria-label="Fleet connection and onboarding actions">
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(true)}>
+            {testingBatch ? "Testing devices…" : "Test &amp; Approve All"}
+          </button>
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(false)}>Test All (no approvals)</button>
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !successfulDevices.length}
+            onClick={() => void onboardSuccessful()}>
+            {onboardingBusy ? "Onboarding devices…" : `Onboard Successful (${successfulDevices.length})`}
+          </button>
+        </div>
+        <p className="text-sm text-slate-600" role="status" aria-live="polite">
+          REST login verified: {checkCounts.successful} · Other results: {checkCounts.failed} · Not tested: {checkCounts.notTested}
+          {batchProgress && ` · Processed ${batchProgress.done}/${batchProgress.total}`}
+        </p>
+        <p className="text-sm text-slate-600">
+          Already registered devices are not duplicated. Onboard Successful imports a read-only baseline and creates
+          an approved five-minute monitoring plan only for verified devices. See Live monitoring for scheduled collection.
+        </p>
         <div className="inm-tablewrap"><table className="inm-table">
-          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
+          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
             const check = checks[d.id];
             return <tr key={d.id}>
@@ -397,14 +404,17 @@ export default function DeviceInventory() {
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
+              <td aria-live="polite">{onboardResults[d.id]
+                ? onboardResults[d.id].status + " · " + onboardResults[d.id].message
+                : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}</td>
               <td><div className="flex flex-wrap gap-2">
-                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !d.address}
+                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={() => void testConnection(result.profileId, d)}>
                   Test connection
                 </button>
                 <button type="button" className={btn} data-inm-approval-action="exact-ip-v2"
                   title={d.address ? "Approve only " + d.address + "/32 and retry REST" : "Management IP required"}
-                  disabled={busy || !!testing || testingBatch || !d.address}
+                  disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={() => void testConnection(result.profileId, d, null, true)}>
                   Approve IP &amp; Test
                 </button>
