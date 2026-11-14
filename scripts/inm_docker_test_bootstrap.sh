@@ -23,7 +23,7 @@ docker ps -a --format '{{.Names}} | {{.Image}} | {{.Label "com.docker.compose.pr
 
 is_repo() {
   local dir="$1" origin
-  [[ -d "$dir/.git" && -f "$dir/compose.yaml" && -f "$dir/scripts/inm_one_click_test.sh" ]] || return 1
+  [[ -d "$dir/.git" && -f "$dir/compose.yaml" ]] || return 1
   origin="$(git -C "$dir" remote get-url origin 2>/dev/null)" || return 1
   case "$origin" in
     https://github.com/nigelebrown/NetworkManager3|https://github.com/nigelebrown/NetworkManager3.git|git@github.com:nigelebrown/NetworkManager3.git|github-networkmanager3:nigelebrown/NetworkManager3.git) return 0 ;;
