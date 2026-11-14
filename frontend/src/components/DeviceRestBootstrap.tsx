@@ -3,8 +3,8 @@ import { onboardingApi, type RestPreflight } from "../services/onboarding";
 import { Notice, btn, btn2, inputCls, useAction } from "./viz";
 
 /** Device-specific REST bootstrap. Nothing is changed until a human confirms SSH identity and the device IP. */
-export default function DeviceRestBootstrap({ credentialId, address, family, onEnabled }: {
-  credentialId: string; address: string; family: "switch" | "access_point";
+export default function DeviceRestBootstrap({ credentialId, address, family, deviceId, onEnabled }: {
+  credentialId: string; address: string; family: "switch" | "access_point"; deviceId?: string;
   onEnabled: () => Promise<void>;
 }) {
   const act = useAction();
@@ -14,7 +14,7 @@ export default function DeviceRestBootstrap({ credentialId, address, family, onE
   const [result, setResult] = useState("");
   const check = () => act.run(async () => {
     setResult(""); setConfirmation("");
-    const r = await onboardingApi.checkRestApi(credentialId, address);
+    const r = await onboardingApi.checkRestApi(credentialId, address, deviceId);
     setPreflight(r);
     return `REST check: ${r.state}`;
   });
@@ -25,7 +25,7 @@ export default function DeviceRestBootstrap({ credentialId, address, family, onE
     if (!preflight?.ssh?.fingerprint) throw new Error("Confirm the SSH host fingerprint first.");
     const r = await onboardingApi.enableRestApi(credentialId, {
       management_ip: address, host_key_sha256: preflight.ssh.fingerprint,
-      confirm_text: confirmation, vrf,
+      confirm_text: confirmation, vrf, device_id: deviceId,
     });
     setResult(r.message);
     if (r.ok) { await onEnabled(); setPreflight(null); }
@@ -52,10 +52,11 @@ export default function DeviceRestBootstrap({ credentialId, address, family, onE
         <label className="block">Confirm the device and host key: type <b>{preflight.confirm_phrase}</b>
           <input className={inputCls} aria-label="Confirm REST enable" value={confirmation}
             onChange={e => setConfirmation(e.target.value)} /></label>
-        {preflight.write_unlock_required && <p className="text-amber-300">REST enablement is a configuration write. It is locked by server policy. An administrator must authorize and unlock writes for the approved test device; discovery remains read-only.</p>}
+        {preflight.ap_rest_only_authorized && <p className="text-emerald-300">Authorized registered AP-505/AP-535: only the fixed REST-bootstrap sequence is permitted. The global device configuration-write lock remains engaged.</p>}
+        {preflight.write_unlock_required && <p className="text-amber-300">REST enablement is a configuration change. This device is not eligible for the registered AP-505/AP-535 REST-only exception. Global writes remain locked.</p>}
         <button className={btn} disabled={!canEnable || act.busy} onClick={enable}>Enable REST on this device</button>
       </>}
-      {preflight.ssh?.error && <p className="text-amber-300">{preflight.ssh.error}</p>}
+      {preflight.ssh?.error && <p className="text-amber-300">{preflight.ssh.error} If ping succeeds but TCP 22 is unavailable, NetworkManager cannot run SSH commands. Enable SSH through an authorized device console/management interface first, then retry. Ping alone cannot enable REST.</p>}
       {preflight.state === "AUTH_REJECTED" && <p className="text-amber-300">REST is already available. Correct the credential profile instead of changing device configuration.</p>}
       {preflight.state === "UNSUPPORTED_API" && <p className="text-amber-300">REST is available but this firmware/API version is not supported by the adapter.</p>}
     </div>}

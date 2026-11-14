@@ -36,8 +36,8 @@ _ERRORS = ("% parse error", "parse error", "invalid input", "command not found",
 LEGACY_SSH_HELP = (
     "SIMS tried modern SSH algorithms and then the legacy ssh-rsa / SHA-1 set, and the AP accepted neither, "
     "so SIMS cannot enable the REST API for you on this AP. Do it by hand from a terminal: "
-    "ssh -o HostKeyAlgorithms=+ssh-rsa admin@{host}   "
-    "(add -o PubkeyAcceptedAlgorithms=+ssh-rsa only if you log in with a key), then enter: "
+    "ssh -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 admin@{host}   "
+    "(add -o PubkeyAcceptedAlgorithms=+ssh-rsa only for public-key login), then enter: "
     "configure terminal / allow-rest-api / end / commit apply. Then use Check again."
 )
 _PROMPT = re.compile(r"[#>]\s?$")
@@ -48,11 +48,12 @@ def fingerprint(key: paramiko.PKey) -> str:
     return "SHA256:" + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
 
 
-# Algorithms only older Instant SSH servers still need. Never offered on the first attempt.
-_LEGACY_ALGS = {
-    "keys": ["ssh-rsa"],
-    "kex": ["diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1", "diffie-hellman-group-exchange-sha1"],
-}
+# Older Instant APs sometimes need RSA/SHA-1 host signatures and group14/SHA-1
+# key exchange. Do NOT negotiate obsolete group1 or SHA-1 group exchange.
+# These preferences are private to Paramiko's per-device transport; the host
+# OpenSSH configuration and every other 10.0.0.0/8 destination are untouched.
+_LEGACY_ALGS = {"keys": ["ssh-rsa"], "kex": ["diffie-hellman-group14-sha1"]}
+_UNSAFE_KEX = {"kex": ["diffie-hellman-group1-sha1", "diffie-hellman-group-exchange-sha1"]}
 
 
 def _open_transport(host: str, port: int, timeout: float):  # patched in tests
@@ -64,7 +65,9 @@ def _open_transport(host: str, port: int, timeout: float):  # patched in tests
             sock = socket.create_connection((host, port), timeout=timeout)
         except OSError as exc:
             raise ArubaConnectionError(f"SSH connection to {host}:{port} failed: {exc.strerror or type(exc).__name__}") from None
-        t = paramiko.Transport(sock, disabled_algorithms=None if legacy else _LEGACY_ALGS)
+        t = paramiko.Transport(sock, disabled_algorithms=_UNSAFE_KEX if legacy else {
+            "keys": _LEGACY_ALGS["keys"], "kex": [*_LEGACY_ALGS["kex"], *_UNSAFE_KEX["kex"]],
+        })
         t.banner_timeout = timeout
         try:
             t.start_client(timeout=timeout)
@@ -108,10 +111,21 @@ def _read_until_prompt(chan: Any, timeout: float) -> str:
 
 
 def enable_rest_api(host: str, username: str, password: str, expected_fingerprint: str, port: int = 22,
-                    timeout: float = 20.0) -> list[dict[str, Any]]:
-    """Run the fixed enable sequence. Returns [{'command', 'ok'}...]. Raises ArubaError subclasses on failure."""
-    if not get_settings().device_writes_permitted:
-        raise ArubaUnsupportedError("Configuration changes are disabled (SIMS_ALLOW_CONFIG_CHANGES=false).")
+                    timeout: float = 20.0, *, approved_ap_rest_only: bool = False) -> list[dict[str, Any]]:
+    """Run ONLY the fixed Instant REST bootstrap sequence, after pinned SSH identity.
+
+    approved_ap_rest_only is used solely by the administrator-verified registered
+    AP-505/535 onboarding endpoint. It permits THIS sequence in a locked live
+    profile, never arbitrary device configuration writes.
+    """
+    policy = get_settings()
+    safe_locked_bootstrap = bool(
+        approved_ap_rest_only and policy.mode == "live" and policy.inm_profile == "lab-readonly"
+        and policy.device_write_lock and not policy.allow_config_changes
+        and not policy.device_writes_permitted
+    )
+    if not policy.device_writes_permitted and not safe_locked_bootstrap:
+        raise ArubaUnsupportedError("Configuration changes are disabled (write lock engaged); AP REST-only bootstrap requires an explicit authorized device approval.")
     t = _open_transport(host, port, timeout)
     try:
         actual = fingerprint(t.get_remote_server_key())

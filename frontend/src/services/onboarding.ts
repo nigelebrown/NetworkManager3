@@ -44,6 +44,7 @@ export type RestPreflight = {
   management_ip: string; family: "access_point" | "switch";
   state: "ENABLED" | "DISABLED" | "AUTH_REJECTED" | "UNSUPPORTED_API" | "UNREACHABLE";
   detail: string; rest_enabled: boolean; write_unlock_required: boolean;
+  ap_rest_only_authorized?: boolean;
   untrusted_device_certificates_accepted: boolean; confirm_phrase: string;
   commands: string[];
   ssh?: { fingerprint?: string; key_type?: string; legacy_algorithms?: boolean; error?: string };
@@ -74,6 +75,9 @@ export type ManagementIPApproval = {
 
 export const onboardingApi = {
   credentials: () => request<CredentialProfile[]>("/v1/onboarding/credentials"),
+  credentialDevices: (id: string) => request<{ profile_id: string; profile_name: string;
+    family: "access_point" | "switch"; devices: {id: string; name: string; address?: string}[];
+    device_writes: "LOCKED" | "ENABLED" }>(`/v1/onboarding/credentials/${enc(id)}/devices`),
   acceptance: (id: string) => request<DeviceAcceptance>(`/v1/onboarding/devices/${enc(id)}/acceptance`),
   fleetAcceptance: () => request<FleetAcceptance>("/v1/onboarding/acceptance"),
   createCredential: (body: {
@@ -84,10 +88,11 @@ export const onboardingApi = {
     request<CredentialProfile>(`/v1/onboarding/credentials/${enc(id)}/rotate`, opts(body)),
   disableCredential: (id: string) =>
     request<CredentialProfile>(`/v1/onboarding/credentials/${enc(id)}/disable`, opts({})),
-  checkRestApi: (id: string, ip: string) =>
-    request<RestPreflight>(`/v1/onboarding/credentials/${enc(id)}/rest-api/check`, opts({ management_ip: ip })),
+  checkRestApi: (id: string, ip: string, deviceId?: string) =>
+    request<RestPreflight>(`/v1/onboarding/credentials/${enc(id)}/rest-api/check`,
+      opts({ management_ip: ip, device_id: deviceId ?? null })),
   enableRestApi: (id: string, body: { management_ip: string; host_key_sha256: string;
-    confirm_text: string; vrf: "default" | "mgmt" }) =>
+    confirm_text: string; vrf: "default" | "mgmt"; device_id?: string }) =>
     request<RestBootstrapResult>(`/v1/onboarding/credentials/${enc(id)}/rest-api/enable`, opts(body)),
   approveDeviceIP: (body: { device_id: string; profile_id: string; management_ip: string; confirmation: string }) =>
     request<ManagementIPApproval>("/v1/management-access/approve-ip", opts(body)),

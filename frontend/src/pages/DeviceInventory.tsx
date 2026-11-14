@@ -4,7 +4,9 @@ import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
 import { ApiError, getSession, request } from "../services/api";
-import { onboardingApi } from "../services/onboarding";
+import { onboardingApi, type RestPreflight } from "../services/onboarding";
+import DeviceRestBootstrap from "../components/DeviceRestBootstrap";
+import { ops } from "../services/ops";
 import { v1 } from "../services/inm";
 
 /** Inventory view is backed exclusively by the real versioned inventory endpoints. */
@@ -31,10 +33,15 @@ export default function DeviceInventory() {
   const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
     id: string; name: string; address?: string;
   }[] } | null>(null);
-  const [checks, setChecks] = useState<Record<string, {status: string; message: string}>>({});
+  const [checks, setChecks] = useState<Record<string, {status: string; message: string; restState?: RestPreflight["state"]}>>({});
+  const [onboardResults, setOnboardResults] = useState<Record<string, {status: string; message: string}>>({});
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const [restBootstrapDevice, setRestBootstrapDevice] = useState<string | null>(null);
   const [reviewAccess, setReviewAccess] = useState(false);
   const [profile, setProfile] = useState("");
+  const [savedProfile, setSavedProfile] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
   const accessRows = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => {
@@ -63,6 +70,12 @@ export default function DeviceInventory() {
     setFeedback({});
   };
   const [testingBatch, setTestingBatch] = useState(false);
+  const successfulDevices = (result?.devices ?? []).filter(d => checks[d.id]?.restState === "ENABLED");
+  const checkCounts = {
+    successful: successfulDevices.length,
+    failed: (result?.devices ?? []).filter(d => checks[d.id] && checks[d.id].restState !== "ENABLED").length,
+    notTested: (result?.devices ?? []).filter(d => !checks[d.id]).length,
+  };
   // Explicit administrator confirmation is required for each /32 before
   // the host agent opens worker egress. The API never modifies host firewalls.
   const testConnection = async (
@@ -79,9 +92,10 @@ export default function DeviceInventory() {
       UNREACHABLE: "Unreachable",
     };
     const check = async () => {
-      const response = await onboardingApi.checkRestApi(profileId, d.address!);
+      const response = await onboardingApi.checkRestApi(profileId, d.address!, d.id);
       setChecks(previous => ({...previous, [d.id]: {
         status: labels[response.state] ?? "Checked", message: response.detail,
+        restState: response.state,
       }}));
     };
     const approveAndRetry = async () => {
@@ -137,6 +151,118 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
+  const testAllConnections = async (approveBlocked: boolean) => {
+    if (!result || testingBatch || onboardingBusy) return;
+    const targets = result.devices.filter(d => d.address);
+    if (!targets.length) return;
+    if (approveBlocked) {
+      const ips = [...new Set(targets.map(d => d.address!))];
+      const list = ips.slice(0, 20).map(ip => "  " + ip + "/32").join("\n");
+      const more = ips.length > 20 ? "\n  …plus " + (ips.length - 20) + " additional listed device IPs" : "";
+      if (!window.confirm(
+        "Test " + targets.length + " registered devices using " + result.profileName + "?\n\n" +
+        "Approve the listed exact /32 device IPs before running REST tests:\n" +
+        list + more + "\n\n" +
+        "No /24 subnets or device configuration writes will be authorized. Continue?"
+      )) return;
+    }
+    setTestingBatch(true);
+    setBatchProgress({done: 0, total: result.devices.length});
+    setOnboardResults({});
+    try {
+      for (const [index, device] of result.devices.entries()) {
+        if (device.address) {
+          await testConnection(result.profileId, device, approveBlocked, approveBlocked);
+        } else {
+          setChecks(previous => ({...previous, [device.id]: {
+            status: "Missing IP", message: "Device has no management address; skipped",
+          }}));
+        }
+        setBatchProgress({done: index + 1, total: result.devices.length});
+      }
+    } finally {
+      setTestingBatch(false);
+      setBatchProgress(null);
+    }
+  };
+
+  const onboardSuccessful = async () => {
+    if (!result || !successfulDevices.length || testingBatch || onboardingBusy) return;
+    if (!window.confirm(
+      "Onboard " + successfulDevices.length + " REST-verified registered device(s)?\n\n" +
+      "For each device: reverify login, import a read-only configuration baseline, " +
+      "and schedule read-only monitoring every 5 minutes if supported. " +
+      "Devices already monitored will not get duplicate plans. " +
+      "Unreachable, rejected and untested devices are excluded.\n\n" +
+      "No Aruba configuration changes will be made."
+    )) return;
+    setOnboardingBusy(true);
+    setBatchProgress({done: 0, total: successfulDevices.length});
+    let complete = 0;
+    let needsAttention = 0;
+    let index = 0;
+    try {
+      const plans = await ops.plans();
+      for (const device of successfulDevices) {
+        try {
+          if (!device.address) throw new Error("Missing management IP");
+          const live = await onboardingApi.checkRestApi(result.profileId, device.address);
+          if (live.state !== "ENABLED") {
+            setChecks(previous => ({...previous, [device.id]: {
+              status: "REST not verified", message: live.detail, restState: live.state,
+            }}));
+            throw new Error("REST login no longer verified (" + live.state + "); do not onboard");
+          }
+          setOnboardResults(previous => ({...previous, [device.id]: {
+            status: "Importing baseline", message: "Reading device configuration without changes",
+          }}));
+          const config = await onboardingApi.deviceConfig(device.id);
+          if (!config.baseline) await onboardingApi.capture(device.id, result.profileId);
+          const existing = plans.find(p => p.device_id === device.id);
+          if (existing) {
+            if (existing.state !== "ACTIVE") {
+              throw new Error("Baseline present, but the existing monitoring plan is paused; review it under Live monitoring");
+            }
+            setOnboardResults(previous => ({...previous, [device.id]: {
+              status: "Onboarded", message: "Baseline present; existing active monitoring plan retained",
+            }}));
+            complete++;
+          } else {
+            const inventoryDevice = devices.data?.find(d => d.id === device.id);
+            const metrics = inventoryDevice?.family === "switch"
+              ? ["system", "interfaces", "poe"] : ["system", "radios", "clients"];
+            const plan = {device_id: device.id, metric_families: metrics, interval_seconds: 300};
+            const preview = await ops.previewPlan(plan);
+            if (preview.warnings.length) {
+              throw new Error("Baseline captured; monitoring not scheduled: " + preview.warnings.join("; "));
+            }
+            const created = await ops.createPlan(plan);
+            plans.push(created);
+            setOnboardResults(previous => ({...previous, [device.id]: {
+              status: "Onboarded", message: "Configuration baseline captured; read-only monitoring scheduled every 5 minutes",
+            }}));
+            complete++;
+          }
+        } catch (error) {
+          needsAttention++;
+          setOnboardResults(previous => ({...previous, [device.id]: {
+            status: "Needs attention", message: error instanceof Error ? error.message : "Onboarding failed",
+          }}));
+        }
+        index++;
+        setBatchProgress({done: index, total: successfulDevices.length});
+      }
+      setFeedback({message: "Onboarding complete: " + complete + " monitored; " +
+        needsAttention + " need attention. Failed and unverified devices remain in inventory for retry."});
+      devices.reload();
+    } catch (error) {
+      setFeedback({error: error instanceof Error ? error.message : "Unable to load monitoring plans"});
+    } finally {
+      setOnboardingBusy(false);
+      setBatchProgress(null);
+    }
+  };
+
   const update = (value: string) => { const p = new URLSearchParams(params);
     changeSelection([]);
     if (value) p.set("q",value); else p.delete("q"); setParams(p,{replace:true}); };
@@ -187,6 +313,8 @@ export default function DeviceInventory() {
           });
           setResult({profileId: chosen.id, profileName: chosen.name, devices: targets});
           setChecks({});
+          setOnboardResults({});
+          setRestBootstrapDevice(null);
           changeSelection([]);
           setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
         } catch (e) {
@@ -204,7 +332,7 @@ export default function DeviceInventory() {
           onChange={e => setProfile(e.target.value)}>
           <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
-        <button className={btn} disabled={busy || (!!testing || testingBatch) || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
+        <button className={btn} disabled={busy || (!!testing || testingBatch) || onboardingBusy || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
           {busy ? "Assigning…" : "Assign profile"}
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
@@ -247,25 +375,63 @@ export default function DeviceInventory() {
           <button className={btn} disabled={busy}>Save credential profile</button>
         </form>
       </details>}
+      {admin && <section className="inm-cardbody flex flex-wrap items-end gap-3" aria-label="Resume saved device connection group">
+        <label>Load saved device assignments
+          <select className={inputCls} value={savedProfile}
+            disabled={busy || testingBatch || onboardingBusy}
+            onChange={e => setSavedProfile(e.target.value)}>
+            <option value="">Choose a saved credential profile</option>
+            {(profiles.data ?? []).filter(p => p.enabled).map(p =>
+              <option key={p.id} value={p.id}>{p.name} ({p.device_family === "switch" ? "Switches" : "APs"})</option>)}
+          </select>
+        </label>
+        <button type="button" className={btn} disabled={!savedProfile || busy || !!testing || testingBatch || onboardingBusy}
+          onClick={async () => {
+            setBusy(true); setFeedback({});
+            try {
+              const assigned = await onboardingApi.credentialDevices(savedProfile);
+              setResult({profileId: assigned.profile_id, profileName: assigned.profile_name, devices: assigned.devices});
+              setChecks({});
+              setOnboardResults({});
+              setRestBootstrapDevice(null);
+              setFeedback({message: "Loaded " + assigned.devices.length + " registered devices with saved profile " +
+                assigned.profile_name + ". Run Test & Approve All, then Onboard Successful."});
+            } catch (error) {
+              setFeedback({error: error instanceof Error ? error.message : "Could not load saved device assignments"});
+            } finally { setBusy(false); }
+          }}>Load assigned devices</button>
+        <p className="basis-full text-sm text-slate-600">
+          Resume testing already registered devices across sites, including after refreshing the browser.
+          No duplicate equipment records are created.
+        </p>
+      </section>}
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
         <p className="text-sm text-slate-600">Blocked management IPs can be approved here by an administrator after confirmation. Each approval is only for that device's /32 address; the host applies its firewall rule before testing. Configuration writes remain locked.</p>
-        <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !result.devices.some(d => d.address)}
-          onClick={async () => {
-            const approveBlocked = window.confirm(
-              "Test all devices? If an IP is blocked, approve that individual registered /32 management IP " +
-              "automatically after your authorization. No device configuration writes will be enabled."
-            );
-            setTestingBatch(true);
-            try {
-              for (const device of result.devices) {
-                await testConnection(result.profileId, device, approveBlocked);
-              }
-            } finally { setTestingBatch(false); }
-          }}>{testingBatch ? "Testing devices…" : "Test all connections"}</button>
+        <div className="flex flex-wrap items-center gap-2" aria-label="Fleet connection and onboarding actions">
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(true)}>
+            {testingBatch ? "Testing devices…" : "Test &amp; Approve All"}
+          </button>
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(false)}>Test All (no approvals)</button>
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !successfulDevices.length}
+            onClick={() => void onboardSuccessful()}>
+            {onboardingBusy ? "Onboarding devices…" : `Onboard Successful (${successfulDevices.length})`}
+          </button>
+        </div>
+        <p className="text-sm text-slate-600" role="status" aria-live="polite">
+          REST login verified: {checkCounts.successful} · Other results: {checkCounts.failed} · Not tested: {checkCounts.notTested}
+          {batchProgress && ` · Processed ${batchProgress.done}/${batchProgress.total}`}
+        </p>
+        <p className="text-sm text-slate-600">
+          Already registered devices are not duplicated. Onboard Successful imports a read-only baseline and creates
+          a five-minute monitoring plan only for REST-verified devices. Review scheduled collection in
+          {" "}<Link className="inm-link" to="/collection">Live monitoring</Link>.
+        </p>
         <div className="inm-tablewrap"><table className="inm-table">
-          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
+          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
             const check = checks[d.id];
             return <tr key={d.id}>
@@ -273,21 +439,41 @@ export default function DeviceInventory() {
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
+              <td aria-live="polite">{onboardResults[d.id]
+                ? onboardResults[d.id].status + " · " + onboardResults[d.id].message
+                : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}</td>
               <td><div className="flex flex-wrap gap-2">
-                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !d.address}
+                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={() => void testConnection(result.profileId, d)}>
                   Test connection
                 </button>
                 <button type="button" className={btn} data-inm-approval-action="exact-ip-v2"
                   title={d.address ? "Approve only " + d.address + "/32 and retry REST" : "Management IP required"}
-                  disabled={busy || !!testing || testingBatch || !d.address}
+                  disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={() => void testConnection(result.profileId, d, null, true)}>
                   Approve IP &amp; Test
                 </button>
+                {(check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
+                  <button type="button" className={btn}
+                    disabled={busy || !!testing || testingBatch || onboardingBusy}
+                    onClick={() => setRestBootstrapDevice(current => current === d.id ? null : d.id)}>
+                    {restBootstrapDevice === d.id ? "Close SSH diagnostic" : "Check SSH / Enable REST"}
+                  </button>}
               </div></td>
             </tr>;
           })}</tbody>
         </table></div>
+        {restBootstrapDevice && (() => {
+          const target = result.devices.find(d => d.id === restBootstrapDevice);
+          const family = devices.data?.find(d => d.id === restBootstrapDevice)?.family;
+          return target?.address && family && ["access_point", "switch"].includes(family) ?
+            <DeviceRestBootstrap key={restBootstrapDevice} deviceId={target.id}
+              credentialId={result.profileId} address={target.address} family={family as "access_point" | "switch"}
+              onEnabled={async () => {
+                await testConnection(result.profileId, target);
+                setRestBootstrapDevice(null);
+              }}/> : null;
+        })()}
       </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
