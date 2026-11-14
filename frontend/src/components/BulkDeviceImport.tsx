@@ -16,6 +16,8 @@ type InputRow = {
 };
 
 const required = ["family", "site_name", "hostname", "serial_number", "model"];
+const normalizeSite = (value: string) => value.replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
+
 const headers = [...required, "management_ip", "firmware", "status"];
 
 /** RFC 4180 quoting, embedded commas, escaped double quotes and CRLF. No packages. */
@@ -73,7 +75,7 @@ export function parseDeviceCsv(text: string): InputRow[] {
     if (central && exportFamily) {
       const clean = (value?: string) => value && !["-", "--", "n/a"].includes(value.toLowerCase()) ? value : "";
       const mapped: Omit<InputRow, "status" | "metrics"> = {
-        family: exportFamily, site_name: clean(row.site), hostname: clean(row["device name"]),
+        family: exportFamily, site_name: normalizeSite(clean(row.site)), hostname: clean(row["device name"]),
         serial_number: clean(row.serial), model: clean(row.model),
         management_ip: clean(row["ip address"]) || null, firmware: clean(row["firmware version"]) || null,
         exported_group: clean(row.group), exported_status: clean(row.status),
@@ -100,7 +102,7 @@ export function parseDeviceCsv(text: string): InputRow[] {
       throw new Error("Row " + (n + 2) + ": status must be up, down or unknown.");
     return {
       family: normalized as InputRow["family"],
-      site_name: row.site_name.trim(),
+      site_name: normalizeSite(row.site_name),
       hostname: row.hostname.trim(),
       serial_number: row.serial_number.trim(),
       model: row.model.trim(),
@@ -138,7 +140,7 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
       try {
         for (let offset = 0; offset < ready.length; offset += 100) {
           const batch = ready.slice(offset, offset + 100);
-          const result = await v1.bulkQuickDevices(batch.map(({ exported_group, exported_status, ...record }) => record));
+          const result = await v1.bulkQuickDevices(batch.map(({ exported_group, exported_status, ...record }) => ({ ...record, site_name: normalizeSite(record.site_name) })));
           added += result.added; updated += result.updated;
           batch.forEach(row => completed.add(row.serial_number));
         }
