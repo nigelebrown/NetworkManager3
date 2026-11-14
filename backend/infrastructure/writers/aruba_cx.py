@@ -230,6 +230,24 @@ class ArubaCxWriter:
         """What was negotiated with this switch — recorded with every execution and capability report."""
         return {"api_version": self.session.api_version, "csrf": self.session.csrf is not None}
 
+    def read_diagnostics(self, *, kind: str) -> dict:
+        """Read-only AnyCLI show command, selected by fixed key not client text.
+
+        The device's own supported-command catalogue is checked first. POST to
+        /cli is used solely for vendor-documented show commands, never config.
+        """
+        from ..device_diagnostics import CX_SHOW, safe_output
+        if kind not in CX_SHOW:
+            raise WriterError("UNSUPPORTED", "This CX diagnostic is not on the read-only allowlist.")
+        command = CX_SHOW[kind]
+        commands = self._req("GET", "/cli/commands").json()
+        allowed = commands.get("commands") if isinstance(commands, dict) else None
+        if not isinstance(allowed, list) or command not in allowed:
+            raise WriterError("UNSUPPORTED", "The switch does not advertise this read-only show command.")
+        response = self._req("POST", "/cli", json={"cmd": command})
+        return {"kind": kind, "command": command, "output": safe_output(response.text),
+                "source": "CX_REST_ANYCLI"}
+
     def read_audit_logs(self, *, kind: str = "audit", limit: int = 50) -> list[dict]:
         """Read documented AOS-CX 10.09+ REST audit/event log resource.
 
