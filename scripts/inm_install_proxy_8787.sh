@@ -24,7 +24,6 @@ done
 IFACE="$(ip -o -4 addr show | awk -v addr="$IP" '{split($4,a,"/");if(a[1]==addr){print $2;exit}}')"
 [[ -n "$IFACE" ]] || die "Host IP $IP is not assigned to an interface."
 ss -H -lnt "( sport = :$PORT )" | grep -q . && die "Port $PORT already in use."
-ss -H -lnt "( sport = :$BACKEND )" | grep -q . && die "Upstream port $BACKEND already in use."
 [[ ! -e "$SITE" && ! -L "$SITE" ]] || die "Proxy config $SITE already exists; refusing overwrite."
 [[ -d "$ROOT/.git" && -f "$ROOT/compose.yaml" ]] || die "NetworkManager3 checkout missing at $ROOT."
 origin="$(git -C "$ROOT" remote get-url origin || true)"
@@ -38,6 +37,25 @@ if [[ -f "$ENV" ]]; then
   WEB_PORT="$(sed -n 's/^INM_WEB_PORT=//p' "$ENV" | tail -1)"
   [[ "$BIND" == 127.0.0.1 && "$WEB_PORT" == "$BACKEND" ]] ||
     die "Existing INM binds $BIND:$WEB_PORT; refusing to overwrite its settings."
+fi
+# A prior install may have started the intended backend before proxy setup.
+# Reuse it only if it belongs to this checkout and presents the installed TLS identity.
+RESUME_BACKEND=false
+if [[ -n "$(ss -H -lnt "( sport = :$BACKEND )")" ]]; then
+  [[ -f "$ENV" && "$(sed -n 's/^INM_MODE=//p' "$ENV" | tail -1)" == live &&
+     "$(sed -n 's/^INM_PROFILE=//p' "$ENV" | tail -1)" == lab-readonly ]] ||
+    die "Upstream port $BACKEND is busy and no matching live INM environment was found."
+  web="$(docker compose --project-name inm --project-directory "$ROOT" -f "$ROOT/compose.yaml" \
+    --env-file "$ENV" ps --status running -q web)" ||
+    die "Unable to identify the backend on port $BACKEND."
+  [[ -n "$web" &&
+     "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$web")" == "$ROOT" &&
+     "$(docker port "$web" 8443/tcp)" == "127.0.0.1:$BACKEND" ]] ||
+    die "Upstream port $BACKEND is busy and is not the expected INM web binding."
+  curl --fail --silent --show-error --max-time 10 --cacert /etc/inm/tls/tls.crt \
+    --resolve "localhost:$BACKEND:127.0.0.1" "https://localhost:$BACKEND/healthz" >/dev/null ||
+    die "Existing INM backend failed its HTTPS health check."
+  RESUME_BACKEND=true
 fi
 for f in "$CRT" "$KEY" "$CA"; do
   [[ ! -e "$f" ]] || die "Certificate path already exists: $f; refusing overwrite."
@@ -65,15 +83,39 @@ if docker network inspect inm_devices >/dev/null 2>&1; then
     die 'Unable to restrict existing Docker worker egress. Refusing to continue.'
 fi
 
-log "Deploying Docker web on 127.0.0.1:$BACKEND."
-export INM_WEB_BIND=127.0.0.1 INM_WEB_PORT="$BACKEND"
-if ! bash "$ROOT/deployment/centos9/install.sh" --mode live; then
-  log 'Docker INM installation failed; showing recent AI and Loki logs for diagnosis.'
-  docker logs --tail 35 inm-ai-1 2>&1 || true
-  docker logs --tail 35 inm-loki-1 2>&1 || true
-  die 'Docker INM installation failed; proxy was NOT changed. Databases and volumes were preserved.'
+if [[ "$RESUME_BACKEND" == true ]]; then
+  log "Reusing the running INM web backend on 127.0.0.1:$BACKEND."
+else
+  log "Deploying Docker web on 127.0.0.1:$BACKEND."
+  export INM_WEB_BIND=127.0.0.1 INM_WEB_PORT="$BACKEND"
+  if ! bash "$ROOT/deployment/centos9/install.sh" --mode live; then
+    log 'Docker INM installation failed; showing recent AI and Loki logs for diagnosis.'
+    docker logs --tail 35 inm-ai-1 2>&1 || true
+    docker logs --tail 35 inm-loki-1 2>&1 || true
+    die 'Docker INM installation failed; proxy was NOT changed. Databases and volumes were preserved.'
+  fi
 fi
 [[ -f /etc/inm/tls/tls.crt ]] || die 'INM local TLS certificate was not created.'
+
+if [[ "$(getenforce 2>/dev/null || true)" == Enforcing ]]; then
+  dnf -y install policycoreutils-python-utils || die 'SELinux tooling install failed.'
+  if ! semanage port -l | awk '$1=="http_port_t" && $2=="tcp" {print $0}' |
+       grep -E '(^|[ ,])8787([, -]|$)' >/dev/null; then
+    if semanage port -l -C | awk '$2=="tcp" {print $0}' | grep -Eq '(^|[ ,])8787([, -]|$)'; then
+      die 'TCP 8787 already has a local SELinux port assignment; review it before retrying.'
+    fi
+    if semanage port -l | awk '$1=="jboss_debug_port_t" && $2=="tcp" {print $0}' |
+         grep -E '(^|[ ,])8787([, ]|$)' >/dev/null; then
+      semanage port -m -t http_port_t -p tcp "$PORT" ||
+        die 'Unable to change the default SELinux JBoss debug port assignment.'
+    else
+      semanage port -a -t http_port_t -p tcp "$PORT" ||
+        die 'SELinux port 8787 cannot be assigned to HTTP; check any existing label.'
+    fi
+  fi
+  setsebool -P httpd_can_network_connect on ||
+    die 'Nginx SELinux loopback connectivity could not be enabled.'
+fi
 
 install -d -m 0755 /etc/pki/tls/certs /etc/pki/tls/private
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 397 \
@@ -119,16 +161,6 @@ if ! nginx -t; then
   rm -f "$SITE"
   die 'New Nginx proxy site failed configuration validation; site removed.'
 fi
-if [[ "$(getenforce 2>/dev/null || true)" == Enforcing ]]; then
-  dnf -y install policycoreutils-python-utils || die 'SELinux tooling install failed.'
-  if ! semanage port -l | awk '$1=="http_port_t" && $2=="tcp" {print $0}' |
-       grep -Eq '(^|[ ,])8787([, -]|$)'; then
-    semanage port -a -t http_port_t -p tcp "$PORT" ||
-      die 'SELinux port 8787 cannot be assigned to HTTP; check any existing label.'
-  fi
-  setsebool -P httpd_can_network_connect on ||
-    die 'Nginx SELinux loopback connectivity could not be enabled.'
-fi
 log 'Reloading existing Nginx config; not restarting its 8443 service.'
 if systemctl is-active -q nginx; then
   systemctl reload nginx || die 'Could not reload Nginx.'
@@ -147,8 +179,8 @@ fi
 # firewalld reloads can remove runtime Docker forwarding filter entries.
 # Reinstate the fail-closed worker policy and rerun full on-host acceptance.
 log 'Reapplying worker egress firewall after host firewall changes.'
-bash "$ROOT/scripts/inm_worker_egress_guard.sh" --apply ||
-  die 'Could not restore safe Docker worker egress policy after firewall reload.'
+bash "$ROOT/scripts/inm_worker_egress_guard.sh" --install ||
+  die 'Could not enforce and persist safe Docker worker egress policy.'
 log 'Rechecking Docker services, device lock, public egress denial and synthetic pipeline.'
 bash "$ROOT/deployment/centos9/verify.sh" ||
   die 'Post-proxy Docker verification failed; inspect the named failing check.'
