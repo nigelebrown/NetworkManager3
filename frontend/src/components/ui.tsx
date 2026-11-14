@@ -42,7 +42,7 @@ export function SimBadge() {
 }
 
 export function ErrorNote({ error }: { error: string | null }) {
-  return error ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null;
+  return error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null;
 }
 
 export const fmtUptime = (s: number | null) => {

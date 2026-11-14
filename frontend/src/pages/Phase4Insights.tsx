@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
+import GuidePanel from "../components/GuidePanel";
 import { Notice, PageHeader, Pill, ago, btn, btn2, useAction } from "../components/viz";
 import { ops } from "../services/ops";
 
@@ -13,14 +14,17 @@ export default function Phase4Insights() {
   const recs = useLoad(ops.phase4Recs, [], 30000);
   const act = useAction();
   const devices = (ov.data?.devices ?? []) as unknown as Dev[];
+  const analyze = () => act.run(async () => {
+    const r = await ops.phase4Analyze(); recs.reload(); return `Analysed ${r.evaluated_devices} device(s); ${r.created} new advisory(ies).`; });
   return <div className="space-y-4">
     <PageHeader title="Device insights" subtitle="Rule analysis of recorded live telemetry. A finding requires two independent recent REST observations; manual readings are shown but never used as evidence. Advisories only — no automatic changes."
-      right={<button className={btn} disabled={act.busy} onClick={() => act.run(async () => {
-        const r = await ops.phase4Analyze(); recs.reload(); return `Analysed ${r.evaluated_devices} device(s); ${r.created} new advisory(ies).`; })}>Analyze now</button>} />
+      right={<button className={btn} disabled={act.busy} onClick={analyze}>Analyze now</button>} />
+    <GuidePanel guide="insights" onClick={t => { if (t === "analyze") analyze(); }} />
     <ErrorNote error={ov.error} /><Notice error={act.error} message={act.message} />
     <Card title="Live devices"><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500"><th className="py-1">Device</th><th>Evidence</th><th>Latest</th><th>Metrics</th><th>Findings</th></tr></thead>
       <tbody>{devices.map(d => <tr key={d.device_id} className="border-t border-slate-800"><td className="py-1.5"><Link className="text-sky-300" to={`/devices/${d.device_id}/360`}>{d.hostname}</Link> <span className="text-xs text-slate-500">{d.model}</span></td>
-        <td><Pill value={d.evidence_status} tone={d.evidence_status === "REST_VERIFIED_RECENT" ? "good" : d.evidence_status === "NO_TELEMETRY" ? "none" : "fair"} /></td>
+        <td><Pill value={d.evidence_status} tone={d.evidence_status === "REST_VERIFIED_RECENT" ? "good" : d.evidence_status === "NO_TELEMETRY" ? "none" : "fair"} />
+          {d.evidence_status === "NO_TELEMETRY" && <div className="text-[10px] text-slate-500">no monitoring plan / cluster poll yet — see step 1</div>}</td>
         <td className="text-xs">{ago(d.latest_observation)}</td><td className="text-xs">{Object.entries(d.metrics).slice(0, 4).map(([k, v]) => `${k}=${v.value}`).join(" · ")}</td>
         <td>{d.findings.map(f => <Pill key={f.rule_id} value={f.title} tone="fair" />)}</td></tr>)}
         {!devices.length && <tr><td colSpan={5} className="py-3 text-center text-slate-500">No live Aruba devices registered.</td></tr>}</tbody></table></Card>

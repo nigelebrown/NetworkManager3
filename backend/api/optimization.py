@@ -280,8 +280,24 @@ def put_site_policy(site_id: str, body: SitePolicyInput, request: Request, db: S
 
 @router.get("/optimization/enrollments")
 def enrollments(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor", "approver"))):
-    return [_enr_public(e) for e in db.scalars(select(OptimizationEnrollment)
-                                               .order_by(OptimizationEnrollment.created_at.desc()).limit(500))]
+    from ..database.models_inm import InmDevice
+    rows = list(db.scalars(select(OptimizationEnrollment).order_by(OptimizationEnrollment.created_at.desc()).limit(500)))
+    names = {d.id: (d.hostname, d.model) for d in db.scalars(select(InmDevice).where(
+        InmDevice.id.in_({e.device_id for e in rows} or {""})))}
+    backed = set(db.scalars(select(ConfigArtifact.device_id).where(
+        ConfigArtifact.device_id.in_({e.device_id for e in rows} or {""}))))
+    out = []
+    for e in rows:
+        host, model = names.get(e.device_id, (None, None))
+        pend = (f"Needs an independent approver (not {e.requester_id})." if e.device_id in backed else
+                "Blocked: capture a configuration backup first (Device 360° → Operations → Capture configuration), "
+                f"then an independent approver (not {e.requester_id}) can approve.")
+        nxt = {"PENDING_APPROVAL": pend,
+               "PAUSED": f"Paused ({e.status_reason or 'review'}): disable, review, then request again.",
+               "ARMED": "Armed — runs only when the feature flag is on, the write lock is off and no emergency stop."
+               }.get(e.status, "No action.")
+        out.append(_enr_public(e) | {"hostname": host, "model": model, "next_action": nxt})
+    return out
 
 
 @router.get("/optimization/decisions")

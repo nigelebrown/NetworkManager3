@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import AiAnswerBox from "../components/AiAnswerBox";
+import DiagnosisPanel from "../components/DiagnosisPanel";
 import ConfigEditor from "../components/ConfigEditor";
 import SiteFilter from "../components/SiteFilter";
 import { Badge, Card, ErrorNote, NA, SimBadge, Stat, fmtTime } from "../components/ui";
@@ -10,6 +11,7 @@ import { aiApi, expApi, getSession, type AiAnswer, type ExpConfig, type ExpResul
 const tone = (b?: string) => (b === "good" ? "ok" : b === "fair" ? "warn" : b === "poor" ? "bad" : undefined);
 
 export default function Experience() {
+  const [diag, setDiag] = useState<{ kind: "ap"; id: string; label: string } | { kind: "client"; id: number; label: string } | null>(null);
   const isAdmin = getSession()?.role === "admin";
   const canSee = getSession()?.role !== "viewer";
   const [site, setSite] = useState<number | undefined>();
@@ -92,22 +94,24 @@ export default function Experience() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Lowest-scoring clients">
-          <table className="w-full text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr>{["Client", "AP", "SSID", "Score", ""].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}</tr></thead>
+          <table className="w-full text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr>{["Client", "AP", "SSID", "Score", "Root cause & fix"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-800">
               {o?.worst_clients.map((c) => (
                 <tr key={c.id}><td className="px-2 py-2 font-mono text-xs">{c.mac}</td><td className="px-2 py-2">{c.ap_name ?? NA}</td><td className="px-2 py-2">{c.ssid ?? NA}</td>
                   <td className="px-2 py-2">{c.score} <Badge value={c.band} /></td>
-                  <td className="px-2 py-2 text-right"><button className="rounded border border-slate-700 px-2 py-0.5 text-xs hover:bg-slate-800" onClick={() => explain(c.id, c.mac)}>Why?</button></td></tr>
+                  <td className="px-2 py-2 text-right whitespace-nowrap"><button className="inm-btn-primary px-2 py-0.5 text-xs" onClick={() => setDiag({ kind: "client", id: c.id, label: `${c.mac} on ${c.ap_name ?? "?"}` })}>Diagnose</button>
+                    <button className="ml-1 rounded border border-slate-300 px-2 py-0.5 text-xs" onClick={() => explain(c.id, c.mac)} title="Score breakdown">Score</button></td></tr>
               ))}
               {o?.worst_clients.length === 0 && <tr><td colSpan={5} className="px-2 py-6 text-center text-slate-500">No scorable clients.</td></tr>}
             </tbody></table>
         </Card>
         <Card title="Access points">
-          <table className="w-full text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr>{["AP", "Site", "Clients", "Score"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}</tr></thead>
+          <table className="w-full text-left text-sm"><thead className="text-xs uppercase text-slate-400"><tr>{["AP", "Site", "Clients", "Score", ""].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-800">
               {o?.aps.map((a) => (
                 <tr key={a.id}><td className="px-2 py-2">{a.name}</td><td className="px-2 py-2">{a.site_name}</td><td className="px-2 py-2">{a.client_count ?? NA}</td>
-                  <td className="px-2 py-2">{a.score == null ? <Badge value={a.band === "offline" ? "down" : null} /> : <>{a.score} <Badge value={a.band} /></>}</td></tr>
+                  <td className="px-2 py-2">{a.score == null ? <Badge value={a.band === "offline" ? "down" : null} /> : <>{a.score} <Badge value={a.band} /></>}</td>
+                  <td className="px-2 py-2 text-right"><button className="inm-btn-primary px-2 py-0.5 text-xs" onClick={() => setDiag({ kind: "ap", id: a.name, label: a.name })}>Why poor?</button></td></tr>
               ))}
             </tbody></table>
         </Card>
@@ -155,6 +159,7 @@ export default function Experience() {
           </div>
         </div>
       )}
+      {diag && <DiagnosisPanel target={diag} onClose={() => setDiag(null)} />}
     </div>
   );
 }

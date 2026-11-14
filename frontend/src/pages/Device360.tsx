@@ -12,18 +12,22 @@ import { getSession } from "../services/api";
 import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
+import DiagnosisPanel from "../components/DiagnosisPanel";
+import { STATE_TONE, TIER_TONE, pct, wl } from "../services/wireless";
 
 const METRICS: Record<string, string[]> = {
   access_point: ["clients", "util_5g_percent", "util_2g_percent", "retry_percent", "noise_floor_dbm", "cpu_percent", "memory_percent"],
   switch: ["ports_up", "port_errors_delta", "max_port_util_percent", "poe_power_w", "cpu_percent", "memory_percent", "temp_max_c"],
 };
-const TABS = ["Performance", "Ports", "Best practice", "Changes", "Configuration", "Capabilities", "Operations"] as const;
+const TABS = ["Performance", "Radios & clients", "Ports", "Incidents", "Best practice", "Changes", "Configuration", "Capabilities", "Operations"] as const;
 
 export default function Device360() {
   const { id = "" } = useParams();
   const device = useLoad(() => v1.getDevice(id), [id], 30000, ["devices"]);
-  const noc = useLoad(ops.noc, [], 30000);
+  const insight = useLoad(() => wl.insight(id), [id], 30000, ["telemetry", "devices", "alerts"]);
+  const [diag, setDiag] = useState(false);
   const d = device.data;
+  const ins = insight.data;
   const [metric, setMetric] = useState("cpu_percent");
   const [hours, setHours] = useState(24);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Performance");
@@ -33,7 +37,6 @@ export default function Device360() {
   const ver = useLoad(() => ops.versions(id), [id], 120000);
   const ad = useLoad(() => ops.deviceAdapter(id), [id], 0);
   const opt = useLoad(() => ops.optState(id), [id], 60000);
-  const tile = noc.data?.devices.find(x => x.device_id === id);
   const ports = useLoad(() => rw.ports(id), [id], 30000, ["telemetry"]);
   const caps = useLoad(() => rem.capabilities(id), [id], 60000, ["devices"]);
   const cert = useLoad(() => rw.deviceCert(id), [id], 60000);
@@ -45,37 +48,73 @@ export default function Device360() {
   const [diagnosticKind, setDiagnosticKind] = useState("port_auth");
   const [diagnostic, setDiagnostic] = useState<DeviceDiagnostic | null>(null);
   const mayReadHardware = ["admin", "operator", "auditor"].includes(getSession()?.role ?? "");
-  const metricsFor = METRICS[d?.family ?? "switch"] ?? METRICS.switch;
+  const metricsFor = ins?.series_available.length ? ins.series_available : (METRICS[d?.family ?? "switch"] ?? METRICS.switch);
+  const label = (m: string) => ins?.metrics.find(x => x.metric === m)?.label ?? m.replace(/_/g, " ");
   const data = (series.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
   return <div className="space-y-4">
     <PageHeader eyebrow="Monitoring & diagnostics · Device 360°" title={d ? `${d.hostname ?? d.serial_number}` : "Device"} subtitle={d ? `${d.vendor} ${d.model ?? ""} · serial ${d.serial_number} · firmware ${d.firmware ?? "unknown"}` : undefined}
       right={d && <div className="flex items-center gap-2"><SourceTag source={d.source_type} />
         <span title={(d as { state_reason?: string }).state_reason}><Pill value={(d as { state?: string }).state ?? d.status}
           tone={statusTone((d as { state?: string }).state === "ONLINE" ? "PASS" : (d as { state?: string }).state ?? d.status)} /></span>
+        {d.family === "access_point" && <button className="inm-btn-primary" onClick={() => setDiag(true)}>Diagnose</button>}
         <Link className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm" to={`/changes`}>Plan a change</Link>
         <Link className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm" to={`/devices/${id}`}>Inventory record</Link></div>} />
     <ErrorNote error={device.error} />
+    {ins && ins.state.state !== "ONLINE" && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+      <b>{ins.state.state}:</b> {ins.state.state_reason}.{ins.ap && <> <b>What to do:</b> {ins.ap.guidance}</>}</div>}
     <div className="grid gap-3 md:grid-cols-4">
-      <Card><Gauge value={tile?.health.score} label="Experience" /><p className="mt-1 text-center text-xs text-slate-500">{tile?.health.reasons.join(" · ") || "No issues detected"}</p></Card>
-      <Card><Gauge value={comp.data?.score} label="Best practice" /><p className="mt-1 text-center text-xs text-slate-500">Grade {comp.data?.grade ?? "—"}</p></Card>
-      <Card title="Telemetry"><div className="space-y-1 text-sm"><div>Freshness <Pill value={tile?.freshness ?? "—"} tone={statusTone(tile?.freshness ?? "")} /></div>
-        {Object.entries(tile?.metrics ?? {}).slice(0, 5).map(([k, v]) => <div key={k} className="flex justify-between"><span className="text-slate-400">{k}</span><b>{v}</b></div>)}</div></Card>
+      <Card><Gauge value={ins?.health.score} label={d?.family === "switch" ? "Health" : "AP health"} />
+        <p className="mt-1 text-center text-xs text-slate-500">{ins ? (ins.health.reasons.join(" · ") || (ins.health.score == null ? "No measured telemetry" : "No threshold breached")) : "…"}</p>
+        {!!ins?.health.inputs.length && <p className="text-center text-[10px] text-slate-400">checked: {ins.health.inputs.map(label).join(", ")}</p>}
+        {ins?.ap && <p className="mt-1 text-center"><Pill value={`Tier ${ins.ap.tier}`} tone={TIER_TONE[ins.ap.tier]} /></p>}</Card>
+      <Card><Gauge value={comp.data?.score} label="Best practice" />
+        {ins && !ins.config.captured ? <p className="mt-1 text-center text-xs text-amber-700">No configuration captured yet, so rules cannot be checked.
+          <button className="ml-1 underline" onClick={() => setTab("Operations")}>Capture it</button></p>
+          : <p className="mt-1 text-center text-xs text-slate-500">Grade {comp.data?.grade ?? "—"}</p>}</Card>
+      <Card title="Latest telemetry"><div className="space-y-1 text-sm">
+        <div>Freshness <Pill value={ins?.state.freshness ?? "—"} tone={statusTone(ins?.state.freshness ?? "")} /></div>
+        {(ins?.metrics ?? []).slice(0, 8).map(m => <div key={m.metric} className="flex justify-between gap-2"><span className="text-slate-500">{m.label}</span>
+          <b>{Math.round(m.value * 10) / 10}{m.unit}</b></div>)}
+        {ins && !ins.metrics.length && <p className="text-xs text-slate-500">No readings in 24 h. {d?.family === "access_point" ? "Link this AP to a polled cluster (AP fleet by cluster)." : "Enable read-only monitoring (Live collection)."}</p>}</div></Card>
       <Card title="Optimization"><div className="space-y-1 text-sm"><Pill value={opt.data?.badge ?? "AUTO OFF"} tone="none" />
-        <p className="text-xs text-slate-400">Recommendations only. Automatic optimization is disabled by policy; changes go through engineer change plans.</p>
-        <Link to="/optimization" className="text-xs text-sky-300">Shadow simulation →</Link></div></Card>
+        <p className="text-xs text-slate-400">Recommendations only unless this AP is individually enrolled and approved.</p>
+        {d?.family === "access_point" && <button className="block text-xs text-sky-700 underline" onClick={() => setDiag(true)}>See recommended RF changes →</button>}
+        <Link to="/optimization" className="text-xs text-sky-700">Optimization →</Link></div></Card>
     </div>
     <div className="inm-tabs" role="tablist" aria-label="Device 360 sections">{TABS.map(t => <button
       key={t} role="tab" type="button" aria-selected={tab === t} onClick={() => setTab(t)}
       className={`inm-tab ${tab === t ? "active" : ""}`}>{t}</button>)}</div>
     {tab === "Performance" && <Card title="History" right={<div className="flex gap-2">
-      <select aria-label="Metric" className="rounded bg-slate-950 px-2 py-1 text-sm" value={metric} onChange={e => setMetric(e.target.value)}>{metricsFor.map(m => <option key={m}>{m}</option>)}</select>
+      <select aria-label="Metric" className="rounded bg-slate-950 px-2 py-1 text-sm" value={metric} onChange={e => setMetric(e.target.value)}>{metricsFor.map(m => <option key={m} value={m}>{label(m)}</option>)}</select>
       <select aria-label="Range" className="rounded bg-slate-950 px-2 py-1 text-sm" value={hours} onChange={e => setHours(Number(e.target.value))}>{[1, 6, 24, 168].map(h => <option key={h} value={h}>{h < 24 ? `${h} h` : `${h / 24} d`}</option>)}</select></div>}>
       {data.length > 1 ? <ResponsiveContainer width="100%" height={260}><AreaChart data={data}>
         <defs><linearGradient id="m" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.info} stopOpacity={0.45} /><stop offset="100%" stopColor={COLORS.info} stopOpacity={0} /></linearGradient></defs>
         <CartesianGrid stroke="#e6edf6" /><XAxis dataKey="t" stroke="#74879b" fontSize={11} minTickGap={30} /><YAxis stroke="#74879b" fontSize={11} /><Tooltip {...TT} />
         <Area dataKey="v" name={metric} stroke={COLORS.info} fill="url(#m)" connectNulls={false} /></AreaChart></ResponsiveContainer>
-        : <p className="py-10 text-center text-sm text-slate-500">No {metric} readings in this window. Create a collection plan under <Link className="text-sky-300" to="/collection">Monitoring → Collection</Link>.</p>}
+        : data.length === 1 ? <p className="py-10 text-center text-sm text-slate-600">One reading so far: <b>{data[0].v}</b> at {data[0].t}. The trend appears after the next poll.</p>
+        : <p className="py-10 text-center text-sm text-slate-500">No {label(metric)} readings in this window. {d?.family === "access_point"
+          ? <>Link this AP to a polled cluster under <Link className="text-sky-700" to="/aps/fleet">AP fleet by cluster</Link>.</>
+          : <>Enable read-only monitoring under <Link className="text-sky-700" to="/collection">Live collection</Link>.</>}</p>}
     </Card>}
+    {tab === "Radios & clients" && <div className="grid gap-4 lg:grid-cols-2">
+      <Card title="Radios">{ins?.ap ? <table className="inm-table"><thead><tr><th>Band</th><th>Channel</th><th>Busy</th><th>Noise</th><th>TX power</th></tr></thead><tbody>
+        {([["2.4 GHz", ins.ap.radio_2g], ["5 GHz", ins.ap.radio_5g]] as const).map(([b, r]) => <tr key={b}><td>{b}</td><td>{r.channel ?? "—"}</td><td>{pct(r.util_percent)}</td>
+          <td>{r.noise_floor_dbm != null ? `${r.noise_floor_dbm} dBm` : "—"}</td><td>{r.tx_power_dbm != null ? `${r.tx_power_dbm} dBm` : "—"}</td></tr>)}</tbody></table>
+        : <p className="text-sm text-slate-500">{d?.family === "switch" ? "Radios apply to access points." : "No radio data — the AP is not in a polled cluster."}</p>}
+        {ins?.ap && <p className="mt-2 text-xs text-slate-500">Cluster {ins.ap.cluster ?? "not linked"} · read via {ins.ap.transport ?? "—"} · <Pill value={ins.ap.state} tone={STATE_TONE(ins.ap.state)} /></p>}</Card>
+      <Card title={`Connected clients (${ins?.clients.length ?? 0})`}>{ins?.client_bands && <p className="mb-2 text-xs text-slate-500">{Object.entries(ins.client_bands).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>}
+        <div className="max-h-80 overflow-auto"><table className="inm-table"><thead><tr><th>Client</th><th>SSID</th><th>Band</th><th>SNR</th><th>Rate</th><th>Quality</th></tr></thead>
+          <tbody>{(ins?.clients ?? []).map(c => <tr key={c.id}><td className="font-mono text-xs">{c.mac}<div className="text-[10px] text-slate-500">{c.hostname ?? ""}</div></td><td>{c.ssid ?? "—"}</td>
+            <td>{c.band ?? "—"}</td><td>{c.snr_db ?? "—"}</td><td>{c.speed_mbps ?? "—"}</td><td><Pill value={c.quality ?? "—"} tone={c.quality === "poor" ? "poor" : c.quality === "fair" ? "fair" : "good"} /></td></tr>)}</tbody></table></div>
+        {ins && !ins.clients.length && <p className="text-sm text-slate-500">No connected clients reported.</p>}
+        <Link className="mt-2 inline-block text-xs text-sky-700" to="/client-journeys">Client connectivity →</Link></Card></div>}
+    {tab === "Incidents" && <Card title="Incidents on this device">
+      <table className="inm-table"><thead><tr><th>Opened</th><th>Severity</th><th>Incident</th><th>Owner</th><th>Ticket</th><th>State</th></tr></thead><tbody>
+        {(ins?.incidents ?? []).map(a => <tr key={a.id}><td className="text-xs">{ago(a.opened_at)}</td><td><Pill value={a.severity} tone={a.severity === "critical" ? "poor" : "fair"} /></td>
+          <td>{a.message}</td><td>{a.assignee ?? "—"}</td><td>{a.ticket?.reference ?? "—"}</td>
+          <td><Pill value={a.resolution?.type?.replace(/_/g, " ") ?? a.state} tone={a.state === "RESOLVED" ? "good" : "fair"} /></td></tr>)}</tbody></table>
+      {ins && !ins.incidents.length && <p className="text-sm text-slate-500">No incidents recorded.</p>}
+      <Link className="mt-2 inline-block text-xs text-sky-700" to="/device-alerts">Work incidents →</Link></Card>}
     {tab === "Ports" && <Card title="Switch faceplate">{d?.family === "switch" && ports.data
       ? <Faceplate data={ports.data} deviceId={id} /> : <p className="text-sm text-slate-500">Port faceplate applies to switches.</p>}</Card>}
     {tab === "Operations" && <div className="grid gap-4 lg:grid-cols-2">
@@ -207,5 +246,6 @@ export default function Device360() {
           <td>{o.executable_now ? "yes" : "no"}</td><td className="text-xs text-slate-400">{o.reason}</td></tr>)}</tbody></table>
       <div className="mt-3 flex flex-wrap gap-2">{caps.data.read_operations.map(o => <Pill key={o.op} value={`${o.op}: ${o.status === "AVAILABLE_READ_ONLY" ? "read OK" : o.status}`} tone={o.status === "AVAILABLE_READ_ONLY" ? "good" : "none"} />)}</div>
       {ad.data && <p className="mt-2 text-xs text-slate-500">{ad.data.adapter.notes}</p>}</Card>}
+    {diag && d && <DiagnosisPanel target={{ kind: "ap", id, label: d.hostname ?? d.serial_number }} onClose={() => setDiag(false)} />}
   </div>;
 }

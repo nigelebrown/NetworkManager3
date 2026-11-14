@@ -5,6 +5,8 @@ import { DevicePicker, Notice, PageHeader, Pill, btn, btn2, btnDanger, statusTon
 import { getSession } from "../services/api";
 import type { Device } from "../services/inm";
 import { ops, rw } from "../services/ops";
+import GuidePanel from "../components/GuidePanel";
+import ClusterOptimization from "../components/ClusterOptimization";
 
 export default function Optimization() {
   const [device, setDevice] = useState<Device | undefined>();
@@ -21,7 +23,9 @@ export default function Optimization() {
     <PageHeader title="RF optimization — per-device opt-in" subtitle="Automatic optimization is off unless the platform feature is enabled AND an individual AP is enrolled in DEVICE_OPT_IN with independent approval, scope, expiry, daily limit and cooldown. It is never inherited from a site, model or template. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
     <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">AUTOMATIC OPTIMIZATION FEATURE: <b>{control.data?.automatic_optimization_feature ? "ENABLED (per-device opt-in only)" : "OFF (INM_AUTOMATIC_OPTIMIZATION=false)"}</b> · Global write lock: <b>{control.data?.global_write_lock ? "ON" : "OFF"}</b> ·
       Emergency stop: <b>{control.data?.emergency_stop ? "ACTIVE" : "clear"}</b>. Vendor-native features such as Aruba ARM remain as configured on each device.</div>
-    <Card title="Device">
+    <GuidePanel guide="optimization" defaultOpen={false} />
+    <ClusterOptimization onChanged={() => { enrollments.reload(); state.reload(); }} />
+    <Card title="Single device">
       <div className="max-w-md"><DevicePicker family="access_point" value={device?.id ?? ""} onChange={(_, d) => setDevice(d)} /></div>
       {state.data && <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         <Pill value={state.data.badge} tone={state.data.badge === "AUTO OFF" ? "none" : "fair"} /><span>Mode <b>{state.data.mode}</b></span><span>Status <Pill value={state.data.status} tone={statusTone(state.data.status)} /></span>
@@ -54,9 +58,21 @@ export default function Optimization() {
       <button className={control.data?.emergency_stop ? btn2 : btnDanger} onClick={() => act.run(async () => {
         await ops.emergencyStop(!control.data?.emergency_stop, control.data?.emergency_stop ? "Cleared after review" : "Operator emergency stop"); control.reload(); enrollments.reload(); })}>
         {control.data?.emergency_stop ? "Clear emergency stop" : "Activate emergency stop"}</button></Card>}
-    <Card title="Enrollments (per device, never inherited)"><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500"><th>Device</th><th>Serial</th><th>Mode</th><th>Status</th><th>Requested by</th><th>Approver</th><th>Expires</th></tr></thead>
-      <tbody>{(enrollments.data ?? []).map(e => <tr key={String(e.id)} className="border-t border-slate-800"><td className="py-1 font-mono text-xs">{String(e.device_id).slice(0, 8)}</td>
-        <td>{String(e.immutable_serial)}</td><td>{String(e.mode)}</td><td><Pill value={String(e.status)} tone={statusTone(String(e.status))} /></td>
-        <td>{String(e.requester_id)}</td><td>{String(e.independent_approver_id ?? "—")}</td><td className="text-xs">{String(e.expires_at_utc).slice(0, 10)}</td></tr>)}</tbody></table></Card>
+    <Card title="Enrollments (per device, never inherited)"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500"><th>Device</th><th>Mode</th><th>Status</th><th>Next action</th><th>Requested by</th><th>Approver</th><th>Expires</th><th></th></tr></thead>
+      <tbody>{(enrollments.data ?? []).map(e => { const st = String(e.status); const mine = me?.username === e.requester_id;
+        return <tr key={String(e.id)} className="border-t border-slate-200"><td className="py-1"><b>{String(e.hostname ?? String(e.device_id).slice(0, 8))}</b>
+          <div className="text-[10px] text-slate-500">{String(e.model ?? "")} · {String(e.immutable_serial)}</div></td>
+        <td>{String(e.mode)}</td><td><Pill value={st} tone={statusTone(st)} />{e.status_reason ? <div className="text-[10px] text-slate-500">{String(e.status_reason)}</div> : null}</td>
+        <td className="max-w-xs text-xs">{String(e.next_action ?? "")}{String(e.next_action ?? "").startsWith("Blocked") &&
+          <> <a className="inm-link" href={`/devices/${String(e.device_id)}/360`}>Open Device 360°</a></>}</td>
+        <td>{String(e.requester_id)}</td><td>{String(e.independent_approver_id ?? "—")}</td><td className="text-xs">{String(e.expires_at_utc).slice(0, 10)}</td>
+        <td className="whitespace-nowrap">{st === "PENDING_APPROVAL" && me && ["approver", "admin"].includes(me.role) && !mine &&
+          <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { await ops.optApprove(String(e.id)); enrollments.reload(); return `Approved ${String(e.hostname ?? "")}.`; })}>Approve</button>}
+          {st === "PENDING_APPROVAL" && mine && <span className="text-[10px] text-slate-500">another user must approve</span>}
+          {["PENDING_APPROVAL", "ARMED", "PAUSED"].includes(st) && me?.role === "admin" &&
+            <button className={`${btnDanger} ml-1`} disabled={act.busy} onClick={() => act.run(async () => { await ops.optDisable(String(e.device_id)); enrollments.reload(); return "Disabled."; })}>Disable</button>}</td></tr>; })}
+      </tbody></table></div>
+      <div className="mt-2"><Notice error={act.error} message={act.message} /></div>
+      {!enrollments.data?.length && <p className="text-sm text-slate-500">No enrollments yet. Pick a cluster above to propose SHADOW enrollments for its APs.</p>}</Card>
   </div>;
 }

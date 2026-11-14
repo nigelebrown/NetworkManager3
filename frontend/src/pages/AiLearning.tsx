@@ -1,4 +1,5 @@
 import { PageHeader } from "../components/viz";
+import GuidePanel from "../components/GuidePanel";
 import { useState } from "react";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { DemoBadge, PlannedNotice, btnPrimary } from "../components/inm";
@@ -26,6 +27,7 @@ export default function AiLearning() {
         <PageHeader eyebrow="Intelligence & automation" title="Rule-based network intelligence" subtitle="Evidence-based analysis and versioned rules; not a trained predictive model." />
         {canRun && <button className={btnPrimary} onClick={analyze} disabled={busy}>{busy ? "Analysing…" : "Analyze now"}</button>}
       </div>
+      <GuidePanel guide="insights" onClick={t => { if (t === "analyze") analyze(); }} />
       <div className="rounded-lg border border-sky-900/60 bg-sky-950/30 p-3 text-sm text-sky-100">
         <b>Deterministic rules, not machine learning.</b> Recommendations come from a versioned rule set in the isolated AI service.
         It receives pseudonymised site aggregates only, has no device credentials or network route, and nothing it returns is executed.

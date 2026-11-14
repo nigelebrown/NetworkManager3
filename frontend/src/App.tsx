@@ -6,6 +6,9 @@ import { getSession } from "./services/api";
 import Alerts from "./pages/Alerts";
 import Assistant from "./pages/Assistant";
 import APs from "./pages/APs";
+import ApFleet from "./pages/ApFleet";
+import ApHealthReport from "./pages/ApHealthReport";
+import ClientConnectivity from "./pages/ClientConnectivity";
 import Clients from "./pages/Clients";
 import Configuration from "./pages/Configuration";
 import Firmware from "./pages/Firmware";
@@ -72,6 +75,8 @@ export default function App() {
         <Route index element={<NocDashboard />} />
         <Route path="wifi" element={<Dashboard />} />
         <Route path="aps" element={<APs />} />
+        <Route path="aps/fleet" element={<ApFleet />} />
+        <Route path="ap-health" element={<ApHealthReport />} />
         <Route path="clients" element={<Clients />} />
         <Route path="experience" element={<Experience />} />
         <Route path="assistant" element={<Assistant />} />
@@ -116,10 +121,10 @@ export default function App() {
         <Route path="platform" element={<Platform />} />
         <Route path="data" element={<DataManagement />} />
         {/* Approved full-system wireframe workspaces: reuse existing APIs and change safeguards. */}
-        <Route path="rf-health" element={<WireframeWorkspace kind="rf" />} />
+        <Route path="rf-health" element={<ApFleet mode="rf" />} />
         <Route path="port-groups" element={<PortGroups />} />
         <Route path="port-health" element={<WireframeWorkspace kind="ports" />} />
-        <Route path="client-journeys" element={<WireframeWorkspace kind="journeys" />} />
+        <Route path="client-journeys" element={<ClientConnectivity />} />
         <Route path="approvals" element={<WireframeWorkspace kind="approvals" />} />
         <Route path="recommendations" element={<WireframeWorkspace kind="recommendations" />} />
         <Route path="predictive" element={<WireframeWorkspace kind="predictive" />} />

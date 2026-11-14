@@ -69,7 +69,8 @@ function DeviceRows({ rows, mode }: { rows: NocTile[]; mode: WorkspaceKind }) {
       <td><Link className="inm-link" to={`/devices/${d.device_id}/360`}>{d.hostname || d.device_id.slice(0, 8)}</Link>
         <div className="text-[10px] text-slate-500">{d.source_type} · {d.family === "switch" ? "CX switch" : "Access point"}</div></td>
       <td>{d.site || "Unassigned"}</td><td>{d.model || "Unknown"}</td>
-      <td><Pill value={d.state} tone={statusTone(d.state === "ONLINE" ? "PASS" : d.state === "OFFLINE" ? "FAIL" : d.state === "DEGRADED" ? "WARN" : "STALE")} /></td>
+      <td><Pill value={d.state} tone={statusTone(d.state === "ONLINE" ? "PASS" : d.state === "OFFLINE" ? "FAIL" : d.state === "DEGRADED" ? "WARN" : "STALE")} />
+        {d.state !== "ONLINE" && <div className="mt-1 max-w-[220px] text-[10px] text-slate-500">{d.state_reason}</div>}</td>
       <td>{mode === "rf" || mode === "ssid" ? percent(d.metrics.util_5g_percent)
         : mode === "ports" || mode === "switchconfig" ? display(d.metrics.ports_up, " up")
         : percent(d.health.score)}</td>
@@ -89,6 +90,8 @@ export default function WireframeWorkspace({ kind }: { kind: WorkspaceKind }) {
   const page = CONFIG[kind];
   const [search, setSearch] = useState("");
   const [state, setState] = useState("ALL");
+  const [fam, setFam] = useState("ALL");
+  const [site, setSite] = useState("ALL");
   const needNoc = ["rf", "ports", "journeys", "predictive", "switchconfig", "ssid", "device360"].includes(kind);
   const noc = useLoad(() => needNoc ? ops.noc() : Promise.resolve(null), [kind], 30000, ["devices", "telemetry", "alerts"]);
   const plans = useLoad(() => kind === "approvals" ? ops.changePlans() : Promise.resolve([] as ChangePlan[]),
@@ -107,11 +110,13 @@ export default function WireframeWorkspace({ kind }: { kind: WorkspaceKind }) {
   const filtered = useMemo(() => all.filter(d => (
     (["rf", "ssid", "journeys"].includes(kind) ? d.family === "access_point"
       : ["ports", "switchconfig"].includes(kind) ? d.family === "switch" : true) &&
-    (state === "ALL" || d.state === state) &&
+    (state === "ALL" || d.state === state) && (fam === "ALL" || d.family === fam) && (site === "ALL" || (d.site || "Unassigned") === site) &&
     (!search.trim() || [d.hostname, d.site, d.model, d.device_id].some(x => (x || "").toLowerCase().includes(search.toLowerCase())))
-  )), [all, state, search, kind]);
+  )), [all, state, search, kind, fam, site]);
+  const siteNames = useMemo(() => Array.from(new Set(all.map(d => d.site || "Unassigned"))).sort(), [all]);
   const healthy = filtered.filter(x => x.state === "ONLINE").length;
-  const atRisk = filtered.filter(x => ["OFFLINE", "DEGRADED", "STALE"].includes(x.state)).length;
+  const atRisk = filtered.filter(x => x.state !== "ONLINE").length;
+  const unknown = filtered.filter(x => x.state === "UNKNOWN").length;
   return <div className="space-y-4" data-wireframe-workspace={kind}>
     <PageHeader title={page.title} eyebrow={page.eyebrow} subtitle={page.description}
       right={<div className="inm-actionbar">{page.actions.map(a =>
@@ -124,7 +129,7 @@ export default function WireframeWorkspace({ kind }: { kind: WorkspaceKind }) {
     {needNoc && <section className="inm-status-overview" aria-label="Device health summary">
       <Kpi label="In scope" value={filtered.length} hint="Managed devices in current scope"/>
       <Kpi label="Online" value={healthy} hint="Persisted state from API"/>
-      <Kpi label="Attention needed" value={atRisk} hint="Offline, degraded or stale"/>
+      <Kpi label="Attention needed" value={atRisk} hint={unknown ? `${unknown} not observed (UNKNOWN) · ${atRisk - unknown} offline/degraded/stale` : "Offline, degraded, stale or unknown"}/>
       <Kpi label="Evidence" value={filtered.filter(x => x.last_persisted_at).length} hint="Devices with persisted telemetry"/>
     </section>}
     {needNoc && <section className="inm-card">
@@ -134,19 +139,16 @@ export default function WireframeWorkspace({ kind }: { kind: WorkspaceKind }) {
           <select aria-label="Device state" value={state} onChange={e => setState(e.target.value)}>
             <option value="ALL">All states</option>{["ONLINE", "DEGRADED", "STALE", "OFFLINE", "UNKNOWN"].map(v =>
               <option value={v} key={v}>{v}</option>)}
-          </select></div>
+          </select>
+          {kind === "device360" && <select aria-label="Device type" value={fam} onChange={e => setFam(e.target.value)}>
+            <option value="ALL">APs and switches</option><option value="access_point">Access points</option><option value="switch">Switches</option></select>}
+          <select aria-label="Site" value={site} onChange={e => setSite(e.target.value)}>
+            <option value="ALL">All sites</option>{siteNames.map(n => <option key={n}>{n}</option>)}</select></div>
       </div>
-      <DeviceRows rows={filtered} mode={kind}/>
+      <DeviceRows rows={filtered.slice(0, 300)} mode={kind}/>
+      {filtered.length > 300 && <div className="inm-empty">Showing 300 of {filtered.length}. Narrow with search, type or site.</div>}
       <div className="inm-cardfooter">Live management API; DEMO devices remain labelled. Missing data is never substituted with estimates.</div>
     </section>}
-    {kind === "device360" && <section className="inm-card">
-      <div className="inm-cardhead"><h2>Registered inventory</h2></div>
-      <div className="inm-cardbody inm-workspace-actions">{(inventory.data ?? []).map(d =>
-        <Link key={d.id} to={`/devices/${d.id}/360`}>{d.hostname || d.serial_number} · {d.model || d.family}</Link>)}
-        {!inventory.data?.length && <p>No devices registered.</p>}
-      </div>
-    </section>}
-
     {kind === "approvals" && <section className="inm-card">
       <div className="inm-cardhead"><h2>Change requests awaiting independent review</h2>
         <Pill value={`${(plans.data ?? []).filter(p => p.state === "PENDING_APPROVAL").length} pending`} tone="fair"/></div>

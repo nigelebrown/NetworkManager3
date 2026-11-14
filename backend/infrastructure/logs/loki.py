@@ -63,3 +63,20 @@ class LokiLogStore:
                 out.append(entry)
         out.sort(key=lambda e: e["ts"], reverse=True)
         return out[:limit]
+
+    def count_by(self, logql_metric: str, at: datetime | None = None) -> dict[str, float]:
+        """Instant metric query (e.g. sum by (host) (count_over_time({...} |~ `x` [24h]))) → {label value: count}.
+        Counting happens inside Loki, so a 24 h window over hundreds of APs never streams raw lines."""
+        at = at or datetime.now(timezone.utc)
+        r = self._http.get("/loki/api/v1/query", params={"query": logql_metric, "time": str(int(at.timestamp() * 1e9))})
+        if r.status_code != 200:
+            raise RuntimeError(f"Loki query failed: HTTP {r.status_code} {r.text[:200]}")
+        out: dict[str, float] = {}
+        for series in r.json().get("data", {}).get("result", []):
+            metric = series.get("metric", {})
+            key = metric.get("host") or metric.get("hostname") or ""
+            try:
+                out[key] = out.get(key, 0.0) + float(series.get("value", [0, "0"])[1])
+            except (TypeError, ValueError):
+                continue
+        return out

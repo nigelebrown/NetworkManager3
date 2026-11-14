@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
+import GuidePanel from "../components/GuidePanel";
 import { Notice, PageHeader, Pill, ago, btn, btn2, statusTone, useAction } from "../components/viz";
 import { getSession } from "../services/api";
 import { ops, type LearningItem } from "../services/ops";
@@ -34,6 +35,8 @@ export default function LearningCentre() {
   const [sim, setSim] = useState<{ at: string; op: string; result: string }[] | null>(null);
   return <div className="space-y-4">
     <PageHeader title="AI learning centre" subtitle="What the analyser recommended, why, on which evidence, what engineers decided and what actually happened afterwards. Models are only called trained when fitted on labelled outcomes with a time-separated holdout and promoted by an independent approver." />
+    <GuidePanel guide="learning" onClick={t => { if (t === "train") act.run(async () => { const r = await ops.train(); models.reload();
+      return r.status === "CANDIDATE" ? "Candidate model trained; it needs independent promotion." : `Not trained: ${String(r.reason)}`; }); }} />
     <ErrorNote error={hist.error} />
     <div className="grid gap-3 md:grid-cols-4">
       <Stat label="Recommendations" value={items.length} /><Stat label="With engineer feedback" value={items.filter(i => i.feedback).length} />

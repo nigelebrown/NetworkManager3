@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import GuidePanel from "../components/GuidePanel";
 import AiAnswerBox from "../components/AiAnswerBox";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
@@ -37,6 +38,7 @@ export default function Assistant() {
         </select>
       </div>
       <ErrorNote error={status.error ?? err} />
+      <GuidePanel guide="assistant" defaultOpen={false} />
 
       <Card title="Status">
         {!st ? <p className="text-sm text-slate-400">Checking…</p> : !st.enabled ? (
