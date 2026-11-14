@@ -236,6 +236,12 @@ def _permit_probe(ip: ipaddress.IPv4Address) -> None:
         ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
         ipaddress.IPv4Network("192.168.0.0/16"),
     ))
+    # Host-applied exact IPs become effective without restarting API/worker.
+    # The host broker publishes this root-owned state only AFTER enforcing
+    # the worker DOCKER-USER firewall, so DB requests alone cannot grant access.
+    from .management_approvals import host_applied_ips
+    if private and str(ip) in host_applied_ips():
+        return
     if private and len(exact) <= 1000 and str(ip) in exact:
         return
     if not cidrs:
