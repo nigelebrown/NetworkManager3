@@ -25,7 +25,7 @@ function Kpi({ label, value, sub, href }: { label: string; value: string | numbe
 }
 const tone = (state: string) => state === "ONLINE" || state === "GOOD" ? "good"
   : state === "OFFLINE" || state === "POOR" ? "bad"
-  : state === "STALE" || state === "DEGRADED" || state === "FAIR" ? "warn" : "";
+  : state === "STALE" || state === "DEGRADED" || state === "FAIR" ? "warn" : "unknown";
 
 export default function NocDashboard() {
   const noc = useLoad(ops.noc, [], 15000, ["devices", "telemetry", "alerts", "*"]);
@@ -99,7 +99,7 @@ export default function NocDashboard() {
       {devices.some(x => x.source_type === "DEMO") && <div className="inm-notice">This view includes DEMO-labelled devices. Sample observations remain distinguishable from real equipment.</div>}
       <div className="inm-kpis">
         <Kpi label="Network experience" value={score == null ? "—" : Math.round(score)+"%"} sub={scores.length+" measured devices"} href="/experience"/>
-        <Kpi label="Access points" value={online(ap)+" / "+ap.length} sub={(ap.length-online(ap))+" not online"} href="/aps"/>
+        <Kpi label="Access points" value={online(ap)+" / "+ap.length} sub={(ap.length-online(ap))+" not online — see why"} href="/aps"/>
         <Kpi label="CX switches" value={online(switches)+" / "+switches.length} sub={(switches.length-online(switches))+" not online"} href="/switches"/>
         <Kpi label="Connected clients" value={d.summary.clients} sub="Last persisted observation" href="/clients"/>
         <Kpi label="Active incidents" value={d.summary.active_alerts} sub="Open monitoring alerts" href="/device-alerts"/>
@@ -172,9 +172,10 @@ export default function NocDashboard() {
             style={{padding:"8px 10px",border:"1px solid #dfe6ed",borderRadius:7}}>
             {["ALL","ONLINE","DEGRADED","STALE","OFFLINE","UNKNOWN"].map(s=><option key={s}>{s}</option>)}</select></div>
       </div><div className="inm-cardbody" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:"0 24px"}}>
-        {filtered.slice(0,36).map(t => <Link to={"/devices/"+t.device_id+"/360"} key={t.device_id} className="inm-row" style={{textDecoration:"none",color:"#243b57"}}>
+        {filtered.slice(0,36).map(t => <Link to={"/devices/"+t.device_id+"/360"} key={t.device_id} title={t.state_reason} className="inm-row" style={{textDecoration:"none",color:"#243b57"}}>
           <span className={"inm-dot "+tone(t.state)}/><span className="grow"><b>{t.hostname ?? t.device_id.slice(0,8)}</b>
-          <small>{t.site ?? "Unassigned"} · {t.model ?? t.family} {t.source_type==="DEMO"?"· DEMO":""}</small></span>
+          <small>{t.site ?? "Unassigned"} · {t.model ?? t.family} {t.source_type==="DEMO"?"· DEMO":""}</small>
+          {t.state !== "ONLINE" && <small style={{color:"#9a6b16"}}>{t.state_reason}</small>}</span>
           <Badge value={t.state} kind={tone(t.state)}/></Link>)}
         {!filtered.length && <div className="inm-empty">No matching devices. <Link to="/onboarding">Start onboarding</Link>.</div>}
       </div><div className="inm-cardfooter">Showing {Math.min(36,filtered.length)} of {filtered.length} devices · Select any device to open Device 360°.</div></section>

@@ -9,8 +9,15 @@ PENALTIES = [
     ("retry_percent", 15, 20, "High retransmissions"),
     ("retry_percent", 10, 10, "Elevated retransmissions"),
     ("cpu_percent", 85, 15, "High CPU"),
+    ("cpu_percent", 70, 5, "Elevated CPU"),
     ("memory_percent", 90, 10, "High memory"),
+    ("memory_percent", 80, 5, "Elevated memory"),
     ("clients", 50, 10, "Client density high"),
+    ("client_count", 50, 10, "Client density high"),
+    ("fans_failed", 0, 30, "Fan failure"),
+    ("psu_failed", 0, 30, "Power supply failure"),
+    ("temp_max_c", 70, 15, "High temperature"),
+    ("port_errors_delta", 100, 10, "Port errors increasing"),
 ]
 
 
@@ -25,9 +32,9 @@ def latest_by_metric(rows: list[dict]) -> dict[str, dict]:
 
 def health(family: str, latest: dict[str, dict], freshness: str, status: str | None = None) -> dict:
     if status == "down":
-        return {"score": 0, "band": "POOR", "reasons": ["Device is down / unreachable"]}
+        return {"score": 0, "band": "POOR", "reasons": ["Device is down / unreachable"], "inputs": []}
     if not latest:
-        return {"score": None, "band": "NO_DATA", "reasons": ["No measured telemetry"]}
+        return {"score": None, "band": "NO_DATA", "reasons": ["No measured telemetry"], "inputs": []}
     score, reasons, used = 100, [], set()
     for metric, thr, pen, why in PENALTIES:
         if metric in used or metric not in latest:
@@ -45,4 +52,5 @@ def health(family: str, latest: dict[str, dict], freshness: str, status: str | N
         reasons.append(f"Telemetry {freshness.lower()}")
     score = max(0, score)
     band = "GOOD" if score >= 80 else "FAIR" if score >= 60 else "POOR"
-    return {"score": score, "band": band, "reasons": reasons}
+    considered = sorted({m for m, *_ in PENALTIES if m in latest} | ({"noise_floor_dbm"} if nf else set()))
+    return {"score": score, "band": band, "reasons": reasons, "inputs": considered}

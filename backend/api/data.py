@@ -212,13 +212,18 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     quality = Counter(c.quality or "unavailable" for c in clients)
 
     # Channel utilization: latest sample per up AP; unavailable (None) if no AP reports it.
-    utils: list[float] = []
+    u2: list[float] = []
+    u5: list[float] = []
     for a in aps:
         if a.status != "up":
             continue
         s = db.scalar(select(ApSample).where(ApSample.ap_id == a.id).order_by(ApSample.ts.desc()).limit(1))
         if s:
-            utils += [u for u in (s.util_2g_percent, s.util_5g_percent) if u is not None]
+            if s.util_2g_percent is not None:
+                u2.append(s.util_2g_percent)
+            if s.util_5g_percent is not None:
+                u5.append(s.util_5g_percent)
+    utils = u2 + u5
 
     polled = [s for s in sites if s.id in ids]
     polls_ok = sum(1 for s in polled if s.last_poll_ok)
@@ -233,7 +238,30 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     sev = Counter(a.severity for a in alerts if a.status == "active")
 
     exp = summarize([c.exp_score for c in clients], load_config(db))
+    bands = Counter(c.band or "unknown" for c in clients)
+    # Coverage: the inventory is the denominator, not just the APs that happen to be in a polled cluster. Without it
+    # "28 / 28 online" and "health 100" read as the whole estate when most APs are not monitored at all.
+    coverage = None
+    from ..security.context import get_scope
+    if site_id is None and get_scope() is None:
+        from ..database.models_inm import InmDevice
+        from ..infrastructure.device_state import canonical_inventory
+        inv = canonical_inventory(list(db.scalars(select(InmDevice).where(
+            InmDevice.family == "access_point",
+            InmDevice.source_type == ("DEMO" if get_settings().mode == "demo" else "REAL")))))
+        # observed = APs the polled clusters report; unobserved = registered APs no visible cluster reports.
+        observed = len(aps)
+        observed_ids = {a.id for a in aps}
+        unobserved = sum(1 for d in inv if d.legacy_ap_id not in observed_ids)
+        total = observed + unobserved
+        coverage = {"inventory_aps": total, "monitored_aps": observed, "unmonitored_aps": unobserved,
+                    "percent": round(100 * observed / total, 1) if total else None}
     return {
+        "coverage": coverage,
+        "clusters_failing": sum(1 for s in polled if s.last_poll_ok is False),
+        "avg_util_2g_percent": round(sum(u2) / len(u2), 1) if u2 else None,
+        "avg_util_5g_percent": round(sum(u5) / len(u5), 1) if u5 else None,
+        "clients_by_band": dict(bands),
         "mode": get_settings().mode,
         "simulated": get_settings().mode == "demo",
         "sites_total": len(polled),

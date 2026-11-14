@@ -38,6 +38,9 @@ export interface Summary {
   user_experience_score: number | null; user_experience: ExpSummary; alerts_active: number;
   alerts_by_severity: Record<string, number>; firmware_versions: Record<string, number>;
   last_poll_at: string | null;
+  coverage: { inventory_aps: number; monitored_aps: number; unmonitored_aps: number; percent: number | null } | null;
+  clusters_failing: number; avg_util_2g_percent: number | null; avg_util_5g_percent: number | null;
+  clients_by_band: Record<string, number>;
 }
 export interface HistoryPoint { ts: string; clients: number; aps_up: number; aps_total: number; avg_snr_db: number | null; avg_util_percent: number | null }
 export interface Radio {
