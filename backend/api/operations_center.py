@@ -132,6 +132,8 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     controllers = {s.id: s for s in db.scalars(select(Site))}
     devices = list(db.scalars(select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"]))
                               .order_by(InmDevice.hostname)))
+    projected_ids = {d.id for d in devices if d.legacy_ap_id is not None}
+    active_sites = set()
     for d in canonical_inventory(devices):
         controller = controllers.get(d.legacy_site_id)
         p = plans.get(d.id)
@@ -142,6 +144,8 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
         st = state_of(d, p, now=t, controller=controller)
         if controller and d.legacy_ap_id is not None:
             fresh = st["freshness"]
+            if fresh == "FRESH" and controller.last_poll_ok:
+                active_sites.add(controller.id)
         health_inputs = latest if st["state"] in ("ONLINE", "DEGRADED") else {}
         h = N.health(d.family, health_inputs, fresh, "down" if st["state"] == "OFFLINE" else None)
         st = state_of(d, p, now=t, health_band=h["band"], controller=controller)
@@ -168,14 +172,11 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
                 "simulated": a.simulated}
                for a in db.scalars(select(Alert).where(Alert.status != "resolved").order_by(Alert.raised_at.desc()).limit(25))]
     worst = sorted([x for x in tiles if x["health"]["score"] is not None], key=lambda x: x["health"]["score"])[:10]
-    active_sites = {d.legacy_site_id for d in devices if d.legacy_ap_id is not None
-                    and state_of(d, plans.get(d.id), now=t, controller=controllers.get(d.legacy_site_id))["freshness"] == "FRESH"
-                    and controllers.get(d.legacy_site_id) and controllers[d.legacy_site_id].last_poll_ok}
     clients = db.scalar(select(func.count()).select_from(ClientRecord).where(
         ClientRecord.site_id.in_(active_sites), ClientRecord.is_connected.is_(True))) or 0
     clients += sum(x["metrics"].get("clients", x["metrics"].get("client_count", 0)) or 0
                    for x in tiles if x["state"] in ("ONLINE", "DEGRADED")
-                   and next((d.legacy_ap_id for d in devices if d.id == x["device_id"]), None) is None)
+                   and x["device_id"] not in projected_ids)
     return {"generated_at": iso(t), "devices": tiles,
             "summary": {"devices": len(tiles), "up": status.get("up", 0), "down": status.get("down", 0),
                         "states": dict(Counter(x["state"] for x in tiles)),
