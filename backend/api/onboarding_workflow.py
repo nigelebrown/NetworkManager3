@@ -291,7 +291,7 @@ def _locked_ap_rest_bootstrap_allowed(db: Session, profile: OnboardingCredential
         device = _registered_target(db, body.device_id, profile.id, ip)
     except HTTPException:
         return False
-    return bool(re.search(r"(?i)\bAP[-\s]?(?:505|535)\b", device.model or ""))
+    return bool(device.vendor == "Aruba" and re.search(r"(?i)\bAP[-\s]?(?:505|535)\b", device.model or ""))
 
 
 def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tuple[str, str]:
