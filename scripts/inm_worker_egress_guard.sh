@@ -49,7 +49,7 @@ PROFILE="$(getenv INM_PROFILE)"
   die 'Configuration-write lock is not engaged; do not apply this acceptance guard.'
 CIDRS="$(getenv INM_READONLY_DEVICE_CIDRS)"
 # Validate every CIDR before touching firewall state (fail closed).
-VALIDATED="$(python3 -I - "$CIDRS" "$(getenv INM_APPROVED_DEVICE_IPS)" "$(getenv INM_ON_PREMISES_MANAGEMENT)" "$(getenv SIMS_MODE)" <<'PY'
+VALIDATED="$(python3 -I - "$CIDRS" "$(getenv INM_APPROVED_DEVICE_IPS)" "$(getenv INM_ON_PREMISES_MANAGEMENT)" "$(getenv INM_MODE)" <<'PY'
 import ipaddress,sys
 if sys.argv[3:] == ["true", "live"]:
     print("10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16")
