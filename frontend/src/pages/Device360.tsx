@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { COLORS, Gauge, PageHeader, Pill, SourceTag, TT, ago, statusTone } from "../components/viz";
@@ -8,7 +8,7 @@ import { RuleTable } from "./Compliance";
 import Faceplate from "../components/Faceplate";
 import { Notice, btn2, useAction } from "../components/viz";
 import { rw, type DeviceOriginLogs, type DeviceDiagnostic } from "../services/ops";
-import { getSession } from "../services/api";
+import { api, getSession } from "../services/api";
 import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
@@ -20,6 +20,43 @@ const METRICS: Record<string, string[]> = {
   switch: ["ports_up", "port_errors_delta", "max_port_util_percent", "poe_power_w", "cpu_percent", "memory_percent", "temp_max_c"],
 };
 const TABS = ["Performance", "Radios & clients", "Ports", "Incidents", "Best practice", "Changes", "Configuration", "Capabilities", "Operations"] as const;
+
+const AP_TRENDS = [
+  ["cpu_percent", "CPU utilization", "%"],
+  ["memory_percent", "Memory utilization", "%"],
+  ["client_count", "Connected clients", ""],
+  ["util_2g_percent", "2.4 GHz channel utilization", "%"],
+  ["util_5g_percent", "5 GHz channel utilization", "%"],
+] as const;
+
+function ApTrends({ apId }: { apId: number }) {
+  const [hours, setHours] = useState(6);
+  const history = useLoad(() => api.apHistory(apId, hours), [apId, hours], 60000, ["telemetry"]);
+  const data = (history.data ?? []).map(row => ({...row, time: Date.parse(row.ts)}));
+  const timeLabel = (time: number) => new Date(time).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  return <Card title="AP and radio history" right={<select className="rounded border px-2 py-1"
+    aria-label="AP history range" value={hours} onChange={e => setHours(Number(e.target.value))}>
+    {[1, 6, 24].map(h => <option key={h} value={h}>{h} h</option>)}
+  </select>}>
+    <ErrorNote error={history.error} />
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {AP_TRENDS.map(([metric, title, unit]) => {
+        const count = data.filter(row => row[metric] != null).length;
+        return <div className="min-w-0" key={metric}>
+          <h3 className="mb-2 text-sm font-semibold">{title}</h3>
+          {count ? <ResponsiveContainer width="100%" height={155}><LineChart data={data}>
+            <CartesianGrid stroke="#e6edf6" />
+            <XAxis dataKey="time" type="number" domain={["dataMin", "dataMax"]} tickFormatter={timeLabel} minTickGap={30} fontSize={11} />
+            <YAxis width={42} unit={unit} domain={unit ? [0, 100] : [0, "auto"]} fontSize={11} allowDecimals={false} />
+            <Tooltip labelFormatter={timeLabel} />
+            <Line type="linear" dataKey={metric} name={title} unit={unit} stroke={COLORS.info}
+              connectNulls={false} dot={count === 1} isAnimationActive={false} />
+          </LineChart></ResponsiveContainer> : <p className="text-xs text-slate-500">{history.loading ? "Loading readings…" : "No readings for this window."}</p>}
+        </div>;
+      })}
+    </div>
+  </Card>;
+}
 
 export default function Device360() {
   const { id = "" } = useParams();
@@ -107,7 +144,10 @@ export default function Device360() {
           <tbody>{(ins?.clients ?? []).map(c => <tr key={c.id}><td className="font-mono text-xs">{c.mac}<div className="text-[10px] text-slate-500">{c.hostname ?? ""}</div></td><td>{c.ssid ?? "—"}</td>
             <td>{c.band ?? "—"}</td><td>{c.snr_db ?? "—"}</td><td>{c.speed_mbps ?? "—"}</td><td><Pill value={c.quality ?? "—"} tone={c.quality === "poor" ? "poor" : c.quality === "fair" ? "fair" : "good"} /></td></tr>)}</tbody></table></div>
         {ins && !ins.clients.length && <p className="text-sm text-slate-500">No connected clients reported.</p>}
-        <Link className="mt-2 inline-block text-xs text-sky-700" to="/client-journeys">Client connectivity →</Link></Card></div>}
+        <Link className="mt-2 inline-block text-xs text-sky-700" to="/client-journeys">Client connectivity →</Link></Card>
+      {d?.family === "access_point" && d.legacy_ap_id != null &&
+        <div className="lg:col-span-2"><ApTrends apId={d.legacy_ap_id} /></div>}
+    </div>}
     {tab === "Incidents" && <Card title="Incidents on this device">
       <table className="inm-table"><thead><tr><th>Opened</th><th>Severity</th><th>Incident</th><th>Owner</th><th>Ticket</th><th>State</th></tr></thead><tbody>
         {(ins?.incidents ?? []).map(a => <tr key={a.id}><td className="text-xs">{ago(a.opened_at)}</td><td><Pill value={a.severity} tone={a.severity === "critical" ? "poor" : "fair"} /></td>

@@ -122,17 +122,47 @@ class Worker:
             log.info("scheduled collection disabled by INM_SCHEDULED_COLLECTION")
             return
         from backend.infrastructure.collection_runner import run_due
+        from backend.database.models_phases import CollectionPlan
+        from backend.domain.collection import in_window
+        from sqlalchemy import or_, select
+        from datetime import datetime, timezone
+
+        def due_plans():
+            now = datetime.now(timezone.utc)
+            with session_scope() as db:
+                rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
+                                         CollectionPlan.window_end_hour).where(
+                    CollectionPlan.state == "ACTIVE",
+                    or_(CollectionPlan.next_due_at.is_(None),
+                        CollectionPlan.next_due_at <= now),
+                ).order_by(CollectionPlan.next_due_at.asc().nullsfirst(), CollectionPlan.id))
+                return [row.id for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)][:8]
+
+        def poll(plan_id):
+            with session_scope() as db:
+                return run_due(db, store=telemetry_store(), worker=self.instance, plan_ids=[plan_id])
+
         while not self.stop.is_set():
             try:
-                def _run():
-                    with session_scope() as db:
-                        return run_due(db, store=telemetry_store(), worker=self.instance)
-                summary = await asyncio.to_thread(_run)
-                self.stats["collection"] = summary
+                ids = await asyncio.to_thread(due_plans)
+                if ids:
+                    results = await asyncio.gather(*(asyncio.to_thread(poll, i) for i in ids),
+                                                   return_exceptions=True)
+                    summary = {}
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            log.warning("collection plan failed: %s", type(result).__name__)
+                            continue
+                        for key, value in result.items():
+                            summary[key] = summary.get(key, 0) + value
+                    self.stats["collection"] = summary
+                    # Let plans with duplicate leases or closed windows yield before retrying.
+                    if summary.get("events_queued"):
+                        continue
             except Exception as exc:  # never crash the worker on one bad plan
                 log.warning("collection cycle failed: %s", type(exc).__name__)
                 self.stats["last_error"] = f"collection: {type(exc).__name__}"
-            await self._sleep(30)
+            await self._sleep(10)
 
     async def jobs_loop(self) -> None:
         """Scheduled vault captures (5 min), optimizer (5 min, only if the feature is on), analysis (hourly)."""

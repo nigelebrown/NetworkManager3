@@ -14,7 +14,8 @@ export interface Capability { operation: string; status: string; evidence: strin
 export interface Device {
   id: string; source_type: "DEMO" | "REAL"; environment: string; vendor: string; family: "access_point" | "switch";
   model: string | null; serial_number: string; hostname: string | null; firmware: string | null; status: string; adapter: string;
-  site_id: string | null; cluster_id: string | null; legacy_site_id: number | null; last_observed_at: string | null;
+  site_id: string | null; cluster_id: string | null; legacy_site_id: number | null; legacy_ap_id?: number | null;
+  last_observed_at: string | null;
   management_addresses?: string[]; capabilities?: Capability[];
 }
 export interface MetricPoint { observed_at: string; metric_name: string; value: number | null; unit: string;

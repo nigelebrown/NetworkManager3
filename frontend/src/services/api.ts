@@ -91,6 +91,10 @@ export const api = {
   sites: () => request<Site[]>("/sites"),
   createSite: (b: Record<string, unknown>) => request<Site>("/sites", { method: "POST", body: JSON.stringify(b) }),
   testSite: (id: number) => request<{ ok: boolean; error?: string; aps_found?: number; clients_found?: number; firmware?: string; warnings?: string[] }>(`/sites/${id}/test`, { method: "POST" }),
+  apHistory: (id: number, hours: number) => request<{
+    ts: string; client_count: number | null; cpu_percent: number | null; memory_percent: number | null;
+    util_2g_percent: number | null; util_5g_percent: number | null;
+  }[]>(`/aps/${id}/history${q({hours})}`),
   deleteAp: (id: number) => request<{ deleted: boolean }>(`/aps/${id}`, { method: "DELETE" }),
   deleteSite: (id: number) => request<{ deleted: boolean }>(`/sites/${id}`, { method: "DELETE" }),
   pollSite: (id: number) => request<{ ok: boolean; error: string | null }>(`/sites/${id}/poll`, { method: "POST" }),
