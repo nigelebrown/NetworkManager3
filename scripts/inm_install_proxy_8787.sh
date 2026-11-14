@@ -57,6 +57,14 @@ git -C "$ROOT" fetch origin main
 [[ "$(git -C "$ROOT" branch --show-current)" == main ]] || die 'Git checkout is not on main.'
 git -C "$ROOT" merge --ff-only origin/main
 
+# Existing partially deployed workers must not retain public internet egress
+# during rebuild. A clean install applies the same guard after network creation.
+if docker network inspect inm_devices >/dev/null 2>&1; then
+  log 'Restricting the existing worker to authorized private management IPs before rebuild.'
+  bash "$ROOT/scripts/inm_worker_egress_guard.sh" --apply ||
+    die 'Unable to restrict existing Docker worker egress. Refusing to continue.'
+fi
+
 log "Deploying Docker web on 127.0.0.1:$BACKEND."
 export INM_WEB_BIND=127.0.0.1 INM_WEB_PORT="$BACKEND"
 if ! bash "$ROOT/deployment/centos9/install.sh" --mode live; then
