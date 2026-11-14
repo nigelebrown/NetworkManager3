@@ -156,3 +156,37 @@ def test_probe_works_with_writes_enabled(client, admin, monkeypatch):
         "site_name": "HQ", "family": "switch", "hostname": "b1", "serial_number": "BULK-1", "model": "CX 6100",
         "management_ip": "10.60.0.10"}]})
     assert b.status_code in (200, 201), b.text
+
+
+def test_expired_session_never_replays_state_changing_post():
+    """A rejected write is not replayed, even though an idempotent read can reauthenticate."""
+    emu = CxEmulator()
+    writer = emu.writer()
+    writer.open()
+    emu.expire_sessions()
+    with pytest.raises(WriterError) as err:
+        writer.session.request("POST", "/system/vlans", json={"id": 399, "name": "SHOULD_NOT_WRITE"})
+    assert err.value.category == "AUTH_REJECTED"
+    assert "not replayed" in str(err.value)
+    assert emu.writes == 0 and "399" not in emu.state["vlans"]
+    assert emu.logins == 1
+    assert writer.identity()["hostname"] == "emulated-cx"  # a read safely reauthenticates
+    assert emu.logins == 2
+    writer.close()
+
+
+def test_invalid_csrf_never_replays_state_changing_patch():
+    emu = CxEmulator()
+    writer = emu.writer()
+    writer.open()
+    writer.session.csrf = "rotated-out-token"
+    original = emu.state["interfaces"]["1/1/2"].get("description")
+    with pytest.raises(WriterError) as err:
+        writer.session.request("PATCH", "/system/interfaces/1/1/2",
+                               json={"description": "DO_NOT_APPLY"})
+    assert err.value.category == "AUTH_REJECTED"
+    assert emu.writes == 0
+    assert emu.state["interfaces"]["1/1/2"].get("description") == original
+    assert emu.logins == 1
+    assert "csrf-missing:/system/interfaces/1/1/2" in emu.violations
+    writer.close()
