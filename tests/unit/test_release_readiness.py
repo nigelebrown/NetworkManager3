@@ -26,7 +26,7 @@ SHA = "a" * 40
 
 def build(tmp_path):
     root = tmp_path / "evidence"
-    root.mkdir()
+    root.mkdir(exist_ok=True)
     f = root / "artifacts.txt"
     f.write_text("SYNTHETIC TEST FIXTURE — NOT REAL DEVICE ACCEPTANCE", encoding="utf-8")
     digest = hashlib.sha256(f.read_bytes()).hexdigest()
