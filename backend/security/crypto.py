@@ -1,6 +1,8 @@
 """Password hashing, credential encryption, and session tokens."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -50,12 +52,18 @@ def decrypt_secret(token: str) -> str:
 
 
 # ---- session tokens -------------------------------------------------------
-def create_access_token(username: str, role: str) -> tuple[str, datetime]:
+def credential_version(password_hash: str) -> str:
+    """Opaque, server-authenticated credential generation. Never expose a password hash in the JWT."""
+    return hmac.new(get_settings().jwt_secret.encode("utf-8"),
+                    password_hash.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_access_token(username: str, role: str, password_hash: str) -> tuple[str, datetime]:
     s = get_settings()
     expires = datetime.now(timezone.utc) + timedelta(minutes=s.session_minutes)
     token = jwt.encode(
         {"sub": username, "role": role, "exp": expires, "iat": datetime.now(timezone.utc),
-         "jti": uuid.uuid4().hex},
+         "jti": uuid.uuid4().hex, "credential_version": credential_version(password_hash)},
         s.jwt_secret,
         algorithm=JWT_ALG,
     )
