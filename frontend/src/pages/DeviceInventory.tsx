@@ -18,15 +18,20 @@ export default function DeviceInventory() {
   const [needsAttention, setNeedsAttention] = useState(false);
   const query = params.get("q") ?? "";
   const devices = useLoad(v1.devices, [], 30000, ["devices"]);
-  const sites = useLoad(() => v1.physicalSites().catch(() => ({ sites: [] })), [], 60000, ["sites"]);
+  const sites = useLoad(v1.physicalSites, [], 60000, ["sites"]);
   const siteNames = useMemo(() => new Map((sites.data?.sites ?? []).map(s => [s.id, s.name])), [sites.data]);
+  const clusterNames = useMemo(() => new Map((sites.data?.clusters ?? []).map(c => [c.id, c.name])), [sites.data]);
+  const clusterLabel = (id: string | null) =>
+    id ? clusterNames.get(id) ?? "Cluster name unavailable" : "No cluster linked";
   const rows = useMemo(() => (devices.data ?? []).filter(d =>
     (family === "ALL" || d.family === family) &&
     (!needsAttention || (d.source_type === "REAL" && !["ONLINE", "UP"].includes(
       (("state" in d ? String(d.state ?? d.status) : d.status)).toUpperCase()))) &&
     (!site || (d.site_id ?? "unassigned") === site) &&
-    (!query || [d.hostname,d.model,d.serial_number,d.firmware,siteNames.get(d.site_id ?? ""),...(d.management_addresses ?? [])]
-      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query, site, siteNames, needsAttention]);
+    (!query || [d.hostname,d.model,d.serial_number,d.firmware,siteNames.get(d.site_id ?? ""),
+      clusterNames.get(d.cluster_id ?? ""),...(d.management_addresses ?? [])]
+      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))),
+    [devices.data, family, query, site, siteNames, clusterNames, needsAttention]);
   const admin = getSession()?.role === "admin";
   const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
   const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
@@ -299,7 +304,7 @@ export default function DeviceInventory() {
     </div>
     <section className="inm-card"><div className="inm-cardhead"><h2>Registered equipment ({rows.length})</h2>
       <div className="inm-actionbar"><input aria-label="Search inventory" disabled={busy} value={query} onChange={e=>update(e.target.value)}
-        placeholder="Hostname, serial, model or IP" style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}/>
+        placeholder="Hostname, cluster, serial, model or IP" style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}/>
         <select aria-label="Device family" disabled={busy} value={family} onChange={e=>{setFamily(e.target.value); changeSelection([]);}}
           style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}>
           <option value="ALL">All equipment</option><option value="access_point">Access points</option><option value="switch">CX switches</option></select>
@@ -354,7 +359,9 @@ export default function DeviceInventory() {
         <h3 className="font-semibold">Review management access</h3>
         <p>Export exact addresses for a server administrator to approve. Resolve repeated or missing addresses in inventory first.</p>
         <ul className="max-h-48 overflow-auto">{accessRows.map(({device, address, reason}) =>
-          <li key={device.id}>{device.hostname || device.serial_number} · {address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
+          <li key={device.id}>{device.hostname || device.serial_number}
+            {device.family === "access_point" && <> · {clusterLabel(device.cluster_id)}</>}
+            {" · "}{address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
         <button type="button" className={btn} disabled={!approvedAddresses.length} onClick={() => {
           const url = URL.createObjectURL(new Blob([approvedAddresses.join("\n") + "\n"], {type: "text/plain"}));
           const link = document.createElement("a");
@@ -447,8 +454,11 @@ export default function DeviceInventory() {
           <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
             const check = checks[d.id];
+            const device = devices.data?.find(device => device.id === d.id);
             return <tr key={d.id}>
-              <td>{d.name}</td><td>{d.address ?? "Missing"}</td><td>Saved</td>
+              <td>{d.name}{device?.family === "access_point" &&
+                <div className="text-xs text-slate-600">{clusterLabel(device.cluster_id)}</div>}</td>
+              <td>{d.address ?? "Missing"}</td><td>Saved</td>
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
@@ -490,7 +500,7 @@ export default function DeviceInventory() {
       </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
-          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
+          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Cluster</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
       </tr></thead><tbody>{rows.map(d=><tr key={d.id}>
         {admin && <td><input type="checkbox" aria-label={`Select ${d.hostname || d.serial_number}`}
           checked={selected.includes(d.id)} disabled={busy || d.source_type !== "REAL" ||
@@ -500,6 +510,7 @@ export default function DeviceInventory() {
           <div style={{fontSize:10,color:"#7b8a9d"}}>{d.serial_number}</div></td>
         <td>{d.model ?? d.family}<div style={{fontSize:10,color:"#7b8a9d"}}>{d.firmware ?? "Not observed"}</div></td>
         <td>{d.site_id ? siteNames.get(d.site_id) ?? "Assigned site" : "Unassigned"}</td>
+        <td>{d.family === "access_point" ? clusterLabel(d.cluster_id) : "—"}</td>
         <td>{d.management_addresses?.join(", ") || "Not reported"}</td>
         <td><span className={"inm-pill "+(d.status.toLowerCase()==="up"?"good":d.status.toLowerCase()==="down"?"bad":"warn")}>{d.status}</span></td>
         <td><span className={"inm-pill "+(d.source_type==="REAL"?"info":"warn")}>{d.source_type}</span></td>
