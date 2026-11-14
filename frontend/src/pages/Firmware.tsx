@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useEffect, useState } from "react";
 import FwPlanDialog from "../components/FwPlanDialog";
 import { Card, ErrorNote, SimBadge } from "../components/ui";
@@ -44,7 +45,7 @@ export default function Firmware() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Firmware &amp; Certificate</h1>
+      <PageHeader eyebrow="Administration" title="Firmware lifecycle" subtitle="Firmware compliance, certificates and controlled management tasks." />
       <ErrorNote error={err} />
       {msg && <div className="rounded border border-emerald-800 bg-emerald-950/40 p-2 text-sm text-emerald-300">{msg}</div>}
 
