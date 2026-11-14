@@ -1,6 +1,7 @@
 """FastAPI dependencies: authentication, RBAC, rate limiting, audit helper."""
 from __future__ import annotations
 
+import hmac
 import time
 from collections import defaultdict, deque
 from datetime import timezone
@@ -16,7 +17,7 @@ from ..database.models import AuditLog, User
 from ..database.models_inm import AuditChainHead, RevokedToken, SiteAccessGrant
 from ..database.session import get_db
 from .context import Actor, get_actor, get_request_id, session_hash, set_actor, set_scope
-from .crypto import decode_access_token
+from .crypto import credential_version, decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -38,6 +39,12 @@ def resolve_user(db: Session, token: str) -> tuple[User, dict]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session has been signed out")
     user = db.scalar(select(User).where(User.username == payload.get("sub")))
     if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
+    # Resetting or changing the password immediately revokes all older bearer and
+    # WebSocket sessions, across API replicas, without an in-memory revocation cache.
+    # Legacy tokens without a credential version are deliberately invalidated.
+    version = payload.get("credential_version")
+    if not isinstance(version, str) or not hmac.compare_digest(version, credential_version(user.password_hash)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
     return user, payload
 
