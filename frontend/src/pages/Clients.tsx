@@ -12,7 +12,7 @@ export default function Clients() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Wireless clients <span className="text-sm text-slate-500">({data?.length ?? 0})</span></h1>
+        <div><div className="inm-section-label">Monitoring & diagnostics</div><h1 className="inm-pagetitle">Wireless clients <span className="text-sm text-slate-500">({data?.length ?? 0})</span></h1></div>
         <div className="flex flex-wrap gap-2">
           <form onSubmit={(e) => { e.preventDefault(); setSearch(text.trim()); }}>
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search MAC, IP, host, SSID, AP" maxLength={64}
