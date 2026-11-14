@@ -87,6 +87,20 @@ if [[ "$MODE" == live ]]; then
   set_env_value INM_MODE live
   set_env_value INM_PROFILE lab-readonly
   set_env_value INM_DEMO_SIMPLE_LOGIN false
+  # Legacy /etc/inm/inm.env files omit these flags: Compose defaults to locked
+  # (true/false), but the host approval reconciler previously required explicit
+  # entries. Make the effective Docker policy and root-owned host policy agree.
+  # Preserve and REJECT existing overrides rather than silently unlocking or
+  # overwriting an operator decision.
+  if ! grep -q '^INM_DEVICE_WRITE_LOCK=' "$ENV_FILE"; then
+    set_env_value INM_DEVICE_WRITE_LOCK true
+  fi
+  if ! grep -q '^INM_ALLOW_CONFIG_CHANGES=' "$ENV_FILE"; then
+    set_env_value INM_ALLOW_CONFIG_CHANGES false
+  fi
+  [[ "$(env_get INM_DEVICE_WRITE_LOCK)" == true &&
+     "$(env_get INM_ALLOW_CONFIG_CHANGES)" == false ]] ||
+    die "live/lab-readonly installation requires device writes LOCKED; review existing write-policy settings" 8
 else
   set_env_value INM_MODE demo
 fi
