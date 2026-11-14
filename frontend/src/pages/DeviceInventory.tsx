@@ -4,7 +4,8 @@ import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
 import { ApiError, getSession, request } from "../services/api";
-import { onboardingApi } from "../services/onboarding";
+import { onboardingApi, type RestPreflight } from "../services/onboarding";
+import { ops } from "../services/ops";
 import { v1 } from "../services/inm";
 
 /** Inventory view is backed exclusively by the real versioned inventory endpoints. */
@@ -31,7 +32,10 @@ export default function DeviceInventory() {
   const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
     id: string; name: string; address?: string;
   }[] } | null>(null);
-  const [checks, setChecks] = useState<Record<string, {status: string; message: string}>>({});
+  const [checks, setChecks] = useState<Record<string, {status: string; message: string; restState?: RestPreflight["state"]}>>({});
+  const [onboardResults, setOnboardResults] = useState<Record<string, {status: string; message: string}>>({});
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [reviewAccess, setReviewAccess] = useState(false);
   const [profile, setProfile] = useState("");
@@ -63,6 +67,12 @@ export default function DeviceInventory() {
     setFeedback({});
   };
   const [testingBatch, setTestingBatch] = useState(false);
+  const successfulDevices = (result?.devices ?? []).filter(d => checks[d.id]?.restState === "ENABLED");
+  const checkCounts = {
+    successful: successfulDevices.length,
+    failed: (result?.devices ?? []).filter(d => checks[d.id] && checks[d.id].restState !== "ENABLED").length,
+    notTested: (result?.devices ?? []).filter(d => !checks[d.id]).length,
+  };
   // Explicit administrator confirmation is required for each /32 before
   // the host agent opens worker egress. The API never modifies host firewalls.
   const testConnection = async (
@@ -82,6 +92,7 @@ export default function DeviceInventory() {
       const response = await onboardingApi.checkRestApi(profileId, d.address!);
       setChecks(previous => ({...previous, [d.id]: {
         status: labels[response.state] ?? "Checked", message: response.detail,
+        restState: response.state,
       }}));
     };
     const approveAndRetry = async () => {
@@ -187,6 +198,7 @@ export default function DeviceInventory() {
           });
           setResult({profileId: chosen.id, profileName: chosen.name, devices: targets});
           setChecks({});
+          setOnboardResults({});
           changeSelection([]);
           setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
         } catch (e) {
