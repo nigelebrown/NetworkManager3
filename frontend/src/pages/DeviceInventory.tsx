@@ -423,7 +423,8 @@ export default function DeviceInventory() {
         </p>
         <p className="text-sm text-slate-600">
           Already registered devices are not duplicated. Onboard Successful imports a read-only baseline and creates
-          an approved five-minute monitoring plan only for verified devices. See Live monitoring for scheduled collection.
+          a five-minute monitoring plan only for REST-verified devices. Review scheduled collection in
+          {" "}<Link className="inm-link" to="/collection">Live monitoring</Link>.
         </p>
         <div className="inm-tablewrap"><table className="inm-table">
           <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
