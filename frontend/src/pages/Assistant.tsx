@@ -31,7 +31,7 @@ export default function Assistant() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">AI assistant <span className="ml-2 rounded bg-violet-500/20 px-2 py-0.5 text-xs font-medium text-violet-200">local · Ollama</span></h1>
+        <div><div className="inm-section-label">Intelligence & automation</div><h1 className="inm-pagetitle">AI assistant <span className="inm-pill demo">Local · Ollama</span></h1></div>
         <select aria-label="Site" className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={siteId ?? ""} onChange={(e) => setSiteId(e.target.value ? Number(e.target.value) : null)}>
           <option value="">All sites</option>{sites.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
