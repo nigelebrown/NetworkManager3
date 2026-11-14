@@ -290,12 +290,11 @@ def _probe_ap(body: QuickProbe) -> dict:
 def _probe_cx(body: QuickProbe) -> dict:
     """Read-only CX probe through the shared CxSession (form-body login, CSRF, API negotiation — E2E-04/05/09/16)."""
     from ..infrastructure.writers import WriterError
-    from ..infrastructure.writers.aruba_cx import CxSession, PORT_RE
+    from ..infrastructure.writers.aruba_cx import CxSession, PORT_RE, read_cx_system
     try:
         with CxSession(body.management_ip, body.username, body.password, timeout=8.0,
                        verify=get_settings().tls_verify_for(str(body.management_ip))) as s:
-            data = s.request("GET", "/system", params={"attributes": "hostname,platform_name,software_version,"
-                                                                     "serial_number"}).json()
+            data = read_cx_system(s.request, "hostname,platform_name,software_version")
             if not isinstance(data, dict):
                 raise ValueError("Unexpected CX system response")
             ports = s.request("GET", "/system/interfaces", params={"depth": 1, "attributes": "name,link_state,"

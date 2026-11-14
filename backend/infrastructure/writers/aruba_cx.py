@@ -209,6 +209,19 @@ class CxSession:
         self.close()
 
 
+def read_cx_system(request, attributes: str) -> dict:
+    """Read system identity on CX releases that store the serial under the chassis."""
+    try:
+        return request("GET", "/system", params={"attributes": attributes + ",serial_number"}).json()
+    except WriterError as exc:
+        if "HTTP 400" not in str(exc) or "serial_number" not in str(exc):
+            raise
+    system = request("GET", "/system", params={"attributes": attributes}).json()
+    chassis = request("GET", "/system/subsystems/chassis,1", params={"attributes": "product_info"}).json()
+    system["serial_number"] = (chassis.get("product_info") or {}).get("serial_number")
+    return system
+
+
 class ArubaCxWriter:
     family = "switch"
     key = "aruba_cx_10_14"
@@ -281,16 +294,14 @@ class ArubaCxWriter:
 
     # ---- read ------------------------------------------------------------------------------
     def identity(self) -> dict:
-        d = self._req("GET", "/system", params={"attributes": "platform_name,software_version,hostname,"
-                                                              "serial_number"}).json()
+        d = read_cx_system(self._req, "platform_name,software_version,hostname")
         return {"model": d.get("platform_name"), "firmware": d.get("software_version"), "hostname": d.get("hostname"),
                 "serial_number": d.get("serial_number"), **self.protocol()}
 
     def telemetry(self) -> dict:
         """READ-ONLY monitoring: identity, CPU/memory, hardware health, every port (link, speed, VLAN,
         counters), PoE per port and LLDP neighbours. Tolerant of attributes a firmware does not expose."""
-        sysd = self._req("GET", "/system", params={"attributes": "hostname,platform_name,software_version,"
-                                                                  "serial_number,boot_time,subsystems"}).json()
+        sysd = read_cx_system(self._req, "hostname,platform_name,software_version,boot_time,subsystems")
         hw = {"cpu_percent": None, "memory_percent": None, "temp_max_c": None, "fans_total": 0, "fans_failed": 0,
               "psu_total": 0, "psu_failed": 0, "sensors": []}
         try:

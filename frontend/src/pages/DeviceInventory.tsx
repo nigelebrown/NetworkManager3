@@ -38,6 +38,10 @@ export default function DeviceInventory() {
   const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
     id: string; name: string; address?: string;
   }[] } | null>(null);
+  const collectionPlans = useLoad(() => admin && result ? ops.plans() : Promise.resolve([]),
+    [admin, result], 15000);
+  const plansByDevice = useMemo(() => new Map((collectionPlans.data ?? []).map(p => [p.device_id, p])),
+    [collectionPlans.data]);
   const [checks, setChecks] = useState<Record<string, {status: string; message: string;
     restState?: RestPreflight["state"]; clusterManaged?: boolean; ping?: RestPreflight["ping"];
     ssh?: RestPreflight["ssh"]; bootstrapEligible?: boolean}>>({});
@@ -227,7 +231,7 @@ export default function DeviceInventory() {
               throw new Error("Baseline present, but the existing monitoring plan is paused; review it under Live monitoring");
             }
             setOnboardResults(previous => ({...previous, [device.id]: {
-              status: "Onboarded", message: "Baseline present; existing active monitoring plan retained",
+              status: "Onboarded", message: "Baseline present; monitoring plan active",
             }}));
             complete++;
           } else {
@@ -259,6 +263,7 @@ export default function DeviceInventory() {
       setFeedback({message: "Onboarding complete: " + complete + " monitored; " +
         needsAttention + " need attention. Failed and unverified devices remain in inventory for retry."});
       devices.reload();
+      collectionPlans.reload();
     } catch (error) {
       setFeedback({error: error instanceof Error ? error.message : "Unable to load monitoring plans"});
     } finally {
@@ -427,6 +432,7 @@ export default function DeviceInventory() {
           <thead><tr><th>Device</th><th>Management IP</th><th>Reachability</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
             const check = checks[d.id];
+            const plan = plansByDevice.get(d.id);
             const device = devices.data?.find(device => device.id === d.id);
             return <tr key={d.id}>
               <td>{d.name}{device?.family === "access_point" &&
@@ -442,7 +448,12 @@ export default function DeviceInventory() {
               </td>
               <td aria-live="polite">{onboardResults[d.id]
                 ? onboardResults[d.id].status + " · " + onboardResults[d.id].message
-                : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}</td>
+                : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}
+                {plan?.state === "ACTIVE" && <div>{plan.last_failure_at &&
+                  (!plan.last_success_at || Date.parse(plan.last_failure_at) > Date.parse(plan.last_success_at))
+                  ? `Latest collection failed (${plan.last_failure_category ?? "unknown reason"})`
+                  : plan.last_success_at ? "Telemetry collected" : "Awaiting first telemetry collection"}</div>}
+              </td>
               <td><div className="flex flex-wrap gap-2">
                 <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={async () => {
