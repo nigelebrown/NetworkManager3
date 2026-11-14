@@ -14,10 +14,15 @@ export function scoreColor(s: number | null | undefined) {
   return s == null ? COLORS.none : s >= 80 ? COLORS.good : s >= 60 ? COLORS.fair : COLORS.poor;
 }
 
-export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: ReactNode }) {
-  return <div className="flex flex-wrap items-end justify-between gap-3">
-    <div><h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-      {subtitle && <p className="mt-1 max-w-3xl text-sm text-slate-400">{subtitle}</p>}</div>{right}</div>;
+export function PageHeader({ title, subtitle, right, eyebrow }: { title: string; subtitle?: string; right?: ReactNode; eyebrow?: string }) {
+  return <header className="inm-screenhead" data-testid="wireframe-page-header">
+    <div className="inm-screenhead-text">
+      <span className="inm-eyebrow">{eyebrow ?? "INTELLIGENT NETWORK MANAGER"}</span>
+      <h1 className="inm-pagetitle">{title}</h1>
+      {subtitle && <p className="inm-subtitle">{subtitle}</p>}
+    </div>
+    {right && <div className="inm-actionbar">{right}</div>}
+  </header>;
 }
 
 export function Gauge({ value, label, size = 120 }: { value: number | null | undefined; label?: string; size?: number }) {
@@ -48,7 +53,7 @@ export function Donut({ data, height = 180 }: { data: { name: string; value: num
     </ResponsiveContainer></div>
     <ul className="space-y-1 text-sm">{rows.map((d, i) => <li key={d.name} className="flex items-center gap-2">
       <span className="h-2.5 w-2.5 rounded-full" style={{ background: d.color ?? palette[i % palette.length] }} />
-      <span className="text-slate-300">{d.name}</span><span className="font-semibold">{d.value}</span></li>)}</ul>
+      <span className="text-slate-700">{d.name}</span><span className="font-semibold">{d.value}</span></li>)}</ul>
   </div>;
 }
 
@@ -72,7 +77,7 @@ export function DevicePicker({ value, onChange, family, label = "Device" }:
   { value: string; onChange: (id: string, d?: Device) => void; family?: "access_point" | "switch"; label?: string }) {
   const devices = useLoad(() => v1.devices(family), [family], 60000, ["devices"]);
   const list = devices.data ?? [];
-  return <label className="block text-sm text-slate-300">{label}
+  return <label className="block text-sm text-slate-700">{label}
     <select aria-label={label} className={inputCls} value={value} onChange={e => onChange(e.target.value, list.find(d => d.id === e.target.value))}>
       <option value="">Select a device…</option>
       {list.map(d => <option key={d.id} value={d.id}>{d.source_type === "DEMO" ? "[DEMO] " : ""}{d.hostname ?? d.serial_number} — {d.model ?? "?"} ({d.family === "switch" ? "switch" : "AP"})</option>)}
@@ -100,9 +105,12 @@ export function Notice({ error, message }: { error: string | null; message: stri
 }
 
 export function Steps({ steps, current }: { steps: string[]; current: number }) {
-  return <ol className="flex flex-wrap gap-2 text-xs">{steps.map((s, i) =>
-    <li key={s} className={`flex items-center gap-2 rounded-full border px-3 py-1 ${i === current ? "border-sky-500 bg-sky-500/10 text-sky-200" : i < current ? "border-emerald-800 text-emerald-300" : "border-slate-700 text-slate-500"}`}>
-      <span className="font-semibold">{i < current ? "✓" : i + 1}</span>{s}</li>)}</ol>;
+  return <ol className="inm-steps" aria-label="Workflow progress">{steps.map((s, i) =>
+    <li key={s} data-status={i === current ? "current" : i < current ? "done" : "pending"}
+      aria-current={i === current ? "step" : undefined}>
+      <span className="inm-step-number" aria-hidden="true">{i < current ? "✓" : i + 1}</span>
+      <span>{s}</span>
+    </li>)}</ol>;
 }
 
 export const ago = (iso: string | null | undefined) => {
