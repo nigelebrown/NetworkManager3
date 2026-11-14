@@ -359,6 +359,39 @@ def read_device_logs(device_id: str, request: Request, kind: str | None = None,
             "count": len(entries), "hardware_verified": False}
 
 
+@router.get("/devices/{device_id}/diagnostics")
+def read_device_diagnostics(device_id: str, request: Request, kind: str,
+                            db: Session = Depends(get_db),
+                            user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    """Only fixed, documented read-only show commands; never arbitrary user CLI.
+
+    CX REST AnyCLI uses POST /cli solely for the named show command, after
+    checking the device's /cli/commands catalogue. No write API is exposed.
+    """
+    from ..infrastructure.device_diagnostics import CX_SHOW, INSTANT_SHOW
+    d = real_device(db, device_id)
+    choices = CX_SHOW if d.family == "switch" else INSTANT_SHOW if d.family == "access_point" else {}
+    if kind not in choices:
+        raise HTTPException(422, f"Unsupported read-only diagnostic. Choose: {', '.join(choices) or 'none'}.")
+    try:
+        w, env = X.writer_for(db, d)
+        w.open()
+        try:
+            if not hasattr(w, "read_diagnostics"):
+                raise WriterError("UNSUPPORTED", "No diagnostic reader for this device.")
+            result = w.read_diagnostics(kind=kind)
+        finally:
+            w.close()
+    except WriterError as exc:
+        audit(db, "device_diagnostic_read_failed", username=user.username, target=d.id,
+              detail=f"diagnostic={kind} category={exc.category}", request=request, success=False)
+        raise HTTPException(409 if exc.category in ("UNSUPPORTED", "TARGET_NOT_ALLOWED", "PRECONDITION")
+                            else 502, f"Diagnostic request refused: {exc.category}") from None
+    audit(db, "device_diagnostic_read", username=user.username, target=d.id,
+          detail=f"kind={kind} environment={env}", request=request)
+    return {"device_id": d.id, "environment": env, "hardware_verified": False, "device_writes": 0, **result}
+
+
 # ---- INM alerts, thresholds, maintenance windows ---------------------------------------------------
 def _alert_public(a) -> dict:
     return {"id": a.id, "device_id": a.device_id, "site_id": a.site_id, "rule_id": a.rule_id, "severity": a.severity,
