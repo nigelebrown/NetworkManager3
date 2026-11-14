@@ -7,6 +7,8 @@ never the printer configuration, spool or firmware. No print contents/job metada
 from __future__ import annotations
 
 import asyncio
+import json
+from uuid import uuid4
 from datetime import datetime, timezone
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Network
@@ -18,15 +20,16 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..database.models import User
+from ..database.models import AppSetting, User
 from ..database.models_printer import (
     PrinterDevice, PrinterMeterReading, PrinterSupplyReading,
     PrinterConsumableCycle, PrinterMaintenanceEvent,
 )
 from ..database.session import get_db
+from ..security.crypto import decrypt_secret, encrypt_secret
 from ..security.deps import audit, require_role
 from ..printers.analytics import cycle_analysis, low_supply_alert, meter_change, compare_model_cycles
-from ..printers.snmp import permitted_target, read_snmpv3
+from ..printers.snmp import permitted_target, read_printer, read_snmpv3
 
 router = APIRouter(prefix="/api/printers", tags=["printer-intelligence"])
 admin_only = Depends(require_role("admin"))
@@ -235,6 +238,77 @@ def compare_models(db: Session = Depends(get_db), user: User = admin_only):
                       .where(PrinterConsumableCycle.status == "closed")).all()
     return {"results": compare_model_cycles([(model, c) for model, c in rows]),
             "disclaimer": "Comparable cost only, never a procurement recommendation. Require ≥3 valid cycles per model; workloads and colours may differ."}
+
+
+PROFILE_PREFIX = "printer-snmp:"
+
+
+class PrinterProfile(BaseModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r"\S")
+    version: Literal["1", "2c", "3"]
+    community: str = Field(default="", max_length=200)
+    username: str = Field(default="", max_length=100)
+    auth_passphrase: str = Field(default="", max_length=200)
+    privacy_passphrase: str = Field(default="", max_length=200)
+
+
+class ProfileTarget(BaseModel):
+    management_ip: IPv4Address
+
+
+def _profile_info(row: AppSetting) -> dict:
+    return {"id": row.key.removeprefix(PROFILE_PREFIX), "name": row.value["name"],
+            "version": row.value["version"]}
+
+
+@router.get("/credential-profiles")
+def printer_profiles(db: Session = Depends(get_db), admin: User = admin_only):
+    rows = db.scalars(select(AppSetting).where(AppSetting.key.startswith(PROFILE_PREFIX)))
+    return sorted((_profile_info(row) for row in rows), key=lambda profile: profile["name"].casefold())
+
+
+@router.post("/credential-profiles", status_code=201)
+def create_printer_profile(body: PrinterProfile, request: Request, db: Session = Depends(get_db),
+                           admin: User = admin_only):
+    if body.version == "3":
+        if not body.username.strip() or min(len(body.auth_passphrase), len(body.privacy_passphrase)) < 8:
+            raise HTTPException(422, "SNMPv3 requires a username and both passphrases of at least 8 characters")
+        secrets = [body.username, body.auth_passphrase, body.privacy_passphrase]
+    else:
+        if not body.community.strip():
+            raise HTTPException(422, "Enter the read-only community")
+        secrets = [body.community]
+    row = AppSetting(key=PROFILE_PREFIX + str(uuid4()), updated_by=admin.username,
+                     value={"name": body.name.strip(), "version": body.version,
+                            "encrypted": encrypt_secret(json.dumps(secrets))})
+    db.add(row)
+    audit(db, "printer_profile_created", username=admin.username, target=row.key,
+          detail="Printer credential profile saved", request=request)
+    db.commit()
+    return _profile_info(row)
+
+
+@router.post("/credential-profiles/{profile_id}/test")
+async def test_printer_profile(profile_id: str, body: ProfileTarget, request: Request,
+                               db: Session = Depends(get_db), admin: User = admin_only):
+    host = str(body.management_ip)
+    if not permitted_target(host):
+        raise HTTPException(403, "IP is outside approved printer management ranges")
+    row = db.get(AppSetting, PROFILE_PREFIX + profile_id)
+    if row is None:
+        raise HTTPException(404, "Printer credential profile not found")
+    try:
+        secrets = json.loads(decrypt_secret(row.value["encrypted"]))
+        result = await asyncio.wait_for(read_printer(host, row.value["version"], *secrets), timeout=15)
+    except Exception as exc:
+        audit(db, "printer_profile_test", username=admin.username, target=host,
+              detail=f"Printer check failed ({type(exc).__name__})", success=False, request=request)
+        db.commit()
+        raise HTTPException(502, "Printer check failed. Check SNMP version, credentials and reachability.") from None
+    audit(db, "printer_profile_test", username=admin.username, target=host,
+          detail="Printer SNMP check completed", request=request)
+    db.commit()
+    return result
 
 
 @router.post("/probe-snmpv3")
