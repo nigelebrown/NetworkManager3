@@ -150,6 +150,18 @@ def _await_loki_startup(max_wait_s: float = 40.0) -> bool:
         time.sleep(min(2.0, remaining))
 
 
+def _acceptance_profile_safe(s) -> bool:
+    """Only the approved demo/live read-only profiles pass release acceptance.
+
+    Never accept an unsupported profile or any permissive device write gate.
+    """
+    return bool(
+        (s.inm_profile, s.mode) in {("demo", "demo"), ("lab-readonly", "live")}
+        and s.device_write_lock and not s.allow_config_changes
+        and not s.device_writes_permitted
+    )
+
+
 def cmd_verify(a) -> int:
     import httpx
     from .application.health import collect
@@ -181,9 +193,7 @@ def cmd_verify(a) -> int:
         return r.status_code == 403 and "device_write_locked" in r.text, f"HTTP {r.status_code}"
     _check(results, "safety:device-write-lock", write_lock)
     _check(results, "safety:profile", lambda: (
-        (s.inm_profile, s.mode) in {("demo", "demo"), ("lab-readonly", "live")}
-        and s.device_write_lock and not s.allow_config_changes
-        and not s.device_writes_permitted,
+        _acceptance_profile_safe(s),
         f"profile={s.inm_profile} mode={s.mode} writes={s.device_writes_permitted}"
         f" lock={s.device_write_lock} allow_changes={s.allow_config_changes}"))
 
