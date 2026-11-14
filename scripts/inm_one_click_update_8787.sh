@@ -16,9 +16,14 @@ docker compose version >/dev/null || { echo '[INM] Docker Compose is missing.' >
   { echo '[INM] Local source modifications found. Refusing to overwrite them.' >&2; exit 2; }
 [[ "$(git -C "$ROOT" branch --show-current)" == main ]] ||
   { echo '[INM] Source checkout must be on main.' >&2; exit 2; }
-echo '[INM] Fetching the latest verified main (fast-forward only).'
-git -C "$ROOT" fetch origin main
-git -C "$ROOT" merge --ff-only origin/main
+echo '[INM] Safely synchronizing GitHub main; diverged server commits are backed up first.'
+SYNC="$(mktemp /tmp/inm-safe-sync.XXXXXXXX.sh)"
+trap 'rm -f -- "$SYNC"' EXIT
+curl --fail --silent --show-error --location \
+  https://raw.githubusercontent.com/nigelebrown/NetworkManager3/main/scripts/inm_safe_sync_main.sh -o "$SYNC"
+bash "$SYNC" "$ROOT"
+rm -f -- "$SYNC"
+trap - EXIT
 
 if [[ -e "$SITE" ]]; then
   [[ -f "$SITE" && ! -L "$SITE" ]] ||
