@@ -58,7 +58,7 @@ export function parseDeviceCsv(text: string): InputRow[] {
   const names = data[0].map(x => x.trim().toLowerCase());
   if (new Set(names).size !== names.length) throw new Error("CSV has duplicate column names.");
   const central = names.includes("device name") && names.includes("serial") && names.includes("ip address");
-  const exportFamily = names.includes("virtual controller") ? "access_point"
+  const exportFamily: InputRow["family"] | null = names.includes("virtual controller") ? "access_point"
     : names.includes("uplink ports") || names.includes("nae aggregate status") ? "switch" : null;
   if (central && !exportFamily) throw new Error("Could not identify this Aruba export as an AP or switch list.");
   for (const key of central ? ["device name", "serial", "model"] : required) if (!names.includes(key))
@@ -66,13 +66,13 @@ export function parseDeviceCsv(text: string): InputRow[] {
   if (data.length < 2) throw new Error("CSV has no device rows.");
   if (data.length > 1001) throw new Error("Review up to 1,000 devices per CSV.");
   const seen = new Set<string>();
-  return data.slice(1).map((cells, n) => {
+  return data.slice(1).map((cells, n): InputRow => {
     if (cells.length !== names.length) throw new Error("Row " + (n + 2) + ": incorrect number of columns.");
     const row: Record<string, string> = {};
     names.forEach((key, i) => { row[key] = cells[i] ?? ""; });
     if (central && exportFamily) {
       const clean = (value?: string) => value && !["-", "--", "n/a"].includes(value.toLowerCase()) ? value : "";
-      const mapped = {
+      const mapped: Omit<InputRow, "status" | "metrics"> = {
         family: exportFamily, site_name: clean(row.site), hostname: clean(row["device name"]),
         serial_number: clean(row.serial), model: clean(row.model),
         management_ip: clean(row["ip address"]) || null, firmware: clean(row["firmware version"]) || null,
