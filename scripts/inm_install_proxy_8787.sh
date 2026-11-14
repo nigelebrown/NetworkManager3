@@ -59,8 +59,12 @@ git -C "$ROOT" merge --ff-only origin/main
 
 log "Deploying Docker web on 127.0.0.1:$BACKEND."
 export INM_WEB_BIND=127.0.0.1 INM_WEB_PORT="$BACKEND"
-bash "$ROOT/deployment/centos9/install.sh" --mode live ||
-  die 'Docker INM installation failed; proxy was NOT changed.'
+if ! bash "$ROOT/deployment/centos9/install.sh" --mode live; then
+  log 'Docker INM installation failed; showing recent AI and Loki logs for diagnosis.'
+  docker logs --tail 35 inm-ai-1 2>&1 || true
+  docker logs --tail 35 inm-loki-1 2>&1 || true
+  die 'Docker INM installation failed; proxy was NOT changed. Databases and volumes were preserved.'
+fi
 [[ -f /etc/inm/tls/tls.crt ]] || die 'INM local TLS certificate was not created.'
 
 install -d -m 0755 /etc/pki/tls/certs /etc/pki/tls/private
