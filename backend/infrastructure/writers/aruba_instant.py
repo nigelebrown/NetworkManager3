@@ -132,6 +132,25 @@ class ArubaInstantWriter:
         except ArubaError as exc:
             raise WriterError("DEVICE_REJECTED", str(exc)[:200]) from None
 
+    def read_diagnostics(self, *, kind: str) -> dict:
+        """Select, never interpolate, a documented read-only Instant show command."""
+        from ..device_diagnostics import INSTANT_SHOW, safe_output
+        from ...aruba.errors import ArubaError
+        if kind not in INSTANT_SHOW:
+            raise WriterError("UNSUPPORTED", "This Instant diagnostic is not on the read-only allowlist.")
+        cmd = INSTANT_SHOW[kind]
+        try:
+            data = self.client.show(cmd)
+        except ArubaError as exc:
+            raise WriterError("DEVICE_REJECTED", f"Instant diagnostic failed: {type(exc).__name__}") from None
+        if not isinstance(data, dict):
+            raise WriterError("PARSE_ERROR", "Instant returned an unexpected diagnostic reply.")
+        result = data.get("Command output") or data.get("command output") or data.get("output")
+        if result is None:
+            raise WriterError("PARSE_ERROR", "Instant did not return diagnostic output.")
+        return {"kind": kind, "command": cmd, "output": safe_output(result),
+                "source": "INSTANT_REST_SHOW"}
+
     def read_audit_logs(self, *, kind: str = "system", limit: int = 50) -> list[dict]:
         """Read a bounded Instant VC log view via the documented GET show-cmd API.
 
