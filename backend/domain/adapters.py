@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 OPERATIONS = ("probe_identity", "get_capabilities", "collect", "read_config_summary",
-              "read_audit_logs", "backup_full_config", "validate_change", "apply_change",
+              "read_audit_logs", "run_diagnostics", "backup_full_config", "validate_change", "apply_change",
               "readback", "rollback", "restore_full_config")
 WRITE_OPERATIONS = {"apply_change", "rollback", "restore_full_config"}
 # Software implementation state (what the code does). Hardware certification is a SEPARATE fact recorded per
@@ -53,7 +53,8 @@ REGISTRY: tuple[AdapterSpec, ...] = (
                 "8.12.99",
                 {"probe_identity": "IMPLEMENTED", "get_capabilities": "IMPLEMENTED",
                  "collect": "IMPLEMENTED", "read_config_summary": "IMPLEMENTED",
-                 "read_audit_logs": "IMPLEMENTED", "backup_full_config": "IMPLEMENTED",
+                 "read_audit_logs": "IMPLEMENTED", "run_diagnostics": "IMPLEMENTED",
+                 "backup_full_config": "IMPLEMENTED",
                  "validate_change": "IMPLEMENTED", "apply_change": "IMPLEMENTED",
                  "readback": "IMPLEMENTED", "rollback": "IMPLEMENTED_INVERSE",
                  "restore_full_config": "GUIDED"},
@@ -67,7 +68,8 @@ REGISTRY: tuple[AdapterSpec, ...] = (
                 "10.09.0000", "10.15.9999",
                 {"probe_identity": "IMPLEMENTED", "get_capabilities": "IMPLEMENTED",
                  "collect": "IMPLEMENTED", "read_config_summary": "IMPLEMENTED",
-                 "read_audit_logs": "IMPLEMENTED", "backup_full_config": "IMPLEMENTED",
+                 "read_audit_logs": "IMPLEMENTED", "run_diagnostics": "IMPLEMENTED",
+                 "backup_full_config": "IMPLEMENTED",
                  "validate_change": "IMPLEMENTED", "apply_change": "IMPLEMENTED",
                  "readback": "IMPLEMENTED", "rollback": "IMPLEMENTED", "restore_full_config": "IMPLEMENTED"},
                 "UNCERTIFIED",
