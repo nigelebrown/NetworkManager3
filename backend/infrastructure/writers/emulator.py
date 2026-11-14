@@ -56,7 +56,8 @@ class CxEmulator:
                            for i in range(1, ports + 1)},
         }
         self.cli_commands = ["show port-access clients", "show power-over-ethernet",
-                             "show qos trust", "show lacp interfaces"]
+                             "show qos trust", "show lacp interfaces",
+                             "show interface transceiver detail", "show interface dom"]
         if "6200" in model:
             self.cli_commands.append("show vsf detail")
         self.checkpoints: dict[str, dict] = {}
