@@ -1,3 +1,4 @@
+import InventoryImport from "./pages/InventoryImport";
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { getSession } from "./services/api";
@@ -88,6 +89,7 @@ export default function App() {
         <Route path="ai-learning" element={<AiLearning />} />
         <Route path="phase4-insights" element={<Phase4Insights />} />
         <Route path="onboarding" element={<GuidedOnboarding />} />
+        <Route path="onboarding/import" element={<InventoryImport />} />
         <Route path="onboarding/manual" element={<DeviceIntake />} />
         <Route path="devices/:id/config" element={<DeviceConfig />} />
         <Route path="config-templates" element={<ConfigTemplates />} />
