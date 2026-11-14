@@ -72,6 +72,37 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
 
         page.goto(URL + "/")
         page.get_by_role("heading", name="Network command center").wait_for()
+        # UX approval: every wireframe navigation destination must render an
+        # accessible page heading using the real React app. These screens may
+        # show limited/CONCEPT status where corresponding services are not ready.
+        wireframe_routes = [
+            "/", "/executive", "/system", "/sites", "/inventory", "/aps",
+            "/switches", "/clients", "/printers", "/onboarding", "/discovery",
+            "/collection", "/rf-health", "/port-health", "/client-journeys",
+            "/device-alerts", "/topology", "/logs", "/device-360",
+            "/config-templates", "/ssid-policies", "/switch-config",
+            "/changes", "/approvals", "/deployments", "/vault", "/replace",
+            "/certification", "/optimization", "/recommendations",
+            "/predictive", "/analytics", "/compliance", "/accountability",
+            "/audit", "/users", "/credentials", "/notifications",
+            "/firmware", "/integrations", "/data", "/platform",
+        ]
+        assert len(wireframe_routes) == 42
+        for route in wireframe_routes:
+            page.goto(URL + route)
+            page.locator("#inm-main-content h1").first.wait_for(timeout=12000)
+            assert page.locator("#inm-main-content").inner_text().strip(), route
+        page.goto(URL + "/")
+        page.get_by_role("heading", name="Network command center").wait_for()
+        # Verify design tokens from approved HTML: navy sidebar, light canvas.
+        colors = page.evaluate("""() => ({
+            sidebar: getComputedStyle(document.querySelector('.inm-sidebar')).backgroundColor,
+            canvas: getComputedStyle(document.querySelector('.inm-body')).backgroundColor,
+            cards: getComputedStyle(document.querySelector('.inm-card')).backgroundColor
+        })""")
+        assert colors["sidebar"] == "rgb(16, 32, 57)", colors
+        assert colors["canvas"] == "rgb(244, 247, 250)", colors
+        assert colors["cards"] == "rgb(255, 255, 255)", colors
         token = page.evaluate("JSON.parse(sessionStorage.getItem('sims_session')).access_token")
         auth = {"Authorization": "Bearer " + token}
         # Preserve the original CI cross-restart acceptance check: import two
