@@ -39,6 +39,23 @@ bash "$ROOT/deployment/centos9/verify.sh"
 echo '[INM] Checking the GUI on the server management IP.'
 curl -kfsS --max-time 20 https://172.17.71.20:8787/healthz >/dev/null ||
   { echo '[INM] Application may be healthy but reverse proxy is not reachable at 172.17.71.20:8787.' >&2; exit 1; }
-echo '[INM] PASS: https://172.17.71.20:8787/'
-echo '[INM] Open Device inventory -> assign an AP-Standard profile -> Test connection.'
-echo '[INM] Admin-confirmed exact-IP /32 approvals are reconciled by the host timer; device writes remain locked.'
+echo '[INM] Checking the deployed web bundle for the exact-IP approval control (v2).'
+docker compose --project-name inm --project-directory "$ROOT" -f "$ROOT/compose.yaml" \
+  --env-file /etc/inm/inm.env exec -T web sh -c \
+  "grep -rlF 'data-inm-approval-action' /usr/share/nginx/html/assets >/dev/null" || {
+  echo '[INM] FAIL: running web container is still serving the old GUI. Check the frontend image build and container recreation.' >&2
+  exit 1
+}
+echo '[INM] Verifying host-side administrator approval service is enabled.'
+systemctl is-active --quiet inm-management-approval.timer || {
+  echo '[INM] FAIL: host-side management approval timer is inactive.' >&2
+  systemctl status inm-management-approval.timer --no-pager || true
+  exit 1
+}
+echo "[INM] PASS: current Git commit $(git -C "$ROOT" rev-parse --short HEAD)"
+echo '[INM] PASS: deployed web bundle includes the administrator Approve IP & Test control.'
+echo '[INM] PASS: host approval timer is active.'
+echo '[INM] PASS: https://172.17.71.20:8787/inventory'
+echo '[INM] Hard-refresh the browser (Ctrl+Shift+R) after update to discard old JavaScript.'
+echo '[INM] In Device inventory -> assign AP-Standard -> Approve IP & Test for a /32 target.'
+echo '[INM] Device writes remain locked; no automatic subnet expansion.'
