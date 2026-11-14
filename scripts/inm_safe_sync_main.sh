@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Synchronize the installed checkout to GitHub main without losing local commits.
-# On divergence, preserve old main in an independently verifiable bundle + backup ref.
+# SERVER FIRST: never replace local server commits with remote main.
+# On divergence, preserve local main in a verifiable bundle + backup ref then STOP.
 # Does not touch Docker containers, persistent volumes, credentials, IP or SSH.
 set -Eeuo pipefail
 umask 077
@@ -48,8 +48,8 @@ else
     die 'Backup ref/bundle verification failed; branch unchanged.'
   say "Preserved old branch: $REF"
   say "Preserved offline Git bundle: $BUNDLE"
-  say 'Aligning clean checkout to origin/main; old commits are backed up.'
-  git reset --hard "$TARGET"
+  say "SERVER FIRST: local main $BEFORE is authoritative; remote main $TARGET will NOT be deployed."
+  die "Diverged history preserved in $BUNDLE. Review server commits and reconcile into GitHub via a separate branch/PR; deployment stopped with the working server checkout unchanged."
 fi
 [[ "$(git rev-parse HEAD)" == "$TARGET" ]] ||
   die 'Checkout did not reach origin/main. Deployment must not continue.'
