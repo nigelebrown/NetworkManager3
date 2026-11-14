@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Card, ErrorNote, Stat, fmtTime } from "../components/ui";
@@ -56,7 +57,7 @@ export function Printers() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-semibold">Printer Intelligence</h1>
+        <PageHeader eyebrow="Sites & inventory" title="Printers" subtitle="Printer fleet inventory, observed consumables, page counters and read-only diagnostics. Predictions remain rule-based." />
         <p className="mt-1 text-sm text-slate-400">
           HP, Epson, Kyocera, Sharp and other printer models. Equipment stays read-only.
           Manually entered measurements are never presented as automatically collected values.
