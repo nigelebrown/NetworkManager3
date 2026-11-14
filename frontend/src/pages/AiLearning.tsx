@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { DemoBadge, PlannedNotice, btnPrimary } from "../components/inm";
@@ -22,7 +23,7 @@ export default function AiLearning() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">AI learning centre</h1>
+        <PageHeader eyebrow="Intelligence & automation" title="Rule-based network intelligence" subtitle="Evidence-based analysis and versioned rules; not a trained predictive model." />
         {canRun && <button className={btnPrimary} onClick={analyze} disabled={busy}>{busy ? "Analysing…" : "Analyze now"}</button>}
       </div>
       <div className="rounded-lg border border-sky-900/60 bg-sky-950/30 p-3 text-sm text-sky-100">
