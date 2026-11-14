@@ -46,6 +46,7 @@ import LearningCentre from "./pages/LearningCentre";
 import Optimization from "./pages/Optimization";
 import Platform from "./pages/Platform";
 import DataManagement from "./pages/DataManagement";
+import WireframeWorkspace from "./pages/WireframeWorkspaces";
 
 function Protected({ children }: { children: JSX.Element }) {
   const s = getSession();
@@ -111,6 +112,19 @@ export default function App() {
         <Route path="optimization" element={<Optimization />} />
         <Route path="platform" element={<Platform />} />
         <Route path="data" element={<DataManagement />} />
+        {/* Approved full-system wireframe workspaces: reuse existing APIs and change safeguards. */}
+        <Route path="rf-health" element={<WireframeWorkspace kind="rf" />} />
+        <Route path="port-health" element={<WireframeWorkspace kind="ports" />} />
+        <Route path="client-journeys" element={<WireframeWorkspace kind="journeys" />} />
+        <Route path="approvals" element={<WireframeWorkspace kind="approvals" />} />
+        <Route path="recommendations" element={<WireframeWorkspace kind="recommendations" />} />
+        <Route path="predictive" element={<WireframeWorkspace kind="predictive" />} />
+        <Route path="analytics" element={<WireframeWorkspace kind="analytics" />} />
+        <Route path="credentials" element={<WireframeWorkspace kind="credentials" />} />
+        <Route path="integrations" element={<WireframeWorkspace kind="integrations" />} />
+        <Route path="switch-config" element={<WireframeWorkspace kind="switchconfig" />} />
+        <Route path="ssid-policies" element={<WireframeWorkspace kind="ssid" />} />
+        <Route path="device-360" element={<WireframeWorkspace kind="device360" />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
