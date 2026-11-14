@@ -12,6 +12,8 @@ CX_SHOW: dict[str, str] = {
     "poe": "show power-over-ethernet",
     "qos": "show qos trust",
     "lacp": "show lacp interfaces",
+    "transceivers": "show interface transceiver detail",
+    "optical_dom": "show interface dom",
 }
 # Only preexisting read-only Instant REST show commands (or log category) are used.
 INSTANT_SHOW: dict[str, str] = {
