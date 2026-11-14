@@ -125,7 +125,7 @@ def enable_rest_api(host: str, username: str, password: str, expected_fingerprin
         and not policy.device_writes_permitted
     )
     if not policy.device_writes_permitted and not safe_locked_bootstrap:
-        raise ArubaUnsupportedError("Configuration writes are locked; AP REST-only bootstrap requires an explicit authorized device approval.")
+        raise ArubaUnsupportedError("Configuration changes are disabled (write lock engaged); AP REST-only bootstrap requires an explicit authorized device approval.")
     t = _open_transport(host, port, timeout)
     try:
         actual = fingerprint(t.get_remote_server_key())
