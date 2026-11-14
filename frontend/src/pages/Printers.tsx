@@ -38,15 +38,12 @@ export function Printers() {
     manufacturer: "HP", model: "", serial_number: "", hostname: "", management_ip: "",
     area: "", division: "", branch: "", station: "", section_unit: "", building: "",
   });
-  const [probe, setProbe] = useState({ management_ip: "", username: "", auth_passphrase: "", privacy_passphrase: "" });
-  const [range, setRange] = useState("");
   const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[] } | null>(null);
   const profiles = useLoad(() => request<PrinterProfile[]>(profilePath), [], 0);
   const [credentials, setCredentials] = useState({name: "", version: "3"});
   const [profileId, setProfileId] = useState("");
   const [target, setTarget] = useState("");
   const [profileResult, setProfileResult] = useState<Record<string, unknown> | null>(null);
-  const [probeResult, setProbeResult] = useState<Record<string, unknown> | null>(null);
   const [analysis, setAnalysis] = useState<PrinterAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,58 +80,11 @@ export function Printers() {
         <button className={editing || !snmp ? btn : sub} aria-expanded={editing} aria-controls="printer-registration"
           onClick={() => { setEditing(!editing); setSnmp(false); }}> {editing ? "Close registration" : "Add a printer"} </button>
         <button className={snmp ? btn : sub} aria-expanded={snmp} aria-controls="printer-discovery"
-          onClick={() => { setSnmp(!snmp); setEditing(false); }}>Discover printers / test SNMPv3</button>
+          onClick={() => { setSnmp(!snmp); setEditing(false); }}>Discover printers</button>
         <button className={sub} disabled={busy} onClick={() => action(async () => { setAnalysis(await printerApi.analyse()); }, "Rule-based analysis completed.")}>Analyse now</button>
       </div>
       <ErrorNote error={error ?? inventory.error ?? stats.error} />
       {message && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-300">{message}</p>}
-      <Card title="Printer credential profiles">
-        <ErrorNote error={profiles.error} />
-        <form className="flex flex-wrap items-end gap-3" onSubmit={e => {
-          e.preventDefault();
-          const form = e.currentTarget;
-          const body = {...Object.fromEntries(new FormData(form)), ...credentials};
-          action(async () => {
-            try {
-              const saved = await request<PrinterProfile>(profilePath, {method: "POST", body: JSON.stringify(body)});
-              setProfileId(saved.id);
-              setCredentials(previous => ({...previous, name: ""}));
-              profiles.reload();
-            } finally {
-              form.reset();
-            }
-          }, "Printer credential profile saved.");
-        }}>
-          <label>Profile name<input className={fieldStyle} required maxLength={100} value={credentials.name}
-            onChange={e => setCredentials({...credentials, name: e.target.value})} /></label>
-          <label>SNMP version<select className={fieldStyle} value={credentials.version}
-            onChange={e => setCredentials({...credentials, version: e.target.value})}>
-            <option value="1">SNMPv1</option><option value="2c">SNMPv2c</option><option value="3">SNMPv3 (SHA-256 / AES-128)</option>
-          </select></label>
-          {credentials.version === "3" ? <>
-            <label>Username<input className={fieldStyle} name="username" required maxLength={100} /></label>
-            <label>Authentication passphrase<input className={fieldStyle} name="auth_passphrase" type="password" required minLength={8} maxLength={200} /></label>
-            <label>Privacy passphrase<input className={fieldStyle} name="privacy_passphrase" type="password" required minLength={8} maxLength={200} /></label>
-          </> : <label>Read-only community<input className={fieldStyle} name="community" type="password" required maxLength={200} /></label>}
-          <button className={btn} disabled={busy}>Save profile</button>
-        </form>
-        <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={e => {
-          e.preventDefault();
-          setProfileResult(null);
-          action(async () => {
-            setProfileResult(await request<Record<string, unknown>>(`${profilePath}/${encodeURIComponent(profileId)}/test`, {
-              method: "POST", body: JSON.stringify({management_ip: target.trim()}),
-            }));
-          }, "Printer check completed.");
-        }}>
-          <label>Saved profile<select className={fieldStyle} required value={profileId} onChange={e => setProfileId(e.target.value)}>
-            <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version})</option>)}
-          </select></label>
-          <label>Printer management IP<input className={fieldStyle} required value={target} onChange={e => setTarget(e.target.value)} /></label>
-          <button className={sub} disabled={busy || !profileId}>Check printer</button>
-        </form>
-        {profileResult && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(profileResult, null, 2)}</pre>}
-      </Card>
       <div id="printer-registration" hidden={!editing}>{editing && <Card title="Register a physical printer">
         <p className="mb-3 text-xs text-slate-400">Step 1: identify equipment. Step 2: assign JCF location. Step 3: save. Step 4: open the printer to enter actual readings.</p>
         <form onSubmit={submit} className="space-y-3">
@@ -165,40 +115,39 @@ export function Printers() {
           <button className={btn} disabled={busy}>Register printer</button>
         </form>
       </Card>}</div>
-      <div id="printer-discovery" hidden={!snmp}>{snmp && <Card title="Discover printers with SNMPv3">
-        <p className="mb-3 text-xs text-slate-400">Enter a server-approved private IPv4 address or CIDR up to /24. Use read-only SNMPv3 SHA-256 and AES-128 credentials. Discovery looks for Printer-MIB responses.</p>
-        <form onSubmit={e => {
+      <div id="printer-discovery" hidden={!snmp}>{snmp && <Card title="Discover printers">
+        <ErrorNote error={profiles.error} />
+        <p>Choose a saved SNMP profile and enter an approved IPv4 address or CIDR from /24 to /32.</p>
+        <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={e => {
           e.preventDefault();
-          setDiscovery(null); setProbeResult(null);
+          setProfileResult(null); setDiscovery(null);
           action(async () => {
-            const target = range.trim();
-            const { username, auth_passphrase, privacy_passphrase } = probe;
-            const credentials = { username, auth_passphrase, privacy_passphrase };
-            try {
-              if (target.includes("/")) {
-                setDiscovery(await printerApi.discover({ ...credentials, management_range: target }));
-              } else {
-                setProbeResult(await printerApi.probe({ ...credentials, management_ip: target }));
-              }
-            } finally {
-              setProbe(p => ({ ...p, auth_passphrase: "", privacy_passphrase: "" }));
+            const scope = target.trim();
+            const address = scope.split("/")[0];
+            if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address) ||
+                address.split(".").some(part => Number(part) > 255 || String(Number(part)) !== part) ||
+                (scope.includes("/") && !/^\/(?:2[4-9]|3[0-2])$/.test(scope.slice(address.length)))) {
+              throw new Error("Enter an IPv4 address or an approved CIDR from /24 to /32.");
             }
-          }, "Read-only discovery completed.");
-        }} className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="text-sm">Management IP or CIDR
-              <input required className={fieldStyle} value={range} onChange={e => setRange(e.target.value)} placeholder="10.190.1.0/24" />
-            </label>
-            {(["username", "auth_passphrase", "privacy_passphrase"] as const).map(k => (
-              <label className="text-sm" key={k}>{({ management_ip: "Printer management IP", username: "SNMPv3 username",
-                auth_passphrase: "Authentication passphrase (SHA-256)", privacy_passphrase: "Privacy passphrase (AES-128)" })[k]}
-                <input required type={k.includes("passphrase") ? "password" : "text"} className={fieldStyle}
-                  value={probe[k]} onChange={e => setProbe(p => ({ ...p, [k]: e.target.value }))}/>
-              </label>
-            ))}
-          </div>
-          <button className={btn} disabled={busy}>{busy ? "Discovering…" : "Discover"}</button>
+            const url = `${profilePath}/${encodeURIComponent(profileId)}`;
+            if (scope.includes("/")) {
+              setDiscovery(await request<{ scanned: number; printers: DiscoveredPrinter[] }>(url + "/discover", {
+                method: "POST", body: JSON.stringify({management_range: scope}),
+              }));
+            } else {
+              setProfileResult(await request<Record<string, unknown>>(url + "/test", {
+                method: "POST", body: JSON.stringify({management_ip: scope}),
+              }));
+            }
+          }, "Printer check completed.");
+        }}>
+          <label>Saved profile<select className={fieldStyle} required value={profileId} onChange={e => setProfileId(e.target.value)}>
+            <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version})</option>)}
+          </select></label>
+          <label>Management IP or CIDR<input className={fieldStyle} required value={target} onChange={e => setTarget(e.target.value)} /></label>
+          <button className={sub} disabled={busy || !profileId}>{busy ? "Checking…" : "Discover"}</button>
         </form>
+        {profileResult && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(profileResult, null, 2)}</pre>}
         {discovery && <div className="mt-4 space-y-2 text-sm">
           <p>{discovery.printers.length} printers responded across {discovery.scanned} addresses.</p>
           {discovery.printers.map(printer => <div key={printer.management_ip} className="flex flex-wrap items-center gap-3 border-b py-2">
@@ -212,10 +161,36 @@ export function Printers() {
             }}>Review and register</button>
           </div>)}
         </div>}
-        {probeResult && <div className="mt-4 rounded border border-slate-700 p-3 text-sm">
-          <p className="font-semibold">Returned device information (not yet enrolled)</p>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(probeResult, null, 2)}</pre>
-        </div>}
+        <details className="mt-4"><summary className="cursor-pointer font-medium">Add a credential profile</summary>
+        <form className="flex flex-wrap items-end gap-3" onSubmit={e => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const body = {...Object.fromEntries(new FormData(form)), ...credentials};
+          action(async () => {
+            try {
+              const saved = await request<PrinterProfile>(profilePath, {method: "POST", body: JSON.stringify(body)});
+              setProfileId(saved.id);
+              setCredentials(previous => ({...previous, name: ""}));
+              profiles.reload();
+            } finally {
+              form.reset();
+            }
+          }, "Printer credential profile saved.");
+        }}>
+          <label>Profile name<input className={fieldStyle} required maxLength={100} value={credentials.name}
+            onChange={e => setCredentials({...credentials, name: e.target.value})} /></label>
+          <label>SNMP version<select className={fieldStyle} value={credentials.version}
+            onChange={e => setCredentials({...credentials, version: e.target.value})}>
+            <option value="1">SNMPv1</option><option value="2c">SNMPv2c</option><option value="3">SNMPv3 (SHA-256 / AES-128)</option>
+          </select></label>
+          {credentials.version === "3" ? <>
+            <label>Username<input className={fieldStyle} name="username" required maxLength={100} /></label>
+            <label>Authentication passphrase<input className={fieldStyle} name="auth_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+            <label>Privacy passphrase<input className={fieldStyle} name="privacy_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+          </> : <label>Read-only community<input className={fieldStyle} name="community" type="password" required maxLength={200} /></label>}
+          <button className={btn} disabled={busy}>Save profile</button>
+        </form>
+        </details>
       </Card>}</div>
       {analysis && <Card title="Rule-based recommendations — not trained ML">
         <p className="mb-2 text-xs text-slate-400">{analysis.disclaimer}</p>
