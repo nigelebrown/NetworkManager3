@@ -129,7 +129,8 @@ export default function DeviceInventory() {
       setBatchProgress(null);
     }
     if (autoOnboard && verified.size) {
-      await onboardSuccessful(batch, batch.devices.filter(d => verified.has(d.id)), verified);
+      await onboardSuccessful(batch, batch.devices.filter(d =>
+        verified.has(d.id) && onboardResults[d.id]?.status !== "Onboarded"), verified);
     }
   };
 
@@ -386,7 +387,7 @@ export default function DeviceInventory() {
               setOnboardResults({});
               setRestBootstrapDevice(null);
               setFeedback({message: "Loaded " + assigned.devices.length + " registered devices with saved profile " +
-                assigned.profile_name + ". Run Test All, then Onboard Successful."});
+                assigned.profile_name + ". Use Test & onboard all to verify and onboard eligible devices."});
             } catch (error) {
               setFeedback({error: error instanceof Error ? error.message : "Could not load saved device assignments"});
             } finally { setBusy(false); }
@@ -401,8 +402,8 @@ export default function DeviceInventory() {
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
         <div className="flex flex-wrap items-center gap-2" aria-label="Fleet connection and onboarding actions">
           <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
-            onClick={() => void testAllConnections()}>
-            {testingBatch ? "Testing devices…" : "Test All"}
+            onClick={() => void testAllConnections(result, true)}>
+            {testingBatch ? "Testing devices…" : "Test & onboard all"}
           </button>
           {restCandidates.length > 0 && <button type="button" className={btn}
             disabled={busy || !!testing || testingBatch || onboardingBusy}
@@ -418,7 +419,7 @@ export default function DeviceInventory() {
           {batchProgress && ` · Processed ${batchProgress.done}/${batchProgress.total}`}
         </p>
         <p className="text-sm text-slate-600">
-          Already registered devices are not duplicated. Onboard Successful imports a read-only baseline and creates
+          Onboarding imports a read-only baseline and creates
           a five-minute monitoring plan only for REST-verified devices. Review scheduled collection in
           {" "}<Link className="inm-link" to="/collection">Live monitoring</Link>.
         </p>
@@ -444,8 +445,13 @@ export default function DeviceInventory() {
                 : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}</td>
               <td><div className="flex flex-wrap gap-2">
                 <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
-                  onClick={() => void testConnection(result.profileId, d)}>
-                  Test connection
+                  onClick={async () => {
+                    const verified = await testConnection(result.profileId, d);
+                    if (verified?.state === "ENABLED" && onboardResults[d.id]?.status !== "Onboarded") {
+                      await onboardSuccessful(result, [d], new Map([[d.id, verified]]));
+                    }
+                  }}>
+                  Test &amp; onboard
                 </button>
                 {!check?.clusterManaged && (check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
                   <button type="button" className={btn}
