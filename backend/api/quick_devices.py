@@ -236,6 +236,8 @@ def _permit_probe(ip: ipaddress.IPv4Address) -> None:
         ipaddress.IPv4Network("10.0.0.0/8"), ipaddress.IPv4Network("172.16.0.0/12"),
         ipaddress.IPv4Network("192.168.0.0/16"),
     ))
+    if private and get_settings().mode == "live" and os.environ.get("INM_ON_PREMISES_MANAGEMENT") == "true":
+        return
     # Host-applied exact IPs become effective without restarting API/worker.
     # The host broker publishes this root-owned state only AFTER enforcing
     # the worker DOCKER-USER firewall, so DB requests alone cannot grant access.

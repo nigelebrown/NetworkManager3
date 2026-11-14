@@ -212,6 +212,7 @@ services:
       INM_LAN_CLIENT_CIDR: ${INM_LAN_CLIENT_CIDR:-}
       INM_APPROVED_DEVICE_IPS: ${INM_APPROVED_DEVICE_IPS:-}
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
+      INM_ON_PREMISES_MANAGEMENT: ${INM_ON_PREMISES_MANAGEMENT:-false}
       SIMS_CORS_ORIGINS: ""
     volumes:
       - app-data:/data
@@ -265,6 +266,7 @@ services:
       # Empty = no device is ever contacted (plans record TARGET_NOT_ALLOWED, never fabricated data).
       INM_APPROVED_DEVICE_IPS: ${INM_APPROVED_DEVICE_IPS:-}
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
+      INM_ON_PREMISES_MANAGEMENT: ${INM_ON_PREMISES_MANAGEMENT:-false}
       INM_SCHEDULED_COLLECTION: ${INM_SCHEDULED_COLLECTION:-true}
     volumes:
       - app-data:/data

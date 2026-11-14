@@ -61,7 +61,7 @@ export default function DeviceInventory() {
     return {device: d, address, reason: !address ? "Missing management IP" : !privateIp ? "Private IPv4 required"
       : duplicate ? "Repeated IP in inventory" : ""};
   });
-  const approvedAddresses = accessRows.filter(row => !row.reason).map(row => row.address);
+  const eligibleAddresses = accessRows.filter(row => !row.reason).map(row => row.address);
   const selectedFamily = devices.data?.find(d => d.id === selected[0])?.family;
   const eligible = rows.filter(d => d.source_type === "REAL" && d.family === (selectedFamily ?? family));
   const allVisibleSelected = eligible.length > 0 && eligible.every(d => selected.includes(d.id));
@@ -87,8 +87,6 @@ export default function DeviceInventory() {
   const testConnection = async (
     profileId: string,
     d: {id: string; address?: string},
-    batchApproved: boolean | null = null,
-    approveFirst = false,
   ) => {
     if (!d.address) return;
     setTesting(d.id);
@@ -106,52 +104,8 @@ export default function DeviceInventory() {
         clusterManaged: response.cluster_managed,
       }}));
     };
-    const approveAndRetry = async () => {
-      const confirmed = batchApproved === null ? window.confirm(
-        "Approve only " + d.address + "/32 for read-only management access and test now? " +
-        "This sends an audited request for host firewall enforcement. " +
-        "It does NOT enable configuration writes."
-      ) : batchApproved;
-      if (!confirmed) {
-        setChecks(previous => ({...previous, [d.id]: {
-          status: "Blocked", message: "Administrator declined the exact-IP approval",
-        }}));
-        return;
-      }
-      setChecks(previous => ({...previous, [d.id]: {
-        status: "Approving IP", message: "Waiting for host to enforce " + d.address + "/32",
-      }}));
-      const approval = await onboardingApi.approveDeviceIP({
-        device_id: d.id, profile_id: profileId, management_ip: d.address!,
-        confirmation: "APPROVE IP " + d.address,
-      });
-      if (approval.state !== "APPLIED") {
-        let applied = false;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address!);
-          if (status.state === "APPLIED") { applied = true; break; }
-          if (status.state === "ERROR") throw new Error("Host management-access approval policy is invalid");
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
-        if (!applied) {
-          throw new Error("Approval requested but not yet enforced. Check the INM host management-approval timer.");
-        }
-      }
-      await check();
-    };
     try {
-      if (approveFirst) {
-        await approveAndRetry();
-      } else {
-        try {
-          await check();
-        } catch (firstError) {
-          const blocked = firstError instanceof ApiError && firstError.status === 403 &&
-            /approved management ranges|Live polling is disabled/i.test(firstError.message);
-          if (!blocked) throw firstError;
-          await approveAndRetry();
-        }
-      }
+      await check();
     } catch (error) {
       setChecks(previous => ({...previous, [d.id]: {
         status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
@@ -159,28 +113,17 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
-  const testAllConnections = async (approveBlocked: boolean, batch = result, confirmed = false) => {
+  const testAllConnections = async (batch = result) => {
     if (!batch || testingBatch || onboardingBusy) return;
     const targets = batch.devices.filter(d => d.address);
     if (!targets.length) return;
-    if (approveBlocked && !confirmed) {
-      const ips = [...new Set(targets.map(d => d.address!))];
-      const list = ips.slice(0, 20).map(ip => "  " + ip + "/32").join("\n");
-      const more = ips.length > 20 ? "\n  …plus " + (ips.length - 20) + " additional listed device IPs" : "";
-      if (!window.confirm(
-        "Test " + targets.length + " registered devices using " + batch.profileName + "?\n\n" +
-        "Approve the listed exact /32 device IPs before running REST tests:\n" +
-        list + more + "\n\n" +
-        "No /24 subnets or device configuration writes will be authorized. Continue?"
-      )) return;
-    }
     setTestingBatch(true);
     setBatchProgress({done: 0, total: batch.devices.length});
     setOnboardResults({});
     try {
       for (const [index, device] of batch.devices.entries()) {
         if (device.address) {
-          await testConnection(batch.profileId, device, approveBlocked, approveBlocked);
+          await testConnection(batch.profileId, device);
         } else {
           setChecks(previous => ({...previous, [device.id]: {
             status: "Missing IP", message: "Device has no management address; skipped",
@@ -194,14 +137,14 @@ export default function DeviceInventory() {
     }
   };
 
-  const approveReviewedAddresses = async () => {
+  const testReviewedAddresses = async () => {
     const chosen = matchingProfiles.find(p => p.id === profile);
     const targets = accessRows.filter(row => !row.reason).map(({device, address}) => ({
       id: device.id, name: device.hostname || device.serial_number, address,
     }));
     if (!chosen || !targets.length || busy || testing || testingBatch || onboardingBusy) return;
     if (!window.confirm(
-      `Assign "${chosen.name}" to ${targets.length} eligible devices, approve each listed IP for read-only management, and test REST?`
+      `Assign "${chosen.name}" to ${targets.length} eligible devices, and test REST at the listed management addresses?`
     )) return;
     setBusy(true);
     setFeedback({});
@@ -214,9 +157,9 @@ export default function DeviceInventory() {
       setChecks({});
       setRestBootstrapDevice(null);
       changeSelection([]);
-      await testAllConnections(true, batch, true);
+      await testAllConnections(batch);
     } catch (error) {
-      setFeedback({error: error instanceof Error ? error.message : "Could not start management access approval"});
+      setFeedback({error: error instanceof Error ? error.message : "Could not start management connection tests"});
     } finally {
       setBusy(false);
     }
@@ -385,21 +328,21 @@ export default function DeviceInventory() {
       </form>}
       {admin && reviewAccess && <section className="inm-cardbody space-y-2">
         <h3 className="font-semibold">Review management access</h3>
-        <p>Choose a saved credential profile above, then approve and test the eligible addresses. Missing or repeated addresses are skipped.</p>
+        <p>Choose a saved credential profile above, then test the eligible addresses. Missing or repeated addresses are skipped.</p>
         <ul className="max-h-48 overflow-auto">{accessRows.map(({device, address, reason}) =>
           <li key={device.id}>{device.hostname || device.serial_number}
             {device.family === "access_point" && <> · {clusterLabel(device.cluster_id)}</>}
-            {" · "}{address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
+            {" · "}{address || "No IP"} · {reason || "Ready to test"}</li>)}</ul>
         <button type="button" className={btn}
-          disabled={!approvedAddresses.length || !matchingProfiles.some(p => p.id === profile) ||
+          disabled={!eligibleAddresses.length || !matchingProfiles.some(p => p.id === profile) ||
             busy || !!testing || testingBatch || onboardingBusy}
-          onClick={() => void approveReviewedAddresses()}>Approve &amp; test {approvedAddresses.length} addresses</button>
-        <button type="button" className={btn} disabled={!approvedAddresses.length} onClick={() => {
-          const url = URL.createObjectURL(new Blob([approvedAddresses.join("\n") + "\n"], {type: "text/plain"}));
+          onClick={() => void testReviewedAddresses()}>Assign profile &amp; test {eligibleAddresses.length} addresses</button>
+        <button type="button" className={btn} disabled={!eligibleAddresses.length} onClick={() => {
+          const url = URL.createObjectURL(new Blob([eligibleAddresses.join("\n") + "\n"], {type: "text/plain"}));
           const link = document.createElement("a");
-          link.href = url; link.download = "inm-management-approvals.txt"; link.click();
+          link.href = url; link.download = "inm-management-addresses.txt"; link.click();
           URL.revokeObjectURL(url);
-        }}>Export {approvedAddresses.length} addresses for approval</button>
+        }}>Export {eligibleAddresses.length} management addresses</button>
       </section>}
       {admin && selectedFamily && <details className="inm-cardbody">
         <summary className="cursor-pointer font-medium">Create a credential profile for selected devices</summary>
@@ -447,7 +390,7 @@ export default function DeviceInventory() {
               setOnboardResults({});
               setRestBootstrapDevice(null);
               setFeedback({message: "Loaded " + assigned.devices.length + " registered devices with saved profile " +
-                assigned.profile_name + ". Run Test & Approve All, then Onboard Successful."});
+                assigned.profile_name + ". Run Test All, then Onboard Successful."});
             } catch (error) {
               setFeedback({error: error instanceof Error ? error.message : "Could not load saved device assignments"});
             } finally { setBusy(false); }
@@ -460,14 +403,11 @@ export default function DeviceInventory() {
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
-        <p className="text-sm text-slate-600">Blocked management IPs can be approved here by an administrator after confirmation. Each approval is only for that device's /32 address; the host applies its firewall rule before testing. Configuration writes remain locked.</p>
         <div className="flex flex-wrap items-center gap-2" aria-label="Fleet connection and onboarding actions">
           <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
-            onClick={() => void testAllConnections(true)}>
-            {testingBatch ? "Testing devices…" : "Test &amp; Approve All"}
+            onClick={() => void testAllConnections()}>
+            {testingBatch ? "Testing devices…" : "Test All"}
           </button>
-          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
-            onClick={() => void testAllConnections(false)}>Test All (no approvals)</button>
           <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !successfulDevices.length}
             onClick={() => void onboardSuccessful()}>
             {onboardingBusy ? "Onboarding devices…" : `Onboard Successful (${successfulDevices.length})`}
@@ -501,12 +441,6 @@ export default function DeviceInventory() {
                 <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
                   onClick={() => void testConnection(result.profileId, d)}>
                   Test connection
-                </button>
-                <button type="button" className={btn} data-inm-approval-action="exact-ip-v2"
-                  title={d.address ? "Approve only " + d.address + "/32 and retry REST" : "Management IP required"}
-                  disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
-                  onClick={() => void testConnection(result.profileId, d, null, true)}>
-                  Approve IP &amp; Test
                 </button>
                 {!check?.clusterManaged && (check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
                   <button type="button" className={btn}
