@@ -63,9 +63,14 @@ export default function DeviceInventory() {
     setFeedback({});
   };
   const [testingBatch, setTestingBatch] = useState(false);
-  // A test never silently extends management access. On a blocked target,
-  // an administrator confirms an exact /32 before the host reconciler applies it.
-  const testConnection = async (profileId: string, d: {id: string; address?: string}, batchApproved: boolean | null = null) => {
+  // Explicit administrator confirmation is required for each /32 before
+  // the host agent opens worker egress. The API never modifies host firewalls.
+  const testConnection = async (
+    profileId: string,
+    d: {id: string; address?: string},
+    batchApproved: boolean | null = null,
+    approveFirst = false,
+  ) => {
     if (!d.address) return;
     setTesting(d.id);
     const labels: Record<string, string> = {
@@ -79,40 +84,51 @@ export default function DeviceInventory() {
         status: labels[response.state] ?? "Checked", message: response.detail,
       }}));
     };
-    try {
-      try {
-        await check();
-      } catch (firstError) {
-        const blocked = firstError instanceof ApiError && firstError.status === 403 &&
-          /approved management ranges|Live polling is disabled/i.test(firstError.message);
-        if (!blocked) throw firstError;
-        const confirmed = batchApproved === null ? window.confirm(
-          "Approve only " + d.address + "/32 for read-only management access and retry? " +
-          "This will update the server's worker firewall after an audited administrator approval. " +
-          "It will NOT enable configuration writes."
-        ) : batchApproved;
-        if (!confirmed) {
-          setChecks(previous => ({...previous, [d.id]: {
-            status: "Blocked", message: "Administrator declined IP approval",
-          }}));
-          return;
-        }
+    const approveAndRetry = async () => {
+      const confirmed = batchApproved === null ? window.confirm(
+        "Approve only " + d.address + "/32 for read-only management access and test now? " +
+        "This sends an audited request for host firewall enforcement. " +
+        "It does NOT enable configuration writes."
+      ) : batchApproved;
+      if (!confirmed) {
         setChecks(previous => ({...previous, [d.id]: {
-          status: "Approving IP", message: "Awaiting host firewall enforcement for " + d.address + "/32",
+          status: "Blocked", message: "Administrator declined the exact-IP approval",
         }}));
-        await onboardingApi.approveDeviceIP({
-          device_id: d.id, profile_id: profileId, management_ip: d.address,
-          confirmation: "APPROVE IP " + d.address,
-        });
+        return;
+      }
+      setChecks(previous => ({...previous, [d.id]: {
+        status: "Approving IP", message: "Waiting for host to enforce " + d.address + "/32",
+      }}));
+      const approval = await onboardingApi.approveDeviceIP({
+        device_id: d.id, profile_id: profileId, management_ip: d.address!,
+        confirmation: "APPROVE IP " + d.address,
+      });
+      if (approval.state !== "APPLIED") {
         let applied = false;
         for (let attempt = 0; attempt < 20; attempt++) {
-          const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address);
+          const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address!);
           if (status.state === "APPLIED") { applied = true; break; }
-          if (status.state === "ERROR") throw new Error("The host approval policy is invalid");
+          if (status.state === "ERROR") throw new Error("Host management-access approval policy is invalid");
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
-        if (!applied) throw new Error("IP approval is queued but not yet applied by the server. Check the INM management approval timer.");
-        await check();
+        if (!applied) {
+          throw new Error("Approval requested but not yet enforced. Check the INM host management-approval timer.");
+        }
+      }
+      await check();
+    };
+    try {
+      if (approveFirst) {
+        await approveAndRetry();
+      } else {
+        try {
+          await check();
+        } catch (firstError) {
+          const blocked = firstError instanceof ApiError && firstError.status === 403 &&
+            /approved management ranges|Live polling is disabled/i.test(firstError.message);
+          if (!blocked) throw firstError;
+          await approveAndRetry();
+        }
       }
     } catch (error) {
       setChecks(previous => ({...previous, [d.id]: {
@@ -257,9 +273,18 @@ export default function DeviceInventory() {
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
-              <td><button type="button" className={btn} disabled={busy || (!!testing || testingBatch) || !d.address}
-                onClick={() => void testConnection(result.profileId, d)}>
-                {check?.status === "Blocked" ? "Approve IP & Test" : "Test connection"}</button></td>
+              <td><div className="flex flex-wrap gap-2">
+                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !d.address}
+                  onClick={() => void testConnection(result.profileId, d)}>
+                  Test connection
+                </button>
+                <button type="button" className={btn} data-inm-approval-action="exact-ip-v2"
+                  title={d.address ? "Approve only " + d.address + "/32 and retry REST" : "Management IP required"}
+                  disabled={busy || !!testing || testingBatch || !d.address}
+                  onClick={() => void testConnection(result.profileId, d, null, true)}>
+                  Approve IP &amp; Test
+                </button>
+              </div></td>
             </tr>;
           })}</tbody>
         </table></div>
