@@ -3,7 +3,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
-import { getSession, request } from "../services/api";
+import { ApiError, getSession, request } from "../services/api";
 import { onboardingApi } from "../services/onboarding";
 import { v1 } from "../services/inm";
 
@@ -48,6 +48,25 @@ export default function DeviceInventory() {
     if (!ids.length || !selected.length) setProfile("");
     setFeedback({});
   };
+  const [testingBatch, setTestingBatch] = useState(false);
+  const testConnection = async (profileId: string, d: {id: string; address?: string}) => {
+    if (!d.address) return;
+    setTesting(d.id);
+    try {
+      const response = await onboardingApi.checkRestApi(profileId, d.address);
+      const labels = {
+        ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
+        AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
+        UNREACHABLE: "Unreachable",
+      };
+      setChecks(previous => ({...previous, [d.id]: {
+        status: labels[response.state], message: response.detail,
+      }}));
+    } catch (error) {
+      setChecks(previous => ({...previous, [d.id]: {status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
+        message: error instanceof Error ? error.message : "Connection test failed"}}));
+    } finally { setTesting(null); }
+  };
   const update = (value: string) => { const p = new URLSearchParams(params);
     changeSelection([]);
     if (value) p.set("q",value); else p.delete("q"); setParams(p,{replace:true}); };
@@ -81,7 +100,7 @@ export default function DeviceInventory() {
           {[...(sites.data?.sites ?? [])].sort((a,b) => a.name.localeCompare(b.name)).map(s =>
             <option key={s.id} value={s.id}>{s.name}{s.source_type === "DEMO" ? " (Demo)" : ""}</option>)}
         </select>
-        <label><input type="checkbox" checked={needsAttention} disabled={busy || !!testing}
+        <label><input type="checkbox" checked={needsAttention} disabled={busy || (!!testing || testingBatch)}
           onChange={e => {setNeedsAttention(e.target.checked); changeSelection([]);}} /> Needs attention</label></div>
     </div>
       {admin && <form className="inm-cardbody flex flex-wrap items-end gap-3" onSubmit={async e => {
@@ -113,7 +132,7 @@ export default function DeviceInventory() {
           onChange={e => setProfile(e.target.value)}>
           <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
-        <button className={btn} disabled={busy || !!testing || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
+        <button className={btn} disabled={busy || (!!testing || testingBatch) || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
           {busy ? "Assigning…" : "Assign profile"}
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
@@ -147,6 +166,15 @@ export default function DeviceInventory() {
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
+        <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !result.devices.some(d => d.address)}
+          onClick={async () => {
+            setTestingBatch(true);
+            try {
+              for (const device of result.devices) {
+                await testConnection(result.profileId, device);
+              }
+            } finally { setTestingBatch(false); }
+          }}>{testingBatch ? "Testing devices…" : "Test all connections"}</button>
         <div className="inm-tablewrap"><table className="inm-table">
           <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
@@ -156,25 +184,8 @@ export default function DeviceInventory() {
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
-              <td><button type="button" className={btn} disabled={busy || !!testing || !d.address}
-                onClick={async () => {
-                  if (!d.address) return;
-                  setTesting(d.id);
-                  try {
-                    const response = await onboardingApi.checkRestApi(result.profileId, d.address);
-                    const labels = {
-                      ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
-                      AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
-                      UNREACHABLE: "Unreachable",
-                    };
-                    setChecks(previous => ({...previous, [d.id]: {
-                      status: labels[response.state], message: response.detail,
-                    }}));
-                  } catch (error) {
-                    setChecks(previous => ({...previous, [d.id]: {status: "Check failed",
-                      message: error instanceof Error ? error.message : "Connection test failed"}}));
-                  } finally { setTesting(null); }
-                }}>Test connection</button></td>
+              <td><button type="button" className={btn} disabled={busy || (!!testing || testingBatch) || !d.address}
+                onClick={() => void testConnection(result.profileId, d)}>Test connection</button></td>
             </tr>;
           })}</tbody>
         </table></div>
