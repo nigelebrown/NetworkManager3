@@ -34,6 +34,10 @@ export function Printers() {
   const stats = useLoad(() => printerApi.dashboard(), [], 30000, ["printers"]);
   const [editing, setEditing] = useState(false);
   const [snmp, setSnmp] = useState(false);
+  const [registeringIp, setRegisteringIp] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<Record<string, string>>({});
+  const [registration, setRegistration] = useState({manufacturer: "", model: "", serial_number: ""});
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [newPrinter, setNewPrinter] = useState<Record<string, string>>({
     manufacturer: "HP", model: "", serial_number: "", hostname: "", management_ip: "",
     area: "", division: "", branch: "", station: "", section_unit: "", building: "",
@@ -162,11 +166,31 @@ export function Printers() {
             <span className="font-mono">{printer.management_ip}</span>
             <span>{printer.hostname ?? "Hostname unavailable"}</span>
             <span>{printer.system_description}</span>
-            <button className={sub} onClick={() => {
-              setNewPrinter(previous => ({ ...previous, hostname: printer.hostname ?? "", management_ip: printer.management_ip }));
-              setSnmp(false);
-              setEditing(true);
-            }}>Review and register</button>
+            <span>Serial {printer.serial_number ?? "unavailable over SNMP"}</span>
+            {registered[printer.management_ip] ? <span role="status">Registered</span> :
+              <button className={sub} disabled={busy} onClick={() => {
+                const model = (printer.system_description?.split(";")[0] ?? printer.hostname ?? "").trim().slice(0, 120);
+                const brand = /^(HP|Hewlett Packard|Xerox|Kyocera|Epson|Canon|Brother|Lexmark|Ricoh)\b/i.exec(model)?.[0];
+                setRegistration({manufacturer: brand ?? "", model, serial_number: printer.serial_number ?? ""});
+                setRegisteringIp(printer.management_ip);
+              }}>Review and register</button>}
+            {registeringIp === printer.management_ip && <form className="flex w-full flex-wrap items-end gap-3" onSubmit={e => {
+              e.preventDefault();
+              void action(async () => {
+                const saved = await printerApi.add({...registration, hostname: printer.hostname?.slice(0, 120),
+                  management_ip: printer.management_ip, status: "up"});
+                setRegistered(previous => ({...previous, [printer.management_ip]: saved.id}));
+                setRegisteringIp(null);
+              }, "Printer registered. You can assign its location in Printer inventory.");
+            }}>
+              {(["manufacturer", "model", "serial_number"] as const).map((field, index) =>
+                <label key={field}>{["Manufacturer", "Model", "Serial number"][index]}
+                  <input className={fieldStyle} required maxLength={[64, 120, 100][index]} value={registration[field]}
+                    onChange={e => setRegistration({...registration, [field]: e.target.value})} />
+                </label>)}
+              <button className={btn} disabled={busy}>Register printer</button>
+              <button type="button" className={sub} disabled={busy} onClick={() => setRegisteringIp(null)}>Cancel</button>
+            </form>}
           </div>)}
         </div>}
         <details className="mt-4"><summary className="cursor-pointer font-medium">Add a credential profile</summary>
@@ -226,7 +250,20 @@ export function Printers() {
               <td className="px-2 py-2">{[d.area, d.division, d.branch, d.station, d.section_unit, d.building].filter(Boolean).join(" / ") || "Not assigned"}</td>
               <td className="px-2 py-2"><Badge value={d.status} /></td>
               <td className="px-2 py-2 text-emerald-300">{d.provenance}</td>
-              <td className="px-2 py-2"><Link to={`/printers/${d.id}`} className="text-sky-400 hover:underline">Open</Link></td>
+              <td className="px-2 py-2"><Link to={`/printers/${d.id}`} className="text-sky-400 hover:underline">Open</Link>
+                <button type="button" className={sub} onClick={() => setLocationId(d.id)}>Edit location</button>
+                {locationId === d.id && <form className="mt-2 space-y-2" onSubmit={e => {
+                  e.preventDefault();
+                  const fields = Object.fromEntries([...new FormData(e.currentTarget)].map(([k, v]) => [k, String(v)]));
+                  void action(async () => { await printerApi.updateLocation(d.id, fields); setLocationId(null); }, "Printer location saved.");
+                }}>
+                  {locationFields.map(([key, label]) => <label className="block" key={key}>{label}
+                    <input name={key} className={fieldStyle} defaultValue={d[key] ?? ""} maxLength={100} />
+                  </label>)}
+                  <button className={btn} disabled={busy}>Save location</button>
+                  <button type="button" className={sub} onClick={() => setLocationId(null)}>Cancel</button>
+                </form>}
+              </td>
             </tr>)}
           </tbody>
         </table></div>

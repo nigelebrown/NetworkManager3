@@ -6,6 +6,7 @@ The device must be within the configured private management scope.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 from typing import Any
@@ -17,6 +18,7 @@ SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 SYS_OBJECT = "1.3.6.1.2.1.1.2.0"
 MARKER_LIFE = "1.3.6.1.2.1.43.10.2.1.4"
 MARKER_UNIT = "1.3.6.1.2.1.43.10.2.1.3"
+PRINTER_SERIAL = "1.3.6.1.2.1.43.5.1.1.17"
 # RFC 3805's prtMarkerCounterUnit must be checked before labelling a count.
 
 
@@ -125,7 +127,17 @@ async def read_printer(host: str, version: str, identity: str, auth_key: str = "
 
         if not (name or descr or obj or marker):
             raise RuntimeError("SNMP authentication failed, timed out, or printer has no standard system MIB")
+        serial = None
+        if marker:
+            try:
+                serial = await asyncio.wait_for(get_one(PRINTER_SERIAL + "." + marker[0].split(".")[1]), timeout=1)
+            except TimeoutError:
+                pass
+        serial = (serial or "").strip()
+        if len(serial) > 100 or not serial.isprintable() or serial.casefold() in {"unknown", "n/a", "none"}:
+            serial = ""
         return {"hostname": name, "system_description": descr,
+                "serial_number": serial or None,
                 "system_object_id": obj, "meter": counter, "printer_mib": marker is not None,
                 "source": source, "device_writes": "LOCKED"}
     finally:

@@ -67,6 +67,28 @@ class PrinterInput(BaseModel):
         return v
 
 
+class PrinterLocation(BaseModel):
+    area: str | None = Field(None, max_length=100)
+    division: str | None = Field(None, max_length=100)
+    branch: str | None = Field(None, max_length=100)
+    station: str | None = Field(None, max_length=100)
+    section_unit: str | None = Field(None, max_length=100)
+    building: str | None = Field(None, max_length=100)
+
+
+@router.patch("/{printer_id}/location")
+def update_printer_location(printer_id: str, body: PrinterLocation, request: Request,
+                            db: Session = Depends(get_db), admin: User = admin_only):
+    printer = db.get(PrinterDevice, printer_id)
+    if printer is None:
+        raise HTTPException(404, "Printer not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(printer, field, (value or "").strip() or None)
+    audit(db, "printer_location_updated", username=admin.username, target=printer_id, request=request)
+    db.commit()
+    return _device(printer)
+
+
 class MeterInput(BaseModel):
     meter_kind: METER_KINDS
     counter_value: int = Field(ge=0, le=9223372036854775807)
@@ -191,7 +213,8 @@ def register_printer(body: PrinterInput, request: Request, db: Session = Depends
         db.add(obj)
     for field in ("hostname", "firmware", "status", "area", "division", "branch", "station",
                   "section_unit", "building"):
-        setattr(obj, field, getattr(body, field))
+        if field in body.model_fields_set:
+            setattr(obj, field, getattr(body, field))
     obj.management_ip = str(body.management_ip) if body.management_ip else None
     db.flush()
     audit(db, "printer_registered", username=admin.username, target=obj.id,
@@ -391,7 +414,7 @@ async def _discover_printer_hosts(hosts, target, read, request, db, admin):
                 try:
                     details = await asyncio.wait_for(
                         read(host),
-                        timeout=4,
+                        timeout=5,
                     )
                 except (RuntimeError, TimeoutError, OSError):
                     return None

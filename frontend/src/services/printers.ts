@@ -25,6 +25,7 @@ export type PrinterDetail = { device: Printer; meters: Meter[]; meter_deltas: Re
   supplies: Supply[]; cycles: Cycle[]; maintenance: Maintenance[] };
 export type DiscoveredPrinter = {
   management_ip: string; hostname: string | null; system_description: string | null;
+  serial_number?: string | null;
   meter: { meter_kind: string; counter_value: number } | null;
 };
 export type PrinterDashboard = { total: number; online: number; faulted: number; manufacturers: string[];
@@ -43,6 +44,8 @@ export const printerApi = {
   dashboard: () => request<PrinterDashboard>("/printers/dashboard"),
   add: (record: Record<string, unknown>) =>
     request<Printer>("/printers", { method: "POST", body: JSON.stringify(record) }),
+  updateLocation: (id: string, fields: Record<string, string>) =>
+    request<Printer>(`${path(id)}/location`, {method: "PATCH", body: JSON.stringify(fields)}),
   detail: (id: string) => request<PrinterDetail>(path(id)),
   meter: (id: string, b: Record<string, unknown>) =>
     request<{ id: number }>(`${path(id)}/meters`, { method: "POST", body: JSON.stringify(b) }),
