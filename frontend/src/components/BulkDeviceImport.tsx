@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError } from "../services/api";
 import { v1 } from "../services/inm";
 
@@ -118,6 +119,7 @@ export function parseDeviceCsv(text: string): InputRow[] {
 export default function BulkDeviceImport({ onImported }: { onImported?: () => void }) {
   const [rows, setRows] = useState<InputRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [imported, setImported] = useState<Record<string, string[]>>({});
   const [summary, setSummary] = useState<string | null>(null);
   const [rejections, setRejections] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -125,7 +127,7 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
     "access_point,Head Office,HQ-AP-535-01,CN-AP-001,AP-535,10.101.1.15,8.10.0.21,unknown\n" +
     "switch,Head Office,HQ-CX6200-01,CN-CX-001,CX 6200F,10.103.1.20,10.14,unknown\n";
   const onFile = async (file: File | undefined) => {
-    setRows([]); setSummary(null); setError(null); setRejections({});
+    setRows([]); setImported({}); setSummary(null); setError(null); setRejections({});
     if (!file) return;
     if (file.size > 1024 * 1024) { setError("CSV file exceeds the 1 MB upload limit."); return; }
     try { setRows(parseDeviceCsv(await file.text())); }
@@ -180,6 +182,15 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
           try {
             const result = await v1.bulkQuickDevices(batch.map(({ exported_group, exported_status, ...record }) =>
               ({ ...record, site_name: normalizeSite(record.site_name) })));
+            const ids = new Map(result.results.map(row => [row.serial_number.toLowerCase(), row.id]));
+            setImported(previous => {
+              const next = {...previous};
+              for (const row of batch) {
+                const id = ids.get(row.serial_number.toLowerCase());
+                if (id) next[row.family] = Array.from(new Set([...(next[row.family] ?? []), id]));
+              }
+              return next;
+            });
             added += result.added; updated += result.updated;
             batch.forEach(row => completed.add(row.serial_number));
             break;
@@ -230,6 +241,13 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
     </label>
     {error && <p role="alert" className="rounded border border-red-800 p-2 text-sm text-red-300">{error}</p>}
     {summary && <p role="status" className="rounded border border-emerald-800 p-2 text-sm text-emerald-200">{summary}</p>}
+    {Object.entries(imported).flatMap(([family, ids]) => Array.from({length: Math.ceil(ids.length / 500)}, (_, index) => {
+      const selected = ids.slice(index * 500, (index + 1) * 500);
+      return <Link key={family + index} className="block text-blue-700 underline" to="/inventory"
+        state={{ credentialDeviceIds: selected, family }}>
+        Assign credentials to {selected.length} imported {family === "switch" ? "switches" : "access points"}
+      </Link>;
+    }))}
     {!!rows.length && <>
       <p className="text-sm font-semibold">Review {rows.length} devices · {ready.length} ready. {skipped.length} need review.</p>
       <div className="max-h-64 overflow-auto rounded border border-slate-700">
