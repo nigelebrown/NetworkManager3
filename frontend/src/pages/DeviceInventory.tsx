@@ -148,6 +148,118 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
+  const testAllConnections = async (approveBlocked: boolean) => {
+    if (!result || testingBatch || onboardingBusy) return;
+    const targets = result.devices.filter(d => d.address);
+    if (!targets.length) return;
+    if (approveBlocked) {
+      const ips = [...new Set(targets.map(d => d.address!))];
+      const list = ips.slice(0, 20).map(ip => "  " + ip + "/32").join("\n");
+      const more = ips.length > 20 ? "\n  …plus " + (ips.length - 20) + " additional listed device IPs" : "";
+      if (!window.confirm(
+        "Test " + targets.length + " registered devices using " + result.profileName + "?\n\n" +
+        "Only if a device is blocked, approve its exact /32 IP after this administrator confirmation:\n" +
+        list + more + "\n\n" +
+        "No /24 subnets or device configuration writes will be authorized. Continue?"
+      )) return;
+    }
+    setTestingBatch(true);
+    setBatchProgress({done: 0, total: result.devices.length});
+    setOnboardResults({});
+    try {
+      for (const [index, device] of result.devices.entries()) {
+        if (device.address) {
+          await testConnection(result.profileId, device, approveBlocked);
+        } else {
+          setChecks(previous => ({...previous, [device.id]: {
+            status: "Missing IP", message: "Device has no management address; skipped",
+          }}));
+        }
+        setBatchProgress({done: index + 1, total: result.devices.length});
+      }
+    } finally {
+      setTestingBatch(false);
+      setBatchProgress(null);
+    }
+  };
+
+  const onboardSuccessful = async () => {
+    if (!result || !successfulDevices.length || testingBatch || onboardingBusy) return;
+    if (!window.confirm(
+      "Onboard " + successfulDevices.length + " REST-verified registered device(s)?\n\n" +
+      "For each device: reverify login, import a read-only configuration baseline, " +
+      "and schedule read-only monitoring every 5 minutes if supported. " +
+      "Devices already monitored will not get duplicate plans. " +
+      "Unreachable, rejected and untested devices are excluded.\n\n" +
+      "No Aruba configuration changes will be made."
+    )) return;
+    setOnboardingBusy(true);
+    setBatchProgress({done: 0, total: successfulDevices.length});
+    let complete = 0;
+    let needsAttention = 0;
+    let index = 0;
+    try {
+      const plans = await ops.plans();
+      for (const device of successfulDevices) {
+        try {
+          if (!device.address) throw new Error("Missing management IP");
+          const live = await onboardingApi.checkRestApi(result.profileId, device.address);
+          if (live.state !== "ENABLED") {
+            setChecks(previous => ({...previous, [device.id]: {
+              status: "REST not verified", message: live.detail, restState: live.state,
+            }}));
+            throw new Error("REST login no longer verified (" + live.state + "); do not onboard");
+          }
+          setOnboardResults(previous => ({...previous, [device.id]: {
+            status: "Importing baseline", message: "Reading device configuration without changes",
+          }}));
+          const config = await onboardingApi.deviceConfig(device.id);
+          if (!config.baseline) await onboardingApi.capture(device.id, result.profileId);
+          const existing = plans.find(p => p.device_id === device.id);
+          if (existing) {
+            if (existing.state !== "ACTIVE") {
+              throw new Error("Baseline present, but the existing monitoring plan is paused; review it under Live monitoring");
+            }
+            setOnboardResults(previous => ({...previous, [device.id]: {
+              status: "Onboarded", message: "Baseline present; existing active monitoring plan retained",
+            }}));
+            complete++;
+          } else {
+            const inventoryDevice = devices.data?.find(d => d.id === device.id);
+            const metrics = inventoryDevice?.family === "switch"
+              ? ["system", "interfaces", "poe"] : ["system", "radios", "clients"];
+            const plan = {device_id: device.id, metric_families: metrics, interval_seconds: 300};
+            const preview = await ops.previewPlan(plan);
+            if (preview.warnings.length) {
+              throw new Error("Baseline captured; monitoring not scheduled: " + preview.warnings.join("; "));
+            }
+            const created = await ops.createPlan(plan);
+            plans.push(created);
+            setOnboardResults(previous => ({...previous, [device.id]: {
+              status: "Onboarded", message: "Configuration baseline captured; read-only monitoring scheduled every 5 minutes",
+            }}));
+            complete++;
+          }
+        } catch (error) {
+          needsAttention++;
+          setOnboardResults(previous => ({...previous, [device.id]: {
+            status: "Needs attention", message: error instanceof Error ? error.message : "Onboarding failed",
+          }}));
+        }
+        index++;
+        setBatchProgress({done: index, total: successfulDevices.length});
+      }
+      setFeedback({message: "Onboarding complete: " + complete + " monitored; " +
+        needsAttention + " need attention. Failed and unverified devices remain in inventory for retry."});
+      devices.reload();
+    } catch (error) {
+      setFeedback({error: error instanceof Error ? error.message : "Unable to load monitoring plans"});
+    } finally {
+      setOnboardingBusy(false);
+      setBatchProgress(null);
+    }
+  };
+
   const update = (value: string) => { const p = new URLSearchParams(params);
     changeSelection([]);
     if (value) p.set("q",value); else p.delete("q"); setParams(p,{replace:true}); };
