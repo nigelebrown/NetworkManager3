@@ -33,7 +33,8 @@ export default function DeviceInventory() {
   const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
     id: string; name: string; address?: string;
   }[] } | null>(null);
-  const [checks, setChecks] = useState<Record<string, {status: string; message: string; restState?: RestPreflight["state"]}>>({});
+  const [checks, setChecks] = useState<Record<string, {status: string; message: string;
+    restState?: RestPreflight["state"]; clusterManaged?: boolean}>>({});
   const [onboardResults, setOnboardResults] = useState<Record<string, {status: string; message: string}>>({});
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
@@ -94,8 +95,10 @@ export default function DeviceInventory() {
     const check = async () => {
       const response = await onboardingApi.checkRestApi(profileId, d.address!, d.id);
       setChecks(previous => ({...previous, [d.id]: {
-        status: labels[response.state] ?? "Checked", message: response.detail,
+        status: response.cluster_managed && response.state === "ENABLED"
+          ? "Managed via cluster" : labels[response.state] ?? "Checked", message: response.detail,
         restState: response.state,
+        clusterManaged: response.cluster_managed,
       }}));
     };
     const approveAndRetry = async () => {
@@ -206,12 +209,22 @@ export default function DeviceInventory() {
       for (const device of successfulDevices) {
         try {
           if (!device.address) throw new Error("Missing management IP");
-          const live = await onboardingApi.checkRestApi(result.profileId, device.address);
+          const live = await onboardingApi.checkRestApi(result.profileId, device.address, device.id);
           if (live.state !== "ENABLED") {
             setChecks(previous => ({...previous, [device.id]: {
               status: "REST not verified", message: live.detail, restState: live.state,
             }}));
             throw new Error("REST login no longer verified (" + live.state + "); do not onboard");
+          }
+          if (live.cluster_managed) {
+            if (!live.cluster_monitoring_active) {
+              throw new Error("Cluster REST verified. Check the cluster collector before marking this AP onboarded.");
+            }
+            setOnboardResults(previous => ({...previous, [device.id]: {
+              status: "Onboarded", message: live.detail + " Existing cluster monitoring is active.",
+            }}));
+            complete++;
+            continue;
           }
           setOnboardResults(previous => ({...previous, [device.id]: {
             status: "Importing baseline", message: "Reading device configuration without changes",
@@ -453,7 +466,7 @@ export default function DeviceInventory() {
                   onClick={() => void testConnection(result.profileId, d, null, true)}>
                   Approve IP &amp; Test
                 </button>
-                {(check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
+                {!check?.clusterManaged && (check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
                   <button type="button" className={btn}
                     disabled={busy || !!testing || testingBatch || onboardingBusy}
                     onClick={() => setRestBootstrapDevice(current => current === d.id ? null : d.id)}>

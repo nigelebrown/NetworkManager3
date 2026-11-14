@@ -25,8 +25,8 @@ from ..aruba.client import ArubaClient, ArubaTarget
 from ..aruba.configuration import fetch_running_config, parse_running_config
 from ..aruba.monitoring import collect_snapshot
 from ..config import get_settings
-from ..database.models import User
-from ..database.models_inm import InmDevice
+from ..database.models import Site, User
+from ..database.models_inm import InmCluster, InmDevice
 from ..domain.phase2_acceptance import build_acceptance
 from ..database.models_onboarding import (
     OnboardingCredential, OnboardingDiscovery, OnboardingDeviceCredential,
@@ -324,15 +324,76 @@ def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tu
         raise
 
 
+def _linked_instant_device(db: Session, body: RestTarget, profile: OnboardingCredential):
+    if not body.device_id or profile.device_family != "access_point":
+        return None
+    device = db.get(InmDevice, body.device_id)
+    if not device or not device.cluster_id:
+        return None
+    if (device.source_type != "REAL" or device.vendor.casefold() != "aruba"
+            or device.family != "access_point"
+            or str(body.management_ip) not in (device.mgmt_addresses or [])):
+        raise HTTPException(404, "Registered Aruba AP does not match the requested address.")
+    binding = db.get(OnboardingDeviceCredential, device.id)
+    if not binding or binding.credential_id != profile.id:
+        raise HTTPException(409, "The credential profile is no longer assigned to this AP.")
+    cluster = db.get(InmCluster, device.cluster_id)
+    if cluster and cluster.source_type == "REAL" and cluster.kind == "aruba_instant_cluster":
+        return device, cluster
+    return None
+
+
+def _check_instant_cluster(db: Session, device: InmDevice, cluster: InmCluster,
+                           profile: OnboardingCredential, request: Request, admin: User) -> dict:
+    from ..aruba import parsers
+    from ..aruba.authentication import client_for_site
+
+    site = db.get(Site, cluster.legacy_site_id) if cluster.legacy_site_id else None
+    endpoint = site.vc_host if site and not site.simulated else None
+    state, reason = "UNREACHABLE", "cluster_endpoint_unavailable"
+    try:
+        if endpoint and site.enabled:
+            _permit_probe(ipaddress.IPv4Address(endpoint))
+            with client_for_site(site) as client:
+                response = client.show("show aps")
+            members = parsers.normalize_aps(parsers.extract_rows(response, "show aps"))
+            if any((ap.get("serial") or "").casefold() == device.serial_number.casefold() for ap in members):
+                state, reason = "ENABLED", "serial_verified"
+            else:
+                reason = "serial_not_reported"
+    except HTTPException:
+        reason = "cluster_endpoint_blocked"
+    except (ArubaError, httpx.HTTPError, ValueError, OSError) as exc:
+        reason = type(exc).__name__
+    ok = state == "ENABLED"
+    audit(db, "onboarding_cluster_rest_check", username=admin.username, target=device.id,
+          detail=f"profile={profile.id} cluster={cluster.id} endpoint={endpoint} state={state} reason={reason}",
+          request=request, success=ok)
+    return {
+        "management_ip": str(device.mgmt_addresses[0]) if device.mgmt_addresses else "",
+        "family": "access_point", "state": state, "rest_enabled": ok,
+        "detail": f"AP serial verified through cluster REST at {endpoint}." if ok else
+                  f"Cluster REST verification failed ({reason}). Check the registered Virtual Controller.",
+        "cluster_managed": True, "cluster_endpoint": endpoint,
+        "cluster_monitoring_active": bool(site and site.enabled and site.last_poll_ok),
+        "write_unlock_required": True, "commands": [], "confirm_phrase": "",
+        "untrusted_device_certificates_accepted": not get_settings().aruba_verify_tls,
+    }
+
+
 @router.post("/credentials/{profile_id}/rest-api/check")
 def check_credential_rest(profile_id: str, body: RestTarget, request: Request, db: Session = Depends(get_db),
                           admin: User = Depends(require_role("admin"))):
     """Read-only check, including the unauthenticated SSH fingerprint if REST is unavailable."""
     from ..aruba import ssh
     profile = _profile(db, profile_id)
-    _permit_probe(body.management_ip)
     if get_settings().mode != "live":
         raise HTTPException(423, "REST readiness checks require live mode and an explicitly allowed management IP.")
+    linked = _linked_instant_device(db, body, profile)
+    if linked:
+        result = _check_instant_cluster(db, *linked, profile, request, admin)
+        return {**result, "management_ip": str(body.management_ip)}
+    _permit_probe(body.management_ip)
     state, detail = _rest_status(profile, body.management_ip)
     ip = str(body.management_ip)
     ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)
@@ -361,6 +422,8 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     from ..aruba import ssh
     from ..aruba.rest_enablement import enable_cx_rest_api, cx_commands, CX_ROLLBACK
     profile = _profile(db, profile_id)
+    if _linked_instant_device(db, body, profile):
+        raise HTTPException(409, "This AP is managed through its registered Instant cluster.")
     _permit_probe(body.management_ip)
     ip = str(body.management_ip)
     ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)

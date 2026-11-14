@@ -45,6 +45,9 @@ export type RestPreflight = {
   state: "ENABLED" | "DISABLED" | "AUTH_REJECTED" | "UNSUPPORTED_API" | "UNREACHABLE";
   detail: string; rest_enabled: boolean; write_unlock_required: boolean;
   ap_rest_only_authorized?: boolean;
+  cluster_managed?: boolean;
+  cluster_endpoint?: string | null;
+  cluster_monitoring_active?: boolean;
   untrusted_device_certificates_accepted: boolean; confirm_phrase: string;
   commands: string[];
   ssh?: { fingerprint?: string; key_type?: string; legacy_algorithms?: boolean; error?: string };
