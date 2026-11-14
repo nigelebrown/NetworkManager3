@@ -18,7 +18,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Network overview {s?.simulated && <SimBadge />}</h1>
+        <div><div className="inm-section-label">Overview & command</div><h1 className="inm-pagetitle">Wi-Fi dashboard {s?.simulated && <SimBadge />}</h1></div>
         <div className="flex items-center gap-2">
           <SiteFilter value={site} onChange={setSite} />
           <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={hours} onChange={(e) => setHours(Number(e.target.value))} aria-label="History range">
