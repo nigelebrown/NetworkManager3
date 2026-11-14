@@ -39,7 +39,13 @@ export default function GuidedOnboarding() {
     <Start onStarted={(nw) => { setParams({ id: nw.id }); setW(nw); }} />
     <Card title="Resume a workflow">
       <table className="w-full text-sm"><tbody>{(list.data ?? []).map(x => <tr key={x.id} className="border-t border-slate-800">
-        <td className="py-1"><Link className="text-sky-300" to={`/onboarding?id=${x.id}`}>{x.title}</Link></td><td>{x.site}</td>
+        <td className="py-2 pr-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link className="text-sky-300" to={`/onboarding?id=${x.id}`}>{x.title}</Link>
+            {x.state === "ACTIVE" && <Link className={btn2} to={`/onboarding?id=${x.id}`}
+              aria-label={`Resume workflow: ${x.title}`}>Resume workflow</Link>}
+          </div>
+        </td><td>{x.site}</td>
         <td><Pill value={LABEL[x.step] ?? x.step} tone="info" /></td><td><Pill value={x.state} tone={statusTone(x.state === "DONE" ? "PASS" : x.state)} /></td>
         <td className="text-xs text-slate-500">{x.devices} device(s) · {ago(x.updated_at)}</td></tr>)}</tbody></table>
       {!list.data?.length && <p className="text-sm text-slate-500">No workflows yet.</p>}
