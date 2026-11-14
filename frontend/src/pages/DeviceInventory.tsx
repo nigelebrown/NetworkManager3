@@ -64,6 +64,9 @@ export default function DeviceInventory() {
   };
   const [testingBatch, setTestingBatch] = useState(false);
   const successfulDevices = (result?.devices ?? []).filter(d => checks[d.id]?.restState === "ENABLED");
+  const pendingOnboarding = successfulDevices.filter(d => onboardResults[d.id]?.status !== "Onboarded");
+  const onboardedCount = (result?.devices ?? []).filter(d => onboardResults[d.id]?.status === "Onboarded").length;
+  const onboardingAttention = (result?.devices ?? []).filter(d => onboardResults[d.id]?.status === "Needs attention").length;
   const checkCounts = {
     successful: successfulDevices.length,
     failed: (result?.devices ?? []).filter(d => checks[d.id] && checks[d.id].restState !== "ENABLED").length,
@@ -167,9 +170,9 @@ export default function DeviceInventory() {
   };
 
   const onboardSuccessful = async () => {
-    if (!result || !successfulDevices.length || testingBatch || onboardingBusy) return;
+    if (!result || !pendingOnboarding.length || testingBatch || onboardingBusy) return;
     if (!window.confirm(
-      "Onboard " + successfulDevices.length + " REST-verified registered device(s)?\n\n" +
+      "Onboard " + pendingOnboarding.length + " REST-verified registered device(s)?\n\n" +
       "For each device: reverify login, import a read-only configuration baseline, " +
       "and schedule read-only monitoring every 5 minutes if supported. " +
       "Devices already monitored will not get duplicate plans. " +
@@ -177,14 +180,18 @@ export default function DeviceInventory() {
       "No Aruba configuration changes will be made."
     )) return;
     setOnboardingBusy(true);
-    setBatchProgress({done: 0, total: successfulDevices.length});
+    setFeedback({});
+    setBatchProgress({done: 0, total: pendingOnboarding.length});
     let complete = 0;
     let needsAttention = 0;
     let index = 0;
     try {
       const plans = await ops.plans();
-      for (const device of successfulDevices) {
+      for (const device of pendingOnboarding) {
         try {
+          setOnboardResults(previous => ({...previous, [device.id]: {
+            status: "Verifying REST", message: "Checking the connection before onboarding",
+          }}));
           if (!device.address) throw new Error("Missing management IP");
           const live = await onboardingApi.checkRestApi(result.profileId, device.address, device.id);
           if (live.state !== "ENABLED") {
@@ -238,9 +245,10 @@ export default function DeviceInventory() {
           setOnboardResults(previous => ({...previous, [device.id]: {
             status: "Needs attention", message: error instanceof Error ? error.message : "Onboarding failed",
           }}));
+        } finally {
+          index++;
+          setBatchProgress({done: index, total: pendingOnboarding.length});
         }
-        index++;
-        setBatchProgress({done: index, total: successfulDevices.length});
       }
       setFeedback({message: "Onboarding complete: " + complete + " monitored; " +
         needsAttention + " need attention. Failed and unverified devices remain in inventory for retry."});
@@ -394,13 +402,14 @@ export default function DeviceInventory() {
           {restCandidates.length > 0 && <button type="button" className={btn}
             disabled={busy || !!testing || testingBatch || onboardingBusy}
             onClick={() => void enableBatchRest()}>Enable REST on eligible APs ({restCandidates.length})</button>}
-          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !successfulDevices.length}
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !pendingOnboarding.length}
             onClick={() => void onboardSuccessful()}>
-            {onboardingBusy ? "Onboarding devices…" : `Onboard Successful (${successfulDevices.length})`}
+            {`Onboard REST-verified (${pendingOnboarding.length})`}
           </button>
         </div>
         <p className="text-sm text-slate-600" role="status" aria-live="polite">
           REST login verified: {checkCounts.successful} · Other results: {checkCounts.failed} · Not tested: {checkCounts.notTested}
+          {" · "}Onboarded: {onboardedCount} · Needs attention: {onboardingAttention}
           {batchProgress && ` · Processed ${batchProgress.done}/${batchProgress.total}`}
         </p>
         <p className="text-sm text-slate-600">
