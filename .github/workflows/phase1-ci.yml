@@ -51,6 +51,10 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+      - name: Ensure administrator exact-IP approval control ships in production bundle
+        run: |
+          grep -rlF 'data-inm-approval-action' frontend/dist/assets >/dev/null
+          echo 'PASS: Approve IP & Test action is present in built frontend assets'
 
   full-stack-e2e:
     runs-on: ubuntu-latest
