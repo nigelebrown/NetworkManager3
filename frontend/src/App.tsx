@@ -9,6 +9,7 @@ import APs from "./pages/APs";
 import ApFleet from "./pages/ApFleet";
 import ApHealthReport from "./pages/ApHealthReport";
 import ClientConnectivity from "./pages/ClientConnectivity";
+import DiscoveryRules from "./pages/DiscoveryRules";
 import Clients from "./pages/Clients";
 import Configuration from "./pages/Configuration";
 import Firmware from "./pages/Firmware";
@@ -74,8 +75,9 @@ export default function App() {
         {/* Preserved SIMS screens (Phase 1 parity) */}
         <Route index element={<NocDashboard />} />
         <Route path="wifi" element={<Dashboard />} />
-        <Route path="aps" element={<APs />} />
-        <Route path="aps/fleet" element={<ApFleet />} />
+        <Route path="aps" element={<ApFleet mode="aps" />} />
+        <Route path="aps/controller" element={<APs />} />
+        <Route path="aps/fleet" element={<Navigate to="/aps" replace />} />
         <Route path="ap-health" element={<ApHealthReport />} />
         <Route path="clients" element={<Clients />} />
         <Route path="experience" element={<Experience />} />
@@ -99,7 +101,8 @@ export default function App() {
         <Route path="onboarding/manual" element={<DeviceIntake />} />
         <Route path="devices/:id/config" element={<DeviceConfig />} />
         <Route path="config-templates" element={<ConfigTemplates />} />
-        <Route path="discovery" element={<DiscoveryRanges />} />
+        <Route path="discovery" element={<DiscoveryRules />} />
+        <Route path="discovery/planner" element={<DiscoveryRanges />} />
         <Route path="printers" element={<Printers />} />
         <Route path="printers/:id" element={<PrinterDetails />} />
         <Route path="devices/:id" element={<DeviceDetails />} />

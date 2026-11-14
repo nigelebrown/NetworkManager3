@@ -52,7 +52,8 @@ def test_batch_test_and_onboard_are_admin_only_read_only_and_status_gated():
     assert "window.confirm(" in page
     assert "Approve the listed exact /32 device IPs before running REST tests" in page
     assert "await onboardingApi.approveDeviceIP" in page
-    assert "await onboardingApi.capture(device.id, result.profileId)" in page
+    # the production branch passes the batch explicitly (it is `result` unless a new batch is being tested)
+    assert "await onboardingApi.capture(device.id, batch.profileId)" in page
     assert "await ops.previewPlan(plan)" in page
     assert "await ops.createPlan(plan)" in page
     assert 'interval_seconds: 300' in page

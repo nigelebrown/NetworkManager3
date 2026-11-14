@@ -51,6 +51,30 @@ def _set_caps(db: Session, device: InmDevice, caps: list[Capability]) -> None:
             row.status, row.evidence, row.updated_at = cap.status.value, cap.evidence, now
 
 
+def _match_device(db: Session, src: str, serial: str, ap: AccessPoint) -> tuple[InmDevice | None, bool]:
+    """Find the inventory record for a cluster-reported AP. Imported/onboarded records ("Aruba", any serial case)
+    are ADOPTED instead of creating a second "aruba" record; a duplicate left by earlier releases is retired
+    (lifecycle=merged) so every consumer sees one device per AP."""
+    from sqlalchemy import func
+    rows = list(db.scalars(select(InmDevice).where(
+        InmDevice.source_type == src, func.lower(InmDevice.vendor) == "aruba",
+        InmDevice.family == "access_point", func.lower(InmDevice.serial_number) == serial.lower())))
+    if not rows and ap.mac:  # imported by MAC-as-hostname with a different serial format
+        rows = list(db.scalars(select(InmDevice).where(
+            InmDevice.source_type == src, InmDevice.family == "access_point", InmDevice.legacy_ap_id.is_(None),
+            func.lower(InmDevice.hostname) == ap.mac.lower())))
+    if not rows:
+        return None, False
+    # Prefer the operator's record (it carries site, credential binding, approvals).
+    rows.sort(key=lambda d: (d.legacy_ap_id is not None and d.vendor == "aruba", d.created_at or datetime.min.replace(tzinfo=timezone.utc)))
+    keep = rows[0]
+    for dup in rows[1:]:
+        if dup.legacy_ap_id is not None and keep.legacy_ap_id is None:
+            keep.legacy_ap_id, keep.legacy_site_id = dup.legacy_ap_id, dup.legacy_site_id
+        dup.legacy_ap_id, dup.lifecycle = None, "merged"
+    return keep, keep.vendor != "aruba" or len(rows) > 1
+
+
 def sync_inventory(db: Session) -> dict[str, int]:
     """Idempotent projection. Returns counts for the inventory.synchronised event."""
     counts = {"sites": 0, "clusters": 0, "aps": 0, "switches": 0}
@@ -78,17 +102,23 @@ def sync_inventory(db: Session) -> dict[str, int]:
         cl = clusters_by_legacy.get(ap.site_id)
         src = _src(ap.simulated)
         serial = ap.serial or f"MAC:{ap.mac}"
-        dev = db.scalar(select(InmDevice).where(InmDevice.source_type == src, InmDevice.vendor == "aruba",
-                                                InmDevice.serial_number == serial))
+        dev, adopted = _match_device(db, src, serial, ap)
         if dev is None:
             dev = InmDevice(source_type=src, environment="demo" if ap.simulated else "lab", vendor="aruba",
                             family="access_point", serial_number=serial,
                             adapter="demo.aruba_instant" if ap.simulated else "aruba_instant_8_10", lifecycle="monitored")
             db.add(dev)
-        dev.model, dev.hostname, dev.firmware = ap.model, ap.name, ap.firmware
-        dev.mgmt_addresses = [ap.ip] if ap.ip else []
+        dev.model = ap.model or dev.model
+        dev.hostname, dev.firmware = ap.name or dev.hostname, ap.firmware or dev.firmware
+        dev.mgmt_addresses = [ap.ip] if ap.ip else (dev.mgmt_addresses or [])
         dev.cluster_id = cl.id if cl else None
-        dev.site_id = site_overrides.get(dev.id, cl.site_id if cl else None)
+        if dev.lifecycle == "merged":
+            dev.lifecycle = "monitored"
+        # An imported record keeps the physical site the operator gave it; the cluster's pseudo-site is only a
+        # fallback for APs nobody placed.
+        dev.site_id = site_overrides.get(dev.id, dev.site_id if adopted and dev.site_id else (cl.site_id if cl else None))
+        if adopted and dev.adapter == "manual_snapshot":
+            dev.adapter = "aruba_instant_8_10"
         dev.legacy_ap_id, dev.legacy_site_id, dev.status = ap.id, ap.site_id, ap.status
         if ap.last_seen:
             dev.last_observed_at = ap.last_seen

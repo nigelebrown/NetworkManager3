@@ -317,13 +317,21 @@ def v1_logs(stream: str = Query("events", pattern="^(events|syslog)$"), contains
         raise HTTPException(503, f"Loki query failed: {str(exc)[:200]}")
     if stream == "syslog":
         ids = _visible_legacy_ids(db)
-        by_host = {d.hostname: d for d in db.scalars(select(InmDevice)) if d.hostname and d.legacy_site_id in ids}
+        # Instant / CX syslog carries the AP name, its IP or its MAC as the hostname. Map all three, case-insensitive,
+        # for every visible device — including registered devices that are not (yet) in a polled cluster.
+        by_host: dict[str, InmDevice] = {}
+        for d in db.scalars(select(InmDevice).where(InmDevice.lifecycle != "merged")):
+            if d.legacy_site_id is not None and d.legacy_site_id not in ids:
+                continue
+            for k in [d.hostname, d.serial_number, *(d.mgmt_addresses or [])]:
+                if k:
+                    by_host.setdefault(str(k).casefold(), d)
         for e in entries:
             host = e["labels"].get("host") or e["labels"].get("hostname")
-            dev = by_host.get(host or "")
+            dev = by_host.get((host or "").casefold())
             e["device"] = _device_out(dev) if dev else None
             e["correlation"] = "MAPPED" if dev else "UNMAPPED"
-            e["unmapped_reason"] = None if dev else (f"no visible device with hostname '{host}'" if host else "message carried no hostname")
+            e["unmapped_reason"] = None if dev else (f"no visible device with hostname, IP or serial '{host}'" if host else "message carried no hostname")
     return {"stream": stream, "query": logql, "entries": entries}
 
 

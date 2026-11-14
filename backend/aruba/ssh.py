@@ -264,3 +264,102 @@ def run_config_lines(host: str, username: str, password: str, expected_fingerpri
         return results
     finally:
         t.close()
+
+
+# ------------------------------------------------------------------ read-only CLI collection (REST disabled)
+_MORE = re.compile(r"--\s*more\s*--|<--- more --->|press any key", re.I)
+
+
+class SshShowClient:
+    """Read-only Instant CLI over SSH with the same `.show()` contract as ArubaClient.
+
+    Used when a cluster's REST API is disabled and cannot (or may not) be enabled. Every command passes the SAME
+    read-only allowlist as REST (`client.validate_command`), the host key must match a pinned fingerprint BEFORE the
+    password is offered, and no configuration mode is ever entered. Per-member targeting (`iap_ip`) is not
+    available over the VC CLI, so targeted commands raise ArubaCommandError and are recorded as unavailable.
+    """
+
+    transport_name = "ssh_cli"
+
+    def __init__(self, host: str, username: str, password: str, expected_fingerprint: str, *, port: int = 22,
+                 timeout: float = 20.0):
+        self.host, self.username, self._password = host, username, password
+        self.expected_fingerprint, self.port, self.timeout = expected_fingerprint, port, timeout
+        self._t = None
+        self._chan = None
+
+    def __enter__(self) -> "SshShowClient":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    @property
+    def logged_in(self) -> bool:
+        return self._chan is not None
+
+    def login(self) -> None:
+        if self._chan is not None:
+            return
+        if not self.expected_fingerprint:
+            raise ArubaSshError("No approved SSH host-key fingerprint for this controller; approve it first.")
+        t = _open_transport(self.host, self.port, self.timeout)
+        try:
+            actual = fingerprint(t.get_remote_server_key())
+            if actual != self.expected_fingerprint:
+                raise ArubaSshError("SSH host key does not match the approved fingerprint. Nothing was sent.")
+            try:
+                t.auth_password(self.username, self._password)
+            except paramiko.AuthenticationException:
+                raise ArubaAuthError("SSH login rejected (check the username/password).") from None
+            except (paramiko.SSHException, EOFError, OSError) as exc:
+                raise ArubaSshError(f"SSH login failed: {type(exc).__name__}") from None
+            chan = t.open_session()
+            chan.get_pty(width=512, height=1000)
+            chan.invoke_shell()
+            _read_until_prompt(chan, self.timeout)
+        except Exception:
+            t.close()
+            raise
+        self._t, self._chan = t, chan
+
+    def show(self, cmd: str, *, iap_ip: str | None = None, _retry: bool = True) -> dict[str, Any]:
+        from .client import validate_command
+        from .errors import ArubaCommandError
+        cmd = validate_command(cmd)
+        if iap_ip:
+            raise ArubaCommandError("Per-AP targeting is not available over the controller CLI (REST disabled).")
+        self.login()
+        chan = self._chan
+        chan.send(cmd + "\n")
+        buf, end = "", time.monotonic() + self.timeout
+        while time.monotonic() < end:
+            if chan.recv_ready():
+                buf += chan.recv(65536).decode("utf-8", "replace")
+                tail = buf.rstrip("\r\n").split("\n")[-1] if buf.strip() else ""
+                if _MORE.search(tail):
+                    buf = _MORE.sub("", buf)
+                    chan.send(" ")
+                    continue
+                if _PROMPT.search(tail.rstrip()) and "\n" in buf:
+                    break
+            else:
+                time.sleep(0.05)
+        else:
+            raise ArubaCommandError(f"Timed out reading '{cmd}' over SSH.")
+        buf = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\x08]+", "", buf)
+        lines = buf.replace("\r", "").split("\n")[1:-1]  # drop echoed command and trailing prompt
+        text = "\n".join(lines)
+        if any(m in text.lower() for m in _ERRORS):
+            raise ArubaCommandError(f"The controller rejected '{cmd}'.")
+        return {"Command output": text, "_transport": "ssh_cli"}
+
+    def logout(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._t is not None:
+            try:
+                self._t.close()
+            finally:
+                self._t, self._chan = None, None

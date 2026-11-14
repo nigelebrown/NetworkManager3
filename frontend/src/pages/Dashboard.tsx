@@ -32,7 +32,7 @@ export default function Dashboard() {
         <>
           {s.coverage && s.coverage.unmonitored_aps > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             <b>Only {s.coverage.monitored_aps} of {s.coverage.inventory_aps} registered APs ({s.coverage.percent}%) are in a polled cluster.</b> Every figure below describes those APs only;
-            the other {s.coverage.unmonitored_aps} are outside this dashboard’s coverage. <Link className="underline" to="/aps">View access points</Link></div>}
+            the other {s.coverage.unmonitored_aps} are not observed at all. <Link className="underline" to="/aps#autodiscover">Auto-onboard the rest</Link> · <Link className="underline" to="/ap-health">AP health report</Link></div>}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="Monitoring coverage" value={s.coverage ? `${s.coverage.monitored_aps} / ${s.coverage.inventory_aps}` : `${s.aps_total}`}
               tone={s.coverage && s.coverage.unmonitored_aps ? "warn" : "ok"} sub={`APs observed · ${s.sites_total} cluster(s) polled${s.clusters_failing ? `, ${s.clusters_failing} failing` : ""}`} />

@@ -14,6 +14,17 @@ def client_for_site(site: Site, transport: httpx.BaseTransport | None = None) ->
     if not site.vc_host or not site.api_username or not site.api_password_enc:
         raise ArubaError("Site has no Virtual Controller address or credentials configured.")
     s = get_settings()
+    if transport is None and not site.simulated and site.id is not None:
+        # Clusters whose REST API is off are read over the controller CLI (read-only allowlist, pinned host key).
+        from sqlalchemy.orm import object_session
+        db = object_session(site)
+        if db is not None:
+            from ..infrastructure.ap_autodiscovery import site_transport
+            t = site_transport(db, site.id)
+            if t.get("transport") == "ssh_cli":
+                from .ssh import SshShowClient
+                return SshShowClient(t.get("ssh_host") or site.vc_host, site.api_username,  # type: ignore[return-value]
+                                     decrypt_secret(site.api_password_enc), t.get("fingerprint") or "")
     target = ArubaTarget(
         host=site.vc_host,
         port=site.vc_port,

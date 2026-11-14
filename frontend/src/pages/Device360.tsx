@@ -75,7 +75,7 @@ export default function Device360() {
         <div>Freshness <Pill value={ins?.state.freshness ?? "—"} tone={statusTone(ins?.state.freshness ?? "")} /></div>
         {(ins?.metrics ?? []).slice(0, 8).map(m => <div key={m.metric} className="flex justify-between gap-2"><span className="text-slate-500">{m.label}</span>
           <b>{Math.round(m.value * 10) / 10}{m.unit}</b></div>)}
-        {ins && !ins.metrics.length && <p className="text-xs text-slate-500">No readings in 24 h. {d?.family === "access_point" ? "Link this AP to a polled cluster (AP fleet by cluster)." : "Enable read-only monitoring (Live collection)."}</p>}</div></Card>
+        {ins && !ins.metrics.length && <p className="text-xs text-slate-500">No readings in 24 h. {d?.family === "access_point" ? "Link this AP to a polled cluster (Access points → Auto-onboard)." : "Enable read-only monitoring (Live collection)."}</p>}</div></Card>
       <Card title="Optimization"><div className="space-y-1 text-sm"><Pill value={opt.data?.badge ?? "AUTO OFF"} tone="none" />
         <p className="text-xs text-slate-400">Recommendations only unless this AP is individually enrolled and approved.</p>
         {d?.family === "access_point" && <button className="block text-xs text-sky-700 underline" onClick={() => setDiag(true)}>See recommended RF changes →</button>}
@@ -93,7 +93,7 @@ export default function Device360() {
         <Area dataKey="v" name={metric} stroke={COLORS.info} fill="url(#m)" connectNulls={false} /></AreaChart></ResponsiveContainer>
         : data.length === 1 ? <p className="py-10 text-center text-sm text-slate-600">One reading so far: <b>{data[0].v}</b> at {data[0].t}. The trend appears after the next poll.</p>
         : <p className="py-10 text-center text-sm text-slate-500">No {label(metric)} readings in this window. {d?.family === "access_point"
-          ? <>Link this AP to a polled cluster under <Link className="text-sky-700" to="/aps/fleet">AP fleet by cluster</Link>.</>
+          ? <>Link this AP to a polled cluster under <Link className="text-sky-700" to="/aps#autodiscover">Access points → Auto-onboard</Link>.</>
           : <>Enable read-only monitoring under <Link className="text-sky-700" to="/collection">Live collection</Link>.</>}</p>}
     </Card>}
     {tab === "Radios & clients" && <div className="grid gap-4 lg:grid-cols-2">
