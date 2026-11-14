@@ -3,7 +3,7 @@ import { FormEvent, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Card, ErrorNote, Stat, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
-import { printerApi, type PrinterAnalysis } from "../services/printers";
+import { printerApi, type DiscoveredPrinter, type PrinterAnalysis } from "../services/printers";
 
 const fieldStyle = "mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm";
 const btn = "rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50";
@@ -36,6 +36,8 @@ export function Printers() {
     area: "", division: "", branch: "", station: "", section_unit: "", building: "",
   });
   const [probe, setProbe] = useState({ management_ip: "", username: "", auth_passphrase: "", privacy_passphrase: "" });
+  const [range, setRange] = useState("");
+  const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[] } | null>(null);
   const [probeResult, setProbeResult] = useState<Record<string, unknown> | null>(null);
   const [analysis, setAnalysis] = useState<PrinterAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,7 +73,7 @@ export function Printers() {
       </div>
       <div className="flex flex-wrap gap-2">
         <button className={btn} onClick={() => { setEditing(!editing); setSnmp(false); }}> {editing ? "Close registration" : "Add a printer"} </button>
-        <button className={sub} onClick={() => { setSnmp(!snmp); setEditing(false); }}>Test SNMPv3 connection</button>
+        <button className={sub} onClick={() => { setSnmp(!snmp); setEditing(false); }}>Discover printers / test SNMPv3</button>
         <button className={sub} disabled={busy} onClick={() => action(async () => { setAnalysis(await printerApi.analyse()); }, "Rule-based analysis completed.")}>Analyse now</button>
       </div>
       <ErrorNote error={error ?? inventory.error ?? stats.error} />
@@ -106,15 +108,31 @@ export function Printers() {
           <button className={btn} disabled={busy}>Register printer</button>
         </form>
       </Card>}
-      {snmp && <Card title="Read-only SNMPv3 device identification">
-        <p className="mb-3 text-xs text-slate-400">Requires a server-authorized private management IP, SNMPv3 SHA-256/AES authentication and printer MIB support. No credentials are saved. No driver installation.</p>
+      {snmp && <Card title="Discover printers with SNMPv3">
+        <p className="mb-3 text-xs text-slate-400">Enter a server-approved private IPv4 address or CIDR up to /24. Use read-only SNMPv3 SHA-256 and AES-128 credentials. Discovery looks for Printer-MIB responses.</p>
         <form onSubmit={e => {
           e.preventDefault();
-          action(async () => { setProbeResult(await printerApi.probe(probe)); setProbe(p => ({ ...p, auth_passphrase: "", privacy_passphrase: "" })); },
-            "One-time read-only probe completed. Review the identity and register the printer separately.");
+          setDiscovery(null); setProbeResult(null);
+          action(async () => {
+            const target = range.trim();
+            const { username, auth_passphrase, privacy_passphrase } = probe;
+            const credentials = { username, auth_passphrase, privacy_passphrase };
+            try {
+              if (target.includes("/")) {
+                setDiscovery(await printerApi.discover({ ...credentials, management_range: target }));
+              } else {
+                setProbeResult(await printerApi.probe({ ...credentials, management_ip: target }));
+              }
+            } finally {
+              setProbe(p => ({ ...p, auth_passphrase: "", privacy_passphrase: "" }));
+            }
+          }, "Read-only discovery completed.");
         }} className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
-            {(["management_ip", "username", "auth_passphrase", "privacy_passphrase"] as const).map(k => (
+            <label className="text-sm">Management IP or CIDR
+              <input required className={fieldStyle} value={range} onChange={e => setRange(e.target.value)} placeholder="10.190.1.0/24" />
+            </label>
+            {(["username", "auth_passphrase", "privacy_passphrase"] as const).map(k => (
               <label className="text-sm" key={k}>{({ management_ip: "Printer management IP", username: "SNMPv3 username",
                 auth_passphrase: "Authentication passphrase (SHA-256)", privacy_passphrase: "Privacy passphrase (AES-128)" })[k]}
                 <input required type={k.includes("passphrase") ? "password" : "text"} className={fieldStyle}
@@ -122,8 +140,21 @@ export function Printers() {
               </label>
             ))}
           </div>
-          <button className={btn} disabled={busy}>Read printer identity</button>
+          <button className={btn} disabled={busy}>{busy ? "Discovering…" : "Discover"}</button>
         </form>
+        {discovery && <div className="mt-4 space-y-2 text-sm">
+          <p>{discovery.printers.length} printers responded across {discovery.scanned} addresses.</p>
+          {discovery.printers.map(printer => <div key={printer.management_ip} className="flex flex-wrap items-center gap-3 border-b py-2">
+            <span className="font-mono">{printer.management_ip}</span>
+            <span>{printer.hostname ?? "Hostname unavailable"}</span>
+            <span>{printer.system_description}</span>
+            <button className={sub} onClick={() => {
+              setNewPrinter(previous => ({ ...previous, hostname: printer.hostname ?? "", management_ip: printer.management_ip }));
+              setSnmp(false);
+              setEditing(true);
+            }}>Review and register</button>
+          </div>)}
+        </div>}
         {probeResult && <div className="mt-4 rounded border border-slate-700 p-3 text-sm">
           <p className="font-semibold">Returned device information (not yet enrolled)</p>
           <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(probeResult, null, 2)}</pre>
@@ -144,14 +175,15 @@ export function Printers() {
       <Card title="Printer inventory">
         <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm">
           <thead className="text-xs uppercase text-slate-400"><tr>
-            {["Manufacturer", "Model", "Serial", "Location", "Status", "Source", ""].map(h =>
+            {["Manufacturer", "Model", "Serial", "Management IP", "Location", "Status", "Source", ""].map(h =>
               <th key={h} className="px-2 py-2">{h}</th>)}
           </tr></thead>
           <tbody className="divide-y divide-slate-800">
             {inventory.data?.map(d => <tr key={d.id}>
               <td className="px-2 py-2">{d.manufacturer}</td><td className="px-2 py-2">{d.model}</td>
               <td className="px-2 py-2 font-mono text-xs">{d.serial_number}</td>
-              <td className="px-2 py-2">{[d.area, d.division, d.station, d.section_unit].filter(Boolean).join(" / ") || "Not assigned"}</td>
+              <td className="px-2 py-2 font-mono text-xs">{d.management_ip ?? "—"}</td>
+              <td className="px-2 py-2">{[d.area, d.division, d.branch, d.station, d.section_unit, d.building].filter(Boolean).join(" / ") || "Not assigned"}</td>
               <td className="px-2 py-2"><Badge value={d.status} /></td>
               <td className="px-2 py-2 text-emerald-300">{d.provenance}</td>
               <td className="px-2 py-2"><Link to={`/printers/${d.id}`} className="text-sky-400 hover:underline">Open</Link></td>
