@@ -72,8 +72,6 @@ export default function DeviceInventory() {
     failed: (result?.devices ?? []).filter(d => checks[d.id] && checks[d.id].restState !== "ENABLED").length,
     notTested: (result?.devices ?? []).filter(d => !checks[d.id]).length,
   };
-  // Explicit administrator confirmation is required for each /32 before
-  // the host agent opens worker egress. The API never modifies host firewalls.
   const testConnection = async (
     profileId: string,
     d: {id: string; address?: string},
@@ -96,9 +94,10 @@ export default function DeviceInventory() {
         bootstrapEligible: response.family === "access_point" && !response.write_unlock_required,
         clusterManaged: response.cluster_managed,
       }}));
+      return response;
     };
     try {
-      await check();
+      return await check();
     } catch (error) {
       setChecks(previous => ({...previous, [d.id]: {
         status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
@@ -106,17 +105,18 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
-  const testAllConnections = async (batch = result) => {
+  const testAllConnections = async (batch = result, autoOnboard = false) => {
     if (!batch || testingBatch || onboardingBusy) return;
     const targets = batch.devices.filter(d => d.address);
     if (!targets.length) return;
     setTestingBatch(true);
     setBatchProgress({done: 0, total: batch.devices.length});
-    setOnboardResults({});
+    const verified = new Map<string, RestPreflight>();
     try {
       for (const [index, device] of batch.devices.entries()) {
         if (device.address) {
-          await testConnection(batch.profileId, device);
+          const response = await testConnection(batch.profileId, device);
+          if (response?.state === "ENABLED") verified.set(device.id, response);
         } else {
           setChecks(previous => ({...previous, [device.id]: {
             status: "Missing IP", message: "Device has no management address; skipped",
@@ -127,6 +127,9 @@ export default function DeviceInventory() {
     } finally {
       setTestingBatch(false);
       setBatchProgress(null);
+    }
+    if (autoOnboard && verified.size) {
+      await onboardSuccessful(batch, batch.devices.filter(d => verified.has(d.id)), verified);
     }
   };
 
@@ -169,10 +172,11 @@ export default function DeviceInventory() {
     }
   };
 
-  const onboardSuccessful = async () => {
-    if (!result || !pendingOnboarding.length || testingBatch || onboardingBusy) return;
-    if (!window.confirm(
-      "Onboard " + pendingOnboarding.length + " REST-verified registered device(s)?\n\n" +
+  const onboardSuccessful = async (batch = result, targets = pendingOnboarding,
+    verified?: Map<string, RestPreflight>) => {
+    if (!batch || !targets.length || testingBatch || onboardingBusy) return;
+    if (!verified && !window.confirm(
+      "Onboard " + targets.length + " REST-verified registered device(s)?\n\n" +
       "For each device: reverify login, import a read-only configuration baseline, " +
       "and schedule read-only monitoring every 5 minutes if supported. " +
       "Devices already monitored will not get duplicate plans. " +
@@ -181,19 +185,20 @@ export default function DeviceInventory() {
     )) return;
     setOnboardingBusy(true);
     setFeedback({});
-    setBatchProgress({done: 0, total: pendingOnboarding.length});
+    setBatchProgress({done: 0, total: targets.length});
     let complete = 0;
     let needsAttention = 0;
     let index = 0;
     try {
       const plans = await ops.plans();
-      for (const device of pendingOnboarding) {
+      for (const device of targets) {
         try {
           setOnboardResults(previous => ({...previous, [device.id]: {
             status: "Verifying REST", message: "Checking the connection before onboarding",
           }}));
           if (!device.address) throw new Error("Missing management IP");
-          const live = await onboardingApi.checkRestApi(result.profileId, device.address, device.id);
+          const live = verified?.get(device.id) ??
+            await onboardingApi.checkRestApi(batch.profileId, device.address, device.id);
           if (live.state !== "ENABLED") {
             setChecks(previous => ({...previous, [device.id]: {
               status: "REST not verified", message: live.detail, restState: live.state,
@@ -214,7 +219,7 @@ export default function DeviceInventory() {
             status: "Importing baseline", message: "Reading device configuration without changes",
           }}));
           const config = await onboardingApi.deviceConfig(device.id);
-          if (!config.baseline) await onboardingApi.capture(device.id, result.profileId);
+          if (!config.baseline) await onboardingApi.capture(device.id, batch.profileId);
           const existing = plans.find(p => p.device_id === device.id);
           if (existing) {
             if (existing.state !== "ACTIVE") {
@@ -247,7 +252,7 @@ export default function DeviceInventory() {
           }}));
         } finally {
           index++;
-          setBatchProgress({done: index, total: pendingOnboarding.length});
+          setBatchProgress({done: index, total: targets.length});
         }
       }
       setFeedback({message: "Onboarding complete: " + complete + " monitored; " +
@@ -316,7 +321,7 @@ export default function DeviceInventory() {
           setRestBootstrapDevice(null);
           changeSelection([]);
           setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
-          await testAllConnections(batch);
+          await testAllConnections(batch, true);
         } catch (e) {
           setFeedback({error: e instanceof Error ? e.message : "Could not assign the profile"});
         } finally { setBusy(false); }
@@ -331,7 +336,7 @@ export default function DeviceInventory() {
           <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
         <button className={btn} disabled={busy || (!!testing || testingBatch) || onboardingBusy || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
-          {busy ? "Working…" : "Assign profile & test"}
+          {busy ? "Working…" : "Assign profile & onboard"}
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
       </form>}
