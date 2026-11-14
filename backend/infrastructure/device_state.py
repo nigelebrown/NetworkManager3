@@ -46,6 +46,7 @@ def inventory_identity(device):
 
 
 def canonical_inventory(devices):
+    devices = [d for d in devices if getattr(d, "lifecycle", None) != "merged"]
     projected = {inventory_identity(d) for d in devices if d.legacy_ap_id is not None}
     return [d for d in devices if d.legacy_ap_id is not None or inventory_identity(d) not in projected]
 

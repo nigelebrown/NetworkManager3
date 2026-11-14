@@ -21,6 +21,7 @@ from ..database.models import AccessPoint, ApSample, AppSetting, ClientEvent, Cl
 from ..database.models_inm import InmCluster, InmDevice, InmSite
 from ..database.session import get_db
 from ..domain import ap_health as H
+from ..infrastructure import ap_autodiscovery as AD
 from ..monitoring.collector import visible_sites
 from ..security.deps import audit, require_role
 from ..security.privacy import mask_mac
@@ -29,6 +30,7 @@ from ..security.context import get_scope
 
 
 def require_global_scope():
+    """Fleet-wide workspaces are refused to site-scoped users (kept from the production branch)."""
     if get_scope() is not None:
         raise HTTPException(403, "This fleet-wide workspace requires access to all sites.")
 
@@ -133,7 +135,7 @@ def build_fleet(db: Session) -> dict[str, Any]:
         ev = tiers.get(name)
         tier = min([t for t in (ctier, ev and ev["tier"]) if t] or ["UNRATED"], key=lambda t: H.TIER_RANK[t])
         cl = clusters_by_legacy.get(d.legacy_site_id)
-        transport = "REST" if controller else None
+        transport = AD.site_transport(db, controller.id)["transport"] if controller else None
         aps.append({
             "device_id": d.id, "name": name, "serial": d.serial_number, "model": d.model, "firmware": d.firmware,
             "ip": (d.mgmt_addresses or [None])[0], "mac": a.mac if a else None, "source_type": d.source_type,
@@ -154,7 +156,7 @@ def build_fleet(db: Session) -> dict[str, Any]:
         })
     groups: dict[str, dict] = {}
     for s in sites.values():
-        t = {"transport": "REST"}
+        t = AD.site_transport(db, s.id)
         groups[str(s.id)] = {"key": str(s.id), "name": (clusters_by_legacy.get(s.id).name
                              if clusters_by_legacy.get(s.id) else s.name), "vc_host": s.vc_host,
                              "simulated": s.simulated, "enabled": s.enabled, "last_poll_at": _iso(s.last_poll_at),
@@ -189,6 +191,71 @@ def build_fleet(db: Session) -> dict[str, Any]:
 @router.get("/fleet")
 def fleet(db: Session = Depends(get_db), _: User = Depends(require_role("viewer"))):
     return build_fleet(db)
+
+
+# ---------------------------------------------------------------------------------------- auto-onboarding
+class Targets(BaseModel):
+    device_ids: list[str] | None = Field(default=None, max_length=2000)
+
+
+class KeyApproval(BaseModel):
+    items: list[dict] = Field(min_length=1, max_length=2000)
+    confirm: str = Field(min_length=1, max_length=64)
+
+
+class AutoOnboard(Targets):
+    auto_enable_rest: bool = False
+
+
+@router.post("/autodiscover/scan-keys")
+def scan_keys(body: Targets, request: Request, db: Session = Depends(get_db),
+              admin: User = Depends(require_role("admin"))):
+    """Unauthenticated SSH host-key scan of registered APs that are not yet linked (no credentials are sent)."""
+    from ..api.quick_devices import _permit_probe
+    ips = []
+    for ip in AD.wanted_ips(db, body.device_ids):
+        try:
+            _permit_probe(ipaddress.IPv4Address(ip))
+            ips.append(ip)
+        except Exception:
+            continue
+    results = AD.scan_host_keys(db, ips, admin.username)
+    audit(db, "ap_hostkey_scan", username=admin.username, target="access_points",
+          detail=f"scanned={len(results)} with_key={sum(1 for r in results if r.get('fingerprint'))}", request=request)
+    return {"scanned": len(results), "results": results, "pending": AD.pending_fingerprints(db)}
+
+
+@router.get("/autodiscover/pending-keys")
+def pending_keys(db: Session = Depends(get_db), _: User = Depends(require_role("admin"))):
+    return AD.pending_fingerprints(db)
+
+
+@router.post("/autodiscover/approve-keys")
+def approve_keys(body: KeyApproval, request: Request, db: Session = Depends(get_db),
+                 admin: User = Depends(require_role("admin"))):
+    if body.confirm != "APPROVE HOST KEYS":
+        raise HTTPException(422, "Type APPROVE HOST KEYS to confirm you verified these fingerprints.")
+    out = AD.approve_fingerprints(db, body.items, admin.username)
+    audit(db, "ap_hostkey_approved", username=admin.username, target="access_points",
+          detail=f"approved={sum(1 for x in out if x['approved'])} of {len(out)}", request=request)
+    return out
+
+
+@router.post("/autodiscover", status_code=202)
+def autodiscover(body: AutoOnboard, request: Request, db: Session = Depends(get_db),
+                 admin: User = Depends(require_role("admin"))):
+    try:
+        out = AD.start_job(admin.username, device_ids=body.device_ids, auto_enable_rest=body.auto_enable_rest)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    audit(db, "ap_auto_onboarding_started", username=admin.username, target="access_points",
+          detail=f"auto_enable_rest={body.auto_enable_rest} scope={len(body.device_ids or []) or 'all'}", request=request)
+    return out
+
+
+@router.get("/autodiscover/status")
+def autodiscover_status(db: Session = Depends(get_db), _: User = Depends(require_role("operator"))):
+    return AD.job_status(db)
 
 
 # ---------------------------------------------------------------------------------------- AP health report

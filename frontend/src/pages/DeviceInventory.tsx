@@ -76,11 +76,47 @@ export default function DeviceInventory() {
     failed: (result?.devices ?? []).filter(d => checks[d.id] && checks[d.id].restState !== "ENABLED").length,
     notTested: (result?.devices ?? []).filter(d => !checks[d.id]).length,
   };
+  // Explicit administrator confirmation is required for each /32 before
+  // the host agent opens worker egress. The API never modifies host firewalls.
+  const approveIP = async (profileId: string, d: {id: string; address?: string}) => {
+    if (!d.address) return false;
+    const current = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address);
+    if (current.state === "APPLIED") return true;
+    await onboardingApi.approveDeviceIP({device_id: d.id, profile_id: profileId, management_ip: d.address,
+      confirmation: "APPROVE IP " + d.address});
+    for (let i = 0; i < 10; i++) {
+      const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address);
+      if (status.state === "APPLIED") return true;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    return false;
+  };
   const testConnection = async (
     profileId: string,
     d: {id: string; address?: string},
+    _unused: null = null,
+    approve = false,
+    confirmed = false,
   ) => {
     if (!d.address) return;
+    if (approve) {
+      if (!confirmed && !window.confirm("Approve exact management IP " + d.address + "/32 for read-only REST tests?\n\n" +
+        "This records APPROVE IP " + d.address + "; the host agent opens egress to this single address only.")) return;
+      setTesting(d.id);
+      try {
+        if (!(await approveIP(profileId, d))) {
+          setChecks(previous => ({...previous, [d.id]: {status: "Approval pending",
+            message: "Exact /32 approval recorded; waiting for the host agent to apply it. Test again shortly."}}));
+          setTesting(null);
+          return;
+        }
+      } catch (error) {
+        setChecks(previous => ({...previous, [d.id]: {status: "Approval failed",
+          message: error instanceof Error ? error.message : "IP approval failed"}}));
+        setTesting(null);
+        return;
+      }
+    }
     setTesting(d.id);
     const labels: Record<string, string> = {
       ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
@@ -109,17 +145,19 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
-  const testAllConnections = async (batch = result, autoOnboard = false) => {
+  const testAllConnections = async (batch = result, autoOnboard = false, approve = false) => {
     if (!batch || testingBatch || onboardingBusy) return;
     const targets = batch.devices.filter(d => d.address);
     if (!targets.length) return;
+    if (approve && !window.confirm("Approve the listed exact /32 device IPs before running REST tests?\n\n" +
+      targets.map(d => d.address).join(", ") + "\n\nEach address is approved individually (APPROVE IP <address>).")) return;
     setTestingBatch(true);
     setBatchProgress({done: 0, total: batch.devices.length});
     const verified = new Map<string, RestPreflight>();
     try {
       for (const [index, device] of batch.devices.entries()) {
         if (device.address) {
-          const response = await testConnection(batch.profileId, device);
+          const response = await testConnection(batch.profileId, device, null, approve, true);
           if (response?.state === "ENABLED") verified.set(device.id, response);
         } else {
           setChecks(previous => ({...previous, [device.id]: {
@@ -145,37 +183,6 @@ export default function DeviceInventory() {
     return [{...device, address: device.address, fingerprint: check.ssh.fingerprint, trust: check.ssh.trust}];
   });
 
-  const enableBatchRest = async () => {
-    if (!result || busy || testing || testingBatch || onboardingBusy || !restCandidates.length) return;
-    const firstSeen = restCandidates.filter(device => device.trust === "FIRST_SEEN").length;
-    if (!window.confirm(`Enable REST on ${restCandidates.length} eligible APs from these results? ` +
-        `This trusts and saves ${firstSeen} first-seen SSH keys and reuses saved keys for the rest.`)) return;
-    setOnboardingBusy(true);
-    setBatchProgress({done: 0, total: restCandidates.length});
-    try {
-      for (const [index, device] of restCandidates.entries()) {
-        try {
-          const response = await onboardingApi.enableRestApi(result.profileId, {
-            device_id: device.id, management_ip: device.address, host_key_sha256: device.fingerprint,
-            confirm_text: `ENABLE REST API ${device.address}`, vrf: "default",
-          });
-          await testConnection(result.profileId, device);
-          if (!response.ok) {
-            setChecks(previous => ({...previous, [device.id]: {...previous[device.id],
-              message: `${response.message} ${previous[device.id]?.message ?? ""}`}}));
-          }
-        } catch (error) {
-          setChecks(previous => ({...previous, [device.id]: {...previous[device.id],
-            status: "REST enable failed", message: error instanceof Error ? error.message : "Check the AP and retry",
-          }}));
-        }
-        setBatchProgress({done: index + 1, total: restCandidates.length});
-      }
-    } finally {
-      setOnboardingBusy(false);
-      setBatchProgress(null);
-    }
-  };
 
   const onboardSuccessful = async (batch = result, targets = pendingOnboarding,
     verified?: Map<string, RestPreflight>) => {
@@ -410,12 +417,20 @@ export default function DeviceInventory() {
             onClick={() => void testAllConnections(result, true)}>
             {testingBatch ? "Testing devices…" : "Test & onboard all"}
           </button>
-          {restCandidates.length > 0 && <button type="button" className={btn}
-            disabled={busy || !!testing || testingBatch || onboardingBusy}
-            onClick={() => void enableBatchRest()}>Enable REST on eligible APs ({restCandidates.length})</button>}
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(result, true, true)}>
+            Test &amp; Approve All
+          </button>
+          <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !result.devices.some(d => d.address)}
+            onClick={() => void testAllConnections(result, false, false)}>
+            Test All (no approvals)
+          </button>
+          {restCandidates.length > 0 && <Link className={btn} to="/aps#autodiscover"
+            title="REST is enabled per cluster (on the Virtual Controller) through the gated auto-onboarding flow">
+            Enable REST for these clusters ({restCandidates.length} AP(s)) →</Link>}
           <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !pendingOnboarding.length}
             onClick={() => void onboardSuccessful()}>
-            {`Onboard REST-verified (${pendingOnboarding.length})`}
+            {`Onboard Successful — REST-verified (${pendingOnboarding.length})`}
           </button>
         </div>
         <p className="text-sm text-slate-600" role="status" aria-live="polite">
@@ -463,6 +478,15 @@ export default function DeviceInventory() {
                     }
                   }}>
                   Test &amp; onboard
+                </button>
+                <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
+                  onClick={() => void testConnection(result.profileId, d)}>
+                  Test connection
+                </button>
+                <button type="button" className={btn} data-inm-approval-action="exact-ip-v2"
+                  disabled={busy || !!testing || testingBatch || onboardingBusy || !d.address}
+                  onClick={() => void testConnection(result.profileId, d, null, true)}>
+                  Approve IP &amp; Test
                 </button>
                 {!check?.clusterManaged && (check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
                   <button type="button" className={btn}

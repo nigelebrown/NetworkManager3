@@ -142,6 +142,7 @@ class Worker:
             await asyncio.to_thread(J.safe(J.vault_captures))
             await asyncio.to_thread(J.safe(J.optimizer))
             await asyncio.to_thread(J.safe(J.recovery_sweep))
+            await asyncio.to_thread(J.safe(J.discovery_rules))
             if tick % 12 == 0:
                 await asyncio.to_thread(J.safe(J.scheduled_analysis))
             tick += 1

@@ -28,6 +28,19 @@ loki.source.syslog "inm" {
     protocol = "udp"
     labels   = { source = "syslog" }
   }
+  // Aruba Instant and most CX defaults send BSD (RFC 3164) syslog, which the RFC 5424 parser above drops.
+  listener {
+    address       = "0.0.0.0:1515"
+    protocol      = "udp"
+    syslog_format = "rfc3164"
+    labels        = { source = "syslog", format = "rfc3164" }
+  }
+  listener {
+    address       = "0.0.0.0:1515"
+    protocol      = "tcp"
+    syslog_format = "rfc3164"
+    labels        = { source = "syslog", format = "rfc3164" }
+  }
   relabel_rules = loki.relabel.syslog.rules
   forward_to    = [loki.write.local.receiver]
 }

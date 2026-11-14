@@ -142,6 +142,9 @@ services:
     ports:
       - "${INM_SYSLOG_BIND:-127.0.0.1}:${INM_SYSLOG_PORT:-1514}:1514/udp"
       - "${INM_SYSLOG_BIND:-127.0.0.1}:${INM_SYSLOG_PORT:-1514}:1514/tcp"
+      # RFC 3164 (Aruba Instant / CX default). Point devices at <server>:${INM_SYSLOG_BSD_PORT:-514}.
+      - "${INM_SYSLOG_BIND:-127.0.0.1}:${INM_SYSLOG_BSD_PORT:-514}:1515/udp"
+      - "${INM_SYSLOG_BIND:-127.0.0.1}:${INM_SYSLOG_BSD_PORT:-514}:1515/tcp"
     networks: [backend, edge]
     depends_on: [loki]
     restart: unless-stopped

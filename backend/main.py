@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, management_approvals, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
 from .api import collection, attribution, vault, change_control, replacement, learning, optimization, platform_ops, operations_center, production_ops, workflows, insights, notifications, port_groups
-from .api import ap_operations, guides, incidents
+from .api import ap_operations, incidents, guides, discovery_rules
 from .config import ROOT_DIR, get_settings
 from .database.models import User
 from .database.session import assert_schema_current, create_schema, init_engine, session_scope
@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(J.safe(J.outbox_relay), "interval", seconds=15, max_instances=1, coalesce=True, id="outbox")
         scheduler.add_job(J.safe(J.discovery), "interval", seconds=5, max_instances=1, coalesce=True, id="discovery")
         scheduler.add_job(J.safe(J.recovery_sweep), "interval", minutes=2, max_instances=1, coalesce=True, id="recovery")
+        scheduler.add_job(J.safe(J.discovery_rules), "interval", seconds=30, max_instances=1, coalesce=True, id="discovery_rules")
         scheduler.add_job(J.safe(J.notifications), "interval", seconds=20, max_instances=1, coalesce=True, id="notify")
         scheduler.add_job(J.safe(J.scheduled_analysis), "interval", hours=1, max_instances=1, coalesce=True, id="analysis")
         scheduler.add_job(J.safe(J.optimizer), "interval", minutes=5, max_instances=1, coalesce=True, id="optimizer")
@@ -231,7 +232,7 @@ def create_app() -> FastAPI:
     for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, management_approvals.router, printers.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
               collection.router, attribution.router, vault.router, change_control.router, replacement.router,
               learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router, port_groups.router,
-              workflows.router, insights.router, notifications.router, ap_operations.router, guides.router, incidents.router):
+              workflows.router, insights.router, notifications.router, ap_operations.router, incidents.router, guides.router, discovery_rules.router):
         app.include_router(r)
     app.include_router(api_v1.router)
     app.include_router(ws.router)

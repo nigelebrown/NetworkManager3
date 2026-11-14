@@ -70,6 +70,13 @@ def discovery(owner: str | None = None) -> dict:
     return DJ.tick(session_scope, owner or f"scheduler-{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}", _identify, sleep=time.sleep)
 
 
+def discovery_rules() -> dict:
+    """Advance discovery-rule runs whose jobs finished and start scheduled rules that are due."""
+    from ..api.discovery_rules import sweep
+    with session_scope() as db:
+        return sweep(db)
+
+
 def recovery_sweep() -> int:
     """Flag executions that died mid-change (stale journal heartbeat) for recovery (E2E-14)."""
     from . import recovery

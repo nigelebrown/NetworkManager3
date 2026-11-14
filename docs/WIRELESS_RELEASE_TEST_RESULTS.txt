@@ -1,0 +1,70 @@
+Wireless operations release — observed test results (2026-11-14, Linux build sandbox, Python 3.13, Node build)
+Software evidence only; hardware acceptance on the CentOS host remains NOT_RUN.
+
+Baseline BEFORE changes:  tests/unit+contract 339 passed, 2 FAILED (test_gui_ip_approval_contract x2); backend/tests 178 passed
+AFTER changes:
+  tests/unit + tests/contract ........ 402 passed, 0 failed
+     (one run showed 24 errors caused only by a concurrent `npm run build` emptying frontend/dist;
+      the 3 affected files re-run: 25 passed)
+  backend/tests ...................... 178 passed
+  tests/unit/test_wireless_operations.py  60 new tests, all passed
+  frontend: tsc --noEmit clean; vite build OK
+Browser walkthrough (Chrome headless, demo mode, standalone role): /, /wifi, /aps, /rf-health, /ap-health,
+  /client-journeys, /device-alerts, /device-360, /experience, /optimization, /discovery, /phase4-insights,
+  /learning, /assistant, /ai-learning, /aps/controller — 0 page errors; Diagnose drawers (client + AP) and
+  cluster optimization exercised.
+
+---------------------------------------------------------------------------------------------------------------
+Full end-to-end run (2026-11-14 ~16:00 COT) — tests/e2e_sim
+Stack: PostgreSQL 16 (management DB, Alembic migrations), Loki 3.5.5 + Alloy 1.11.0 (repo configs, RFC 3164 syslog),
+API in live mode / standalone role / write lock ON, Vite UI, headless Chrome. Simulated Instant clusters on real sockets:
+cluster A REST VC 172.17.0.1:4343 (3 APs); cluster B REST off + SSH CLI with --More-- paging 172.18.0.1:22 (2 APs);
+inventory seeded like production (6 MAC-named APs unlinked, 2 switches). Telemetry DB = SQLite (TimescaleDB unavailable).
+
+ 1 PASS  NOC: UNKNOWN devices show a grey dot (rgb 163,175,191) and the reason
+ 2 PASS  Wi-Fi dashboard before onboarding: coverage banner shown
+ 3 PASS  Discovery: 2 subnets + 2 AP credential profiles saved independently; /16 refused with explanation
+ 4 PASS  Discovery rule (2 subnets, wrong profile then right profile, daily) run: COMPLETED, ordered fallback used,
+         VC identified and registered, AP cluster onboarding started automatically
+ 5 PASS  AP auto-onboarding: scan keys -> approve -> run with "enable REST": cluster A via REST; cluster B via SSH CLI
+         (REST bootstrap refused by write lock -> read-only SSH fallback); first poll OK; members linked; .50 UNREACHABLE
+ 6 PASS  Access points grouped/filtered by cluster; 2.4 GHz and 5 GHz channels shown; why? panel
+ 7 PASS  NOC after onboarding: 5 ONLINE, 3 UNKNOWN (2 switches without monitoring, 1 unreachable AP)
+ 8 PASS  Logs: RFC 3164 syslog -> Alloy -> Loki; lines mapped to devices by AP name and by IP, none UNMAPPED
+ 9 PASS  AP health from live syslog: CP-Conference Room / CP-Registry / CP-Legal-OfficeAP BRONZE, ICTD-Admin SILVER,
+         ICTD-Technical-AP GOLD, unreachable AP UNRATED
+10 PASS  Snapshots before/after, CSV event-export import, CSV export download, like-for-like tier comparison
+11 PASS  RF health Diagnose: "Association rejects — 360 ..." headline; AI fallback message when AI is disabled
+12 PASS  Client connectivity: cluster + quality filters, journey panel, client diagnosis (weak signal)
+13 PASS  User experience: client and AP "why poor" drill-down with evidence
+14 PASS  Device 360: radios & clients (12), incidents tab, metric list from collected series, Diagnose
+15 PASS  Device 360 chooser: type filter; Attention needed counts UNKNOWN
+16 PASS  Incidents: assign to noc.operator, link INC0042001, resolve "ticket resolved"; second incident with ticket
+         auto-recovered by the alert engine and flagged "close ticket INC0042002"
+17 PASS  Optimization by cluster: 3 per-AP SHADOW enrollments (named); approver's Approve blocked with a clear
+         "capture a configuration backup first" next action
+18 PASS  Device insights guide with "Do this next"
+19 PASS  Guides on AI learning centre, Assistant, AI rules
+20 PASS  Wi-Fi dashboard after onboarding: coverage 5/6 (83.3%), clients by band
+21 PASS  Inventory: no duplicate AP records; imported physical sites kept
+22 PASS  Rotated SSH host key on cluster B: poll refused ("Nothing was sent"), scan flags KEY CHANGED, re-approval
+         restores SSH polling
+
+Defects found by this run and fixed before the final run:
+ - auto-onboarding reported an unreachable AP as NEEDS_HOSTKEY_APPROVAL -> now UNREACHABLE with what to check
+ - tier comparison called an imported export vs live syslog an "improvement" -> now "not comparable"
+ - a changed SSH host key could not be re-approved (scan skipped pinned hosts) -> now flagged CHANGED and re-approvable
+ - optimization approval failure appeared far from the button and without a next step -> inline + "capture backup"
+ - error banners lacked role="alert" (screen readers); auto-onboard checkbox text wrapped into columns
+Known limitation observed: RFC 3164 hostnames cannot contain spaces; an AP named "CP-Conference Room" is matched by
+its IP when the device sends its IP as the syslog host, or via an imported event export. Verify what your
+Instant firmware sends as the syslog hostname on the real APs.
+
+Regression after all fixes: tests/unit+contract 402 passed; backend/tests 178 passed; tsc clean; vite build OK.
+NOT_RUN: real AP-505/CX hardware, TimescaleDB, NATS/worker role, Docker Compose / CentOS install-update-rollback.
+
+---------------------------------------------------------------------------------------------------------------
+Merged onto the legacy production tree (legacy 1.2.0-rc2 + wireless-operations standard), 2026-11-14 ~16:40 COT:
+  tests/unit + tests/contract 402 passed (the legacy tree alone failed 2 GUI safety-contract tests; fixed by the merge)
+  backend/tests 178 passed; tsc clean; vite build OK
+  Browser end-to-end on the merged tree (same stack as above): 21/21 steps PASS + host-key rotation step PASS

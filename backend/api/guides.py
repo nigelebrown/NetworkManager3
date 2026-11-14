@@ -26,6 +26,7 @@ from ..security.context import get_scope
 
 
 def require_global_scope():
+    """Fleet-wide workspaces are refused to site-scoped users (kept from the production branch)."""
     if get_scope() is not None:
         raise HTTPException(403, "This fleet-wide workspace requires access to all sites.")
 
