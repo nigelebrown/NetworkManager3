@@ -107,10 +107,10 @@ async def read_snmpv3(host: str, username: str, auth_key: str, privacy_key: str)
                 unit = None
             counter = parse_printer_marker(unit, total)
 
-        if not (name or descr or obj):
+        if not (name or descr or obj or marker):
             raise RuntimeError("SNMPv3 authentication failed, timed out, or printer has no standard system MIB")
         return {"hostname": name, "system_description": descr,
-                "system_object_id": obj, "meter": counter,
+                "system_object_id": obj, "meter": counter, "printer_mib": marker is not None,
                 "source": "SNMPV3", "device_writes": "LOCKED"}
     finally:
         engine.close_dispatcher()
