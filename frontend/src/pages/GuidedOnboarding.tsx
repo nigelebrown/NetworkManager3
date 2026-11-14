@@ -35,7 +35,7 @@ export default function GuidedOnboarding() {
   const run = (fn: () => Promise<Workflow | void>, ok: string) => act.run(async () => { const r = await fn(); if (r) setW(r); return ok; });
 
   if (!id || !w) return <div className="space-y-4">
-    <PageHeader title="Add & configure devices" subtitle="One guided workflow: site → credentials → discovery → import & backup → templates → preview → independent approval → apply with readback → monitoring. Progress is saved; you can leave and resume." />
+    <PageHeader eyebrow="Sites & inventory" title="Add & configure devices" subtitle="One guided workflow: site → credentials → discovery → import & backup → templates → preview → independent approval → apply with readback → monitoring. Progress is saved; you can leave and resume." />
     <Start onStarted={(nw) => { setParams({ id: nw.id }); setW(nw); }} />
     <Card title="Resume a workflow">
       <table className="w-full text-sm"><tbody>{(list.data ?? []).map(x => <tr key={x.id} className="border-t border-slate-800">
@@ -49,12 +49,13 @@ export default function GuidedOnboarding() {
 
   const cur = w.step === "DONE" ? w.steps.length - 1 : w.steps.findIndex(s => s.status === "current");
   return <div className="space-y-4">
-    <PageHeader title={w.title} subtitle={`${w.site.name} · ${w.device_family === "switch" ? "switches" : "access points"} · workflow ${w.id.slice(0, 8)} · ${w.state}`}
+    <PageHeader eyebrow="Guided onboarding" title={w.title} subtitle={`${w.site.name} · ${w.device_family === "switch" ? "switches" : "access points"} · workflow ${w.id.slice(0, 8)} · ${w.state}`}
       right={<div className="flex gap-2"><button className={btn2} onClick={() => setParams({})}>All workflows</button>
         {w.state === "ACTIVE" && <button className={btnDanger} onClick={() => run(() => wf.cancel(w.id), "Workflow cancelled; devices, backups and plans are kept.")}>Cancel</button>}</div>} />
     <ol className="inm-steps" aria-label="Device onboarding steps">
       {w.steps.map((step, i) => <li key={step.step} data-status={step.status} aria-current={step.status === "current" ? "step" : undefined}>
-        <b style={{marginRight:5}}>{step.status === "done" ? "✓" : (i+1)+"."}</b>{LABEL[step.step]}
+        <span className="inm-step-number" aria-hidden="true">{step.status === "done" ? "✓" : i + 1}</span>
+        <span>{LABEL[step.step]}</span>
       </li>)}
     </ol>
     <Notice error={act.error} message={act.message} />
