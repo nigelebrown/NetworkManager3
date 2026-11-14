@@ -65,7 +65,7 @@ export default function DeviceInventory() {
   const [testingBatch, setTestingBatch] = useState(false);
   // A test never silently extends management access. On a blocked target,
   // an administrator confirms an exact /32 before the host reconciler applies it.
-  const testConnection = async (profileId: string, d: {id: string; address?: string}, batchApproved = false) => {
+  const testConnection = async (profileId: string, d: {id: string; address?: string}, batchApproved: boolean | null = null) => {
     if (!d.address) return;
     setTesting(d.id);
     const labels: Record<string, string> = {
@@ -86,11 +86,11 @@ export default function DeviceInventory() {
         const blocked = firstError instanceof ApiError && firstError.status === 403 &&
           /approved management ranges|Live polling is disabled/i.test(firstError.message);
         if (!blocked) throw firstError;
-        const confirmed = batchApproved || window.confirm(
+        const confirmed = batchApproved === null ? window.confirm(
           "Approve only " + d.address + "/32 for read-only management access and retry? " +
           "This will update the server's worker firewall after an audited administrator approval. " +
           "It will NOT enable configuration writes."
-        );
+        ) : batchApproved;
         if (!confirmed) {
           setChecks(previous => ({...previous, [d.id]: {
             status: "Blocked", message: "Administrator declined IP approval",
@@ -258,7 +258,8 @@ export default function DeviceInventory() {
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
               <td><button type="button" className={btn} disabled={busy || (!!testing || testingBatch) || !d.address}
-                onClick={() => void testConnection(result.profileId, d)}>Test connection</button></td>
+                onClick={() => void testConnection(result.profileId, d)}>
+                {check?.status === "Blocked" ? "Approve IP & Test" : "Test connection"}</button></td>
             </tr>;
           })}</tbody>
         </table></div>
