@@ -7,7 +7,8 @@ import { COLORS, Gauge, PageHeader, Pill, SourceTag, TT, ago, statusTone } from 
 import { RuleTable } from "./Compliance";
 import Faceplate from "../components/Faceplate";
 import { Notice, btn2, useAction } from "../components/viz";
-import { rw, type DeviceOriginLogs } from "../services/ops";
+import { rw, type DeviceOriginLogs, type DeviceDiagnostic } from "../services/ops";
+import { getSession } from "../services/api";
 import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
@@ -41,6 +42,9 @@ export default function Device360() {
   const [vc, setVc] = useState("");
   const [logKind, setLogKind] = useState<"audit" | "event" | "system" | "security" | "user">("audit");
   const [deviceLogs, setDeviceLogs] = useState<DeviceOriginLogs | null>(null);
+  const [diagnosticKind, setDiagnosticKind] = useState("port_auth");
+  const [diagnostic, setDiagnostic] = useState<DeviceDiagnostic | null>(null);
+  const mayReadHardware = ["admin", "operator", "auditor"].includes(getSession()?.role ?? "");
   const metricsFor = METRICS[d?.family ?? "switch"] ?? METRICS.switch;
   const data = (series.data?.points ?? []).map(p => ({ t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), v: p.v }));
   return <div className="space-y-4">
@@ -100,7 +104,7 @@ export default function Device360() {
             {(d?.family === "switch" ? ["audit", "event"] : ["system", "security", "user"]).map(kind =>
               <option key={kind} value={kind}>{kind}</option>)}
           </select>
-          <button className={btn2} disabled={!d || act.busy}
+          {mayReadHardware && <button className={btn2} disabled={!d || act.busy}
             onClick={() => act.run(async () => {
               const kind = d?.family === "switch"
                 ? (["audit", "event"].includes(logKind) ? logKind : "audit")
@@ -108,7 +112,7 @@ export default function Device360() {
               const result = await rw.deviceLogs(id, kind, 50);
               setDeviceLogs(result);
               return `Read ${result.count} device log record(s) from ${result.environment}. No configuration writes occurred.`;
-            })}>Fetch device logs</button>
+            })}>Fetch device logs</button>}
         </div>
         {deviceLogs?.device_id === id && <div className="mt-3 max-h-64 overflow-auto">
           <div className="mb-2 text-xs text-slate-500">{deviceLogs.count} records · {deviceLogs.environment} ·
@@ -120,6 +124,40 @@ export default function Device360() {
               <td className="font-mono text-xs break-words">{item.message}</td></tr>)}</tbody></table>
           {!deviceLogs.count && <div className="inm-empty">No log entries returned by the device.</div>}
         </div>}
+      </Card>
+      <Card title="Live device diagnostics (read-only)">
+        <p className="text-xs text-slate-500">Run a fixed, documented device show command.
+          No arbitrary CLI input, no configuration operations, and no automatic changes.
+          Results are from the selected device and may vary by firmware and model.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-xs" htmlFor="device-diagnostic-kind">Diagnostic</label>
+          <select id="device-diagnostic-kind" className="inm-form-control"
+            value={(d?.family === "switch"
+              ? ["port_auth", "vsf", "poe", "qos", "lacp"] : ["rf", "clients", "system", "wireless"]).includes(diagnosticKind)
+              ? diagnosticKind : d?.family === "switch" ? "port_auth" : "rf"}
+            onChange={e => { setDiagnosticKind(e.target.value); setDiagnostic(null); }}>
+            {(d?.family === "switch"
+              ? ["port_auth", "vsf", "poe", "qos", "lacp"] : ["rf", "clients", "system", "wireless"]).map(key =>
+                <option key={key} value={key}>{key.replaceAll("_", " ")}</option>)}
+          </select>
+          {mayReadHardware && <button className={btn2} disabled={!d || act.busy}
+            onClick={() => act.run(async () => {
+              const allowed = d?.family === "switch" ? ["port_auth", "vsf", "poe", "qos", "lacp"] :
+                ["rf", "clients", "system", "wireless"];
+              const response = await rw.diagnostics(id, allowed.includes(diagnosticKind)
+                ? diagnosticKind : allowed[0]);
+              setDiagnostic(response);
+              return `Read-only ${response.command} completed. Device writes: ${response.device_writes}.`;
+            })}>Run read-only diagnostic</button>}
+        </div>
+        {diagnostic?.device_id === id && <div className="mt-3">
+          <p className="mb-2 text-xs text-slate-500">{diagnostic.source} ·
+            {diagnostic.environment} · {diagnostic.command}</p>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border p-3 text-xs"
+            aria-label="Sanitized device diagnostic output">{diagnostic.output}</pre>
+        </div>}
+        {!mayReadHardware && <p className="mt-2 text-xs text-slate-500">
+          Device-originated diagnostics require an operator, auditor or administrator account.</p>}
       </Card>
       <Card title="Templates → deployment">
         <p className="text-sm text-slate-400">Compare the inherited template with what is installed and create an approvable change plan containing only the needed operations.</p>
