@@ -159,38 +159,66 @@ export default function DeviceInventory() {
       }}));
     } finally { setTesting(null); }
   };
-  const testAllConnections = async (approveBlocked: boolean) => {
-    if (!result || testingBatch || onboardingBusy) return;
-    const targets = result.devices.filter(d => d.address);
+  const testAllConnections = async (approveBlocked: boolean, batch = result, confirmed = false) => {
+    if (!batch || testingBatch || onboardingBusy) return;
+    const targets = batch.devices.filter(d => d.address);
     if (!targets.length) return;
-    if (approveBlocked) {
+    if (approveBlocked && !confirmed) {
       const ips = [...new Set(targets.map(d => d.address!))];
       const list = ips.slice(0, 20).map(ip => "  " + ip + "/32").join("\n");
       const more = ips.length > 20 ? "\n  …plus " + (ips.length - 20) + " additional listed device IPs" : "";
       if (!window.confirm(
-        "Test " + targets.length + " registered devices using " + result.profileName + "?\n\n" +
+        "Test " + targets.length + " registered devices using " + batch.profileName + "?\n\n" +
         "Approve the listed exact /32 device IPs before running REST tests:\n" +
         list + more + "\n\n" +
         "No /24 subnets or device configuration writes will be authorized. Continue?"
       )) return;
     }
     setTestingBatch(true);
-    setBatchProgress({done: 0, total: result.devices.length});
+    setBatchProgress({done: 0, total: batch.devices.length});
     setOnboardResults({});
     try {
-      for (const [index, device] of result.devices.entries()) {
+      for (const [index, device] of batch.devices.entries()) {
         if (device.address) {
-          await testConnection(result.profileId, device, approveBlocked, approveBlocked);
+          await testConnection(batch.profileId, device, approveBlocked, approveBlocked);
         } else {
           setChecks(previous => ({...previous, [device.id]: {
             status: "Missing IP", message: "Device has no management address; skipped",
           }}));
         }
-        setBatchProgress({done: index + 1, total: result.devices.length});
+        setBatchProgress({done: index + 1, total: batch.devices.length});
       }
     } finally {
       setTestingBatch(false);
       setBatchProgress(null);
+    }
+  };
+
+  const approveReviewedAddresses = async () => {
+    const chosen = matchingProfiles.find(p => p.id === profile);
+    const targets = accessRows.filter(row => !row.reason).map(({device, address}) => ({
+      id: device.id, name: device.hostname || device.serial_number, address,
+    }));
+    if (!chosen || !targets.length || busy || testing || testingBatch || onboardingBusy) return;
+    if (!window.confirm(
+      `Assign "${chosen.name}" to ${targets.length} eligible devices, approve each listed IP for read-only management, and test REST?`
+    )) return;
+    setBusy(true);
+    setFeedback({});
+    try {
+      await request("/v1/onboarding/credentials/assign", {
+        method: "POST", body: JSON.stringify({credential_id: chosen.id, device_ids: targets.map(d => d.id)}),
+      });
+      const batch = {profileId: chosen.id, profileName: chosen.name, devices: targets};
+      setResult(batch);
+      setChecks({});
+      setRestBootstrapDevice(null);
+      changeSelection([]);
+      await testAllConnections(true, batch, true);
+    } catch (error) {
+      setFeedback({error: error instanceof Error ? error.message : "Could not start management access approval"});
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -357,11 +385,15 @@ export default function DeviceInventory() {
       </form>}
       {admin && reviewAccess && <section className="inm-cardbody space-y-2">
         <h3 className="font-semibold">Review management access</h3>
-        <p>Export exact addresses for a server administrator to approve. Resolve repeated or missing addresses in inventory first.</p>
+        <p>Choose a saved credential profile above, then approve and test the eligible addresses. Missing or repeated addresses are skipped.</p>
         <ul className="max-h-48 overflow-auto">{accessRows.map(({device, address, reason}) =>
           <li key={device.id}>{device.hostname || device.serial_number}
             {device.family === "access_point" && <> · {clusterLabel(device.cluster_id)}</>}
             {" · "}{address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
+        <button type="button" className={btn}
+          disabled={!approvedAddresses.length || !matchingProfiles.some(p => p.id === profile) ||
+            busy || !!testing || testingBatch || onboardingBusy}
+          onClick={() => void approveReviewedAddresses()}>Approve &amp; test {approvedAddresses.length} addresses</button>
         <button type="button" className={btn} disabled={!approvedAddresses.length} onClick={() => {
           const url = URL.createObjectURL(new Blob([approvedAddresses.join("\n") + "\n"], {type: "text/plain"}));
           const link = document.createElement("a");
