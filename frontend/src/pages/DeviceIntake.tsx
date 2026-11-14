@@ -5,7 +5,6 @@ import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { v1, type Device } from "../services/inm";
 import { getSession } from "../services/api";
-import BulkDeviceImport from "../components/BulkDeviceImport";
 
 type Family = "access_point" | "switch";
 type Method = "manual" | "probe";
@@ -188,7 +187,7 @@ export default function DeviceIntake() {
         </form>
       </Card>}
       {canAdd && <Card title="Import multiple access points or switches from CSV">
-        <BulkDeviceImport onImported={() => { devices.reload(); physicalSites.reload(); }} />
+        <Link className="text-blue-700 underline" to="/onboarding/import">Open Aruba inventory import</Link>
       </Card>}
       <Card title="Existing SIMS Wi-Fi Manager features">
         <p className="text-sm text-slate-300">
