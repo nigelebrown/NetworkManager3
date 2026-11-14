@@ -59,6 +59,21 @@ for t in openssl git ss python3; do command -v "$t" >/dev/null || die "required 
 install -d -m 0750 "$STATE" "$BACKUP_DIR"
 generate_secrets
 ensure_tls
+# Containerized Loki/NATS/Alloy and Nginx read these PUBLIC, tracked configs as
+# non-root users. Root-run git clone under umask 077 otherwise makes them mode
+# 0600 with 0700 parent directories and the services fail startup.
+# Never relax permissions on /etc/inm, credentials or data volumes.
+for directory in "$ROOT/configs" "$ROOT/configs/loki" "$ROOT/configs/nats" "$ROOT/configs/alloy" "$ROOT/configs/nginx"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || die "invalid public configuration directory: $directory" 6
+  chmod 0755 "$directory"
+done
+for config in "$ROOT/configs/loki/config.yaml" "$ROOT/configs/nats/nats.conf" \
+              "$ROOT/configs/alloy/config.alloy" \
+              "$ROOT/configs/nginx/inm.conf" "$ROOT/configs/nginx/inm-access-default.conf"; do
+  [[ -f "$config" && ! -L "$config" ]] || die "invalid public config file: $config" 6
+  chmod 0644 "$config"
+done
+log "public container configuration permissions normalized (secrets unchanged)"
 set_env_value INM_GIT_COMMIT "$(git_commit)"
 if [[ "$MODE" == live ]]; then
   [[ "$(env_get SIMS_ADMIN_PASSWORD)" != 'demo123!' ]] || die "the demo password cannot be used in live mode" 2
