@@ -39,7 +39,8 @@ export default function DeviceInventory() {
     id: string; name: string; address?: string;
   }[] } | null>(null);
   const [checks, setChecks] = useState<Record<string, {status: string; message: string;
-    restState?: RestPreflight["state"]; clusterManaged?: boolean; ping?: RestPreflight["ping"]}>>({});
+    restState?: RestPreflight["state"]; clusterManaged?: boolean; ping?: RestPreflight["ping"];
+    ssh?: RestPreflight["ssh"]; bootstrapEligible?: boolean}>>({});
   const [onboardResults, setOnboardResults] = useState<Record<string, {status: string; message: string}>>({});
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
@@ -88,6 +89,8 @@ export default function DeviceInventory() {
           ? "Managed via cluster" : labels[response.state] ?? "Checked", message: response.detail,
         restState: response.state,
         ping: response.ping,
+        ssh: response.ssh,
+        bootstrapEligible: response.family === "access_point" && !response.write_unlock_required,
         clusterManaged: response.cluster_managed,
       }}));
     };
@@ -120,6 +123,45 @@ export default function DeviceInventory() {
       }
     } finally {
       setTestingBatch(false);
+      setBatchProgress(null);
+    }
+  };
+
+  const restCandidates = (result?.devices ?? []).flatMap(device => {
+    const check = checks[device.id];
+    if (!device.address || !check?.bootstrapEligible || !check.ssh?.fingerprint ||
+        (check.ssh.trust !== "FIRST_SEEN" && check.ssh.trust !== "SAVED")) return [];
+    return [{...device, address: device.address, fingerprint: check.ssh.fingerprint, trust: check.ssh.trust}];
+  });
+
+  const enableBatchRest = async () => {
+    if (!result || busy || testing || testingBatch || onboardingBusy || !restCandidates.length) return;
+    const firstSeen = restCandidates.filter(device => device.trust === "FIRST_SEEN").length;
+    if (!window.confirm(`Enable REST on ${restCandidates.length} eligible APs from these results? ` +
+        `This trusts and saves ${firstSeen} first-seen SSH keys and reuses saved keys for the rest.`)) return;
+    setOnboardingBusy(true);
+    setBatchProgress({done: 0, total: restCandidates.length});
+    try {
+      for (const [index, device] of restCandidates.entries()) {
+        try {
+          const response = await onboardingApi.enableRestApi(result.profileId, {
+            device_id: device.id, management_ip: device.address, host_key_sha256: device.fingerprint,
+            confirm_text: `ENABLE REST API ${device.address}`, vrf: "default",
+          });
+          await testConnection(result.profileId, device);
+          if (!response.ok) {
+            setChecks(previous => ({...previous, [device.id]: {...previous[device.id],
+              message: `${response.message} ${previous[device.id]?.message ?? ""}`}}));
+          }
+        } catch (error) {
+          setChecks(previous => ({...previous, [device.id]: {...previous[device.id],
+            status: "REST enable failed", message: error instanceof Error ? error.message : "Check the AP and retry",
+          }}));
+        }
+        setBatchProgress({done: index + 1, total: restCandidates.length});
+      }
+    } finally {
+      setOnboardingBusy(false);
       setBatchProgress(null);
     }
   };
@@ -349,6 +391,9 @@ export default function DeviceInventory() {
             onClick={() => void testAllConnections()}>
             {testingBatch ? "Testing devices…" : "Test All"}
           </button>
+          {restCandidates.length > 0 && <button type="button" className={btn}
+            disabled={busy || !!testing || testingBatch || onboardingBusy}
+            onClick={() => void enableBatchRest()}>Enable REST on eligible APs ({restCandidates.length})</button>}
           <button type="button" className={btn} disabled={busy || !!testing || testingBatch || onboardingBusy || !successfulDevices.length}
             onClick={() => void onboardSuccessful()}>
             {onboardingBusy ? "Onboarding devices…" : `Onboard Successful (${successfulDevices.length})`}
@@ -377,7 +422,9 @@ export default function DeviceInventory() {
                   "Ping unavailable" : "Not checked"}</td><td>Saved</td>
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
-                : "Not tested"}</td>
+                : "Not tested"}
+                {check?.ssh?.trust === "CHANGED" && <p>Saved SSH identity changed. Review this AP.</p>}
+              </td>
               <td aria-live="polite">{onboardResults[d.id]
                 ? onboardResults[d.id].status + " · " + onboardResults[d.id].message
                 : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}</td>

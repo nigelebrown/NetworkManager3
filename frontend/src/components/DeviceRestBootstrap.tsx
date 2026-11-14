@@ -19,6 +19,7 @@ export default function DeviceRestBootstrap({ credentialId, address, family, dev
     return `REST check: ${r.state}`;
   });
   const canEnable = preflight?.ssh?.fingerprint &&
+    preflight.ssh.trust !== "CHANGED" &&
     (preflight.state === "DISABLED" || preflight.state === "UNREACHABLE") &&
     confirmation === preflight.confirm_phrase && !preflight.write_unlock_required;
   const enable = () => act.run(async () => {
@@ -40,6 +41,7 @@ export default function DeviceRestBootstrap({ credentialId, address, family, dev
       <p>Device HTTPS: {preflight.untrusted_device_certificates_accepted ?
         "Self-signed/untrusted TLS certificates accepted (identity not verified by a CA)." : "Trusted certificate required."}</p>
       {preflight.ssh?.fingerprint && <>
+        {preflight.ssh.trust === "CHANGED" && <p role="alert">Saved SSH identity changed. Review this AP before enabling REST.</p>}
         <p className="text-amber-200">Verify this SSH fingerprint through an independent, trusted channel before confirming:</p>
         <code className="block break-all rounded bg-slate-900 p-2">{preflight.ssh.fingerprint}</code>
         <p className="text-slate-400">Commands: {family === "switch" ? `configure terminal → https-server vrf ${vrf} → end → write memory` :

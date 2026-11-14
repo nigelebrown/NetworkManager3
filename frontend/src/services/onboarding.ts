@@ -51,7 +51,8 @@ export type RestPreflight = {
   cluster_monitoring_active?: boolean;
   untrusted_device_certificates_accepted: boolean; confirm_phrase: string;
   commands: string[];
-  ssh?: { fingerprint?: string; key_type?: string; legacy_algorithms?: boolean; error?: string };
+  ssh?: { fingerprint?: string; key_type?: string; legacy_algorithms?: boolean; error?: string;
+    trust?: "FIRST_SEEN" | "SAVED" | "CHANGED" };
 };
 export type RestBootstrapResult = {
   ok: boolean; rest_enabled: boolean; status: string; message: string;

@@ -27,7 +27,7 @@ from ..aruba.client import ArubaClient, ArubaTarget
 from ..aruba.configuration import fetch_running_config, parse_running_config
 from ..aruba.monitoring import collect_snapshot
 from ..config import get_settings
-from ..database.models import Site, User
+from ..database.models import AppSetting, Site, User
 from ..database.models_inm import InmCluster, InmDevice
 from ..domain.phase2_acceptance import build_acceptance
 from ..database.models_onboarding import (
@@ -427,6 +427,10 @@ def check_credential_rest(profile_id: str, body: RestTarget, request: Request, d
     if state in ("DISABLED", "UNREACHABLE"):
         try:
             result["ssh"] = ssh.scan_host_key(ip)
+            if body.device_id and profile.device_family == "access_point":
+                pin = db.get(AppSetting, f"onboarding-ssh-pin:{body.device_id}")
+                result["ssh"]["trust"] = ("FIRST_SEEN" if pin is None else "SAVED" if
+                    pin.value == {"ip": ip, "fingerprint": result["ssh"]["fingerprint"]} else "CHANGED")
         except ArubaError:
             result["ssh"] = {"error": "SSH port 22 unavailable or negotiation failed; use device console to enable REST."}
     audit(db, "onboarding_rest_preflight", username=admin.username, target=ip,
@@ -449,7 +453,7 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)
     if get_settings().mode != "live" or not (get_settings().device_writes_permitted or ap_rest_only):
         raise HTTPException(423, "REST bootstrap is locked. For AP-505/AP-535, first register the real AP, "
-                              "bind its saved credential, approve its exact /32 IP, then verify SSH host identity. "
+                              "bind its saved credential, and verify SSH host identity. "
                               "General configuration writes remain locked.")
     if body.confirm_text.strip() != f"ENABLE REST API {ip}":
         raise HTTPException(422, f"Type exactly ENABLE REST API {ip} to confirm this device change.")
@@ -460,6 +464,29 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     state, _ = _rest_status(profile, body.management_ip)
     if state != "DISABLED" and state != "UNREACHABLE":
         raise HTTPException(409, f"REST bootstrap not appropriate: current state is {state}.")
+    if body.device_id and profile.device_family == "access_point":
+        from .management_approvals import _registered_target
+        device = _registered_target(db, body.device_id, profile.id, ip)
+        db.scalar(select(InmDevice).where(InmDevice.id == device.id).with_for_update())
+        key = f"onboarding-ssh-pin:{device.id}"
+        pin = db.get(AppSetting, key)
+        expected = {"ip": ip, "fingerprint": body.host_key_sha256}
+        if pin is not None and pin.value != expected:
+            audit(db, "onboarding_ssh_pin_mismatch", username=admin.username, target=ip,
+                  detail=f"device={device.id}", request=request, success=False)
+            db.commit()
+            raise HTTPException(409, "The saved SSH identity has changed. Review this AP before retrying.")
+        if pin is None:
+            try:
+                current = ssh.scan_host_key(ip)["fingerprint"]
+            except ArubaError:
+                raise HTTPException(502, "Could not recheck the AP's SSH key.") from None
+            if current != body.host_key_sha256:
+                raise HTTPException(409, "The SSH key changed after the check. Review this AP before retrying.")
+            db.add(AppSetting(key=key, value=expected))
+            audit(db, "onboarding_ssh_pin_saved", username=admin.username, target=ip,
+                  detail=f"device={device.id} fingerprint={body.host_key_sha256}", request=request)
+            db.commit()
     password = decrypt_secret(profile.password_enc)
     try:
         if profile.device_family == "access_point":
@@ -472,6 +499,7 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     except ArubaError as exc:
         audit(db, "onboarding_rest_enable_failed", username=admin.username, target=ip,
               detail=f"family={profile.device_family} error={type(exc).__name__}", request=request, success=False)
+        db.commit()
         raise HTTPException(502, f"SSH REST bootstrap failed ({type(exc).__name__}); no success was recorded.") from None
     import time
     final = "UNREACHABLE"
