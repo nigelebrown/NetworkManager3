@@ -111,3 +111,25 @@ def test_host_applied_state_is_distinct_from_requested_and_read_only(client, adm
         assert False, "Other IP must remain blocked"
     except HTTPException as exc:
         assert exc.status_code == 403
+
+
+
+def test_saved_credential_group_can_resume_onboarding_without_duplicate_inventory(client, admin):
+    did, pid = _setup(client, admin)
+    url = f"/api/v1/onboarding/credentials/{pid}/devices"
+    got = client.get(url, headers=admin)
+    assert got.status_code == 200, got.text
+    data = got.json()
+    assert data["profile_id"] == pid
+    assert data["profile_name"] == "AP-Standard"
+    assert data["device_writes"] == "LOCKED"
+    assert data["devices"] == [{
+        "id": did, "name": "ACP-Admin", "address": "10.190.97.211"
+    }]
+    assert "password" not in got.text
+    # Retrieving assignments must not create more device records or rebind credentials.
+    assert client.get(url, headers=admin).json()["devices"] == data["devices"]
+    operator = make_user(client, admin, "group.operator", "operator")
+    assert client.get(url, headers=operator).status_code == 403
+    assert client.get("/api/v1/onboarding/credentials/00000000-0000-0000-0000-000000000000/devices",
+                      headers=admin).status_code == 404
