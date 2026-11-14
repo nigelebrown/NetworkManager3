@@ -8,6 +8,9 @@ COPY ai_service/requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir -r /app/requirements.lock && useradd -u 10002 -M -s /usr/sbin/nologin inmai
 COPY VERSION /app/VERSION
 COPY ai_service /app/ai_service
+# Checkout may be made with umask 077 by a root-run CentOS installer.
+# Ensure the non-root AI process can traverse/read only the public app source.
+RUN chmod -R a+rX /app/ai_service && chmod a+r /app/VERSION
 USER 10002
 EXPOSE 8001
 CMD ["python", "-m", "uvicorn", "ai_service.app:app", "--host", "0.0.0.0", "--port", "8001"]
