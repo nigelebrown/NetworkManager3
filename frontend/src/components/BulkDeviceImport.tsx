@@ -112,7 +112,7 @@ export function parseDeviceCsv(text: string): InputRow[] {
   });
 }
 
-export default function BulkDeviceImport({ onImported }: { onImported: () => void }) {
+export default function BulkDeviceImport({ onImported }: { onImported?: () => void }) {
   const [rows, setRows] = useState<InputRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
@@ -146,7 +146,7 @@ export default function BulkDeviceImport({ onImported }: { onImported: () => voi
         if (completed.size) {
           setRows(current => current.filter(row => !completed.has(row.serial_number)));
           setSummary(`${added} added, ${updated} updated. ${rows.length - completed.size} rows remain in review.`);
-          onImported();
+          onImported?.();
         }
       }
     } catch (exc) { setError(exc instanceof Error ? exc.message : "Import failed."); }
@@ -159,7 +159,7 @@ export default function BulkDeviceImport({ onImported }: { onImported: () => voi
       Existing devices are matched by serial number.
     </p>
     <p className="text-xs text-slate-400">
-      Required CSV columns: <code>family,site_name,hostname,serial_number,model</code>.
+      If you use the sample template, its required columns are <code>family,site_name,hostname,serial_number,model</code>.
       Optional: <code>management_ip,firmware,status</code>.
       Use family <code>access_point</code> or <code>switch</code>.
     </p>
