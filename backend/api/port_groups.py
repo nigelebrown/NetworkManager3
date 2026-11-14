@@ -63,6 +63,7 @@ def _save(db, group, body, user, request):
     db.add(group)
     audit(db, "port_monitoring_group_saved", username=user.username, target=group.key,
           detail=f"{len(keys)} monitored ports", request=request)
+    db.commit()
     return _public(group)
 
 
@@ -86,6 +87,8 @@ def update_group(group_id: str, body: GroupInput, request: Request, db: Session 
 
 def _points(member, since, limit):
     store = telemetry_store()
+    if store is None:
+        raise HTTPException(503, "Telemetry store unavailable")
     return {metric: store.query(device_id=member["device_id"], metric_name=metric, since=since,
                                 entity_type="port", entity_id=member["port"], limit=limit)
             for metric in METRICS}
