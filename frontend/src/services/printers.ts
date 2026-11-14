@@ -23,6 +23,10 @@ export type Maintenance = { id: number; component: string; event_type: string; d
   severity: string; observed_at: string; cost_amount: number | null; currency: string };
 export type PrinterDetail = { device: Printer; meters: Meter[]; meter_deltas: Record<string, { delta: number | null; quality: string }>;
   supplies: Supply[]; cycles: Cycle[]; maintenance: Maintenance[] };
+export type DiscoveredPrinter = {
+  management_ip: string; hostname: string | null; system_description: string | null;
+  meter: { meter_kind: string; counter_value: number } | null;
+};
 export type PrinterDashboard = { total: number; online: number; faulted: number; manufacturers: string[];
   low_supplies: { printer_id: string; hostname: string; supply: string; colour: string; percent_remaining: number;
     severity: string; source: string }[]; model_rankings: string };
@@ -51,6 +55,8 @@ export const printerApi = {
   maintenance: (id: string, b: Record<string, unknown>) =>
     request<{ id: number }>(`${path(id)}/maintenance`, { method: "POST", body: JSON.stringify(b) }),
   analyse: () => request<PrinterAnalysis>("/printers/analyse-now", { method: "POST", body: "{}" }),
+  discover: (b: Record<string, unknown>) =>
+    request<{ scanned: number; printers: DiscoveredPrinter[] }>("/printers/discover-snmpv3", { method: "POST", body: JSON.stringify(b) }),
   probe: (b: Record<string, unknown>) => request<{
     hostname: string | null; system_description: string | null; system_object_id: string | null;
     meter: { meter_kind: string; counter_value: number } | null; device_writes: string;

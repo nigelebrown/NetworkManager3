@@ -94,6 +94,32 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
             assert page.locator("#inm-main-content").inner_text().strip(), route
         page.goto(URL + "/")
         page.get_by_role("heading", name="Network command center").wait_for()
+        page.route("**/api/printers/credential-profiles", lambda route: route.fulfill(json=[
+            {"id": "ci-profile", "name": "CI printers", "version": "2c"},
+        ]))
+        page.goto(URL + "/printers")
+        page.get_by_role("button", name="Discover printers", exact=True).click()
+        page.route("**/api/printers/credential-profiles/ci-profile/discover", lambda route: route.fulfill(json={
+            "scanned": 2,
+            "printers": [{"management_ip": "10.190.1.21", "hostname": "CI Test Printer",
+                          "system_description": "Simulated Printer-MIB device", "meter": None}],
+        }))
+        page.get_by_label("Management IP or CIDR").fill("10.190.1.20/30")
+        page.get_by_label("Saved profile").select_option("ci-profile")
+        page.get_by_role("button", name="Discover", exact=True).click()
+        page.get_by_role("button", name="Review and register").click()
+        assert page.get_by_label("Management IPv4").input_value() == "10.190.1.21"
+        assert page.get_by_label("Hostname").input_value() == "CI Test Printer"
+        page.get_by_label("Model", exact=True).fill("CI Printer")
+        page.get_by_label("Serial number").fill("CI-PRINTER-001")
+        page.get_by_label("Branch", exact=True).fill("CI Branch")
+        page.get_by_role("button", name="Register printer").click()
+        page.get_by_text("CI-PRINTER-001", exact=True).wait_for()
+        assert page.get_by_text("CI Branch", exact=True).is_visible()
+        page.screenshot(path=str(EVID / "printer-discovery-registration.png"), full_page=True)
+
+        page.goto(URL + "/")
+        page.get_by_role("heading", name="Network command center").wait_for()
         # Verify design tokens from approved HTML: navy sidebar, light canvas.
         colors = page.evaluate("""() => ({
             sidebar: getComputedStyle(document.querySelector('.inm-sidebar')).backgroundColor,

@@ -163,3 +163,49 @@ def test_invalid_negative_supply_or_meter_rejected(client, admin):
         "meter_kind": "impressions_total", "counter_value": -5}).status_code == 422
     assert client.post(f"/api/printers/{did}/supplies", headers=admin, json={
         "supply_name": "Toner", "colour": "black", "percent_remaining": 130}).status_code == 422
+
+
+def test_range_discovery_filters_devices_and_preserves_manual_registration(client, admin, monkeypatch):
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.44.0/24")
+    async def read(host, *_credentials):
+        return {"hostname": "Test printer", "printer_mib": host.endswith(".21"), "meter": None}
+
+    credentials = {"username": "reader", "auth_passphrase": "test-auth", "privacy_passphrase": "test-private"}
+    with patch("backend.api.printers.read_snmpv3", side_effect=read) as probe:
+        for scope, status in [("10.103.44.0/23", 422), ("10.103.45.0/24", 403)]:
+            denied = client.post("/api/printers/discover-snmpv3", headers=admin,
+                                 json={**credentials, "management_range": scope})
+            assert denied.status_code == status, denied.text
+        probe.assert_not_called()
+        result = client.post("/api/printers/discover-snmpv3", headers=admin,
+                             json={**credentials, "management_range": "10.103.44.20/30"})
+        assert result.status_code == 200, result.text
+        assert result.json()["scanned"] == 2
+        assert [p["management_ip"] for p in result.json()["printers"]] == ["10.103.44.21"]
+        assert probe.await_count == 2
+
+    assert client.get("/api/printers", headers=admin).json() == []
+    printer = register(client, admin).json()
+    client.post(f"/api/printers/{printer['id']}/supplies", headers=admin,
+                json={"supply_name": "Toner", "colour": "black", "percent_remaining": 3})
+    dashboard = client.get("/api/printers/dashboard", headers=admin).json()
+    assert dashboard["low_supplies"][0]["printer_id"] == printer["id"]
+
+
+@pytest.mark.parametrize("version", ["1", "2c", "3"])
+def test_saved_printer_profile_checks_only_selected_address(client, admin, monkeypatch, version):
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.44.0/24")
+    secrets = {"username": "printer-reader", "auth_passphrase": "test-auth-pass",
+               "privacy_passphrase": "test-private-pass"} if version == "3" else {"community": "test-community"}
+    response = client.post("/api/printers/credential-profiles", headers=admin,
+                           json={"name": "Office printers", "version": version, **secrets})
+    assert response.status_code == 201, response.text
+    profile = response.json()
+    assert set(profile) == {"id", "name", "version"}
+    route = f"/api/printers/credential-profiles/{profile['id']}/test"
+    with patch("backend.api.printers.read_printer", new_callable=AsyncMock) as read:
+        read.return_value = {"hostname": "printer", "printer_mib": True}
+        assert client.post(route, headers=admin, json={"management_ip": "10.103.45.21"}).status_code == 403
+        read.assert_not_called()
+        assert client.post(route, headers=admin, json={"management_ip": "10.103.44.21"}).status_code == 200
+        read.assert_awaited_once_with("10.103.44.21", version, *secrets.values())
