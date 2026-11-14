@@ -55,6 +55,10 @@ class CxEmulator:
                                                            "detection_status": "delivering" if i <= 4 else "searching"}}}
                            for i in range(1, ports + 1)},
         }
+        self.cli_commands = ["show port-access clients", "show power-over-ethernet",
+                             "show qos trust", "show lacp interfaces"]
+        if "6200" in model:
+            self.cli_commands.append("show vsf detail")
         self.checkpoints: dict[str, dict] = {}
         self.startup: dict | None = None
         self.audit_records = {
@@ -171,6 +175,16 @@ class CxEmulator:
             return denied
         if p in ("/login", "/logout"):
             return httpx.Response(200)
+        if p == "/cli/commands" and m == "GET":
+            return httpx.Response(200, json={"commands": list(self.cli_commands)})
+        if p == "/cli" and m == "POST":
+            try:
+                cmd = json.loads(req.content).get("cmd")
+            except (ValueError, AttributeError):
+                return httpx.Response(400, text="Invalid command body")
+            if cmd not in self.cli_commands:
+                return httpx.Response(400, text="Invalid show command")
+            return httpx.Response(200, text=f"EMULATED SHOW result: {cmd} — no device write")
         if m in ("POST", "PUT", "PATCH", "DELETE"):
             if self.drop_after is not None and self.writes >= self.drop_after and not p.startswith("/fullconfigs"):
                 raise httpx.ConnectError("emulated link loss")
@@ -338,6 +352,12 @@ class InstantEmulator:
             "system": "Nov 13 13:00:00 cli: System started\nNov 13 13:00:02 auth: password=example-secret",
             "security": "Nov 13 13:01:00 auth: Administrator logged in",
             "user": "Nov 13 13:02:00 station: Wireless user associated",
+            "wireless": "Nov 13 13:03:00 radio: Emulated RF diagnostic event",
+        }
+        self.diagnostic_text = {
+            "show ap arm rf-summary": "EMULATED RF: channel 36; width 20 MHz",
+            "show clients": "EMULATED CLIENTS: 2 connected",
+            "show ap debug system-status": "EMULATED SYSTEM: CPU 10%",
         }
         self.radios = [{"band": "5", "channel": "36", "tx_power_dbm": 15}, {"band": "2.4", "channel": "1", "tx_power_dbm": 12}]
         self.fail_on: str | None = None
@@ -353,6 +373,14 @@ class InstantEmulator:
                 return None
 
             def show(self, cmd, iap_ip=None):
+                if cmd in emu.diagnostic_text:
+                    from ...aruba.client import validate_command
+                    validate_command(cmd)
+                    return {"Command output": emu.diagnostic_text[cmd]}
+                if cmd == "show log wireless":
+                    from ...aruba.client import validate_command
+                    validate_command(cmd)
+                    return {"Command output": emu.log_records["wireless"]}
                 if cmd.startswith("show log "):
                     from ...aruba.client import validate_command
                     import re as _re
