@@ -13,22 +13,25 @@ export default function DeviceInventory() {
   const handoff = useLocation().state as {credentialDeviceIds?: string[]; family?: string} | null;
   const [family, setFamily] = useState(handoff?.family ?? "ALL");
   const [site, setSite] = useState("");
+  const [needsAttention, setNeedsAttention] = useState(false);
   const query = params.get("q") ?? "";
   const devices = useLoad(v1.devices, [], 30000, ["devices"]);
   const sites = useLoad(() => v1.physicalSites().catch(() => ({ sites: [] })), [], 60000, ["sites"]);
   const siteNames = useMemo(() => new Map((sites.data?.sites ?? []).map(s => [s.id, s.name])), [sites.data]);
   const rows = useMemo(() => (devices.data ?? []).filter(d =>
     (family === "ALL" || d.family === family) &&
+    (!needsAttention || (d.source_type === "REAL" && !["ONLINE", "UP"].includes(
+      (("state" in d ? String(d.state ?? d.status) : d.status)).toUpperCase()))) &&
     (!site || (d.site_id ?? "unassigned") === site) &&
     (!query || [d.hostname,d.model,d.serial_number,d.firmware,siteNames.get(d.site_id ?? ""),...(d.management_addresses ?? [])]
-      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query, site, siteNames]);
+      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query, site, siteNames, needsAttention]);
   const admin = getSession()?.role === "admin";
   const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
   const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
   const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
     id: string; name: string; address?: string;
   }[] } | null>(null);
-  const [checks, setChecks] = useState<Record<string, {ok: boolean; message: string}>>({});
+  const [checks, setChecks] = useState<Record<string, {status: string; message: string}>>({});
   const [testing, setTesting] = useState<string | null>(null);
   const [profile, setProfile] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,7 +80,9 @@ export default function DeviceInventory() {
           <option value="">All sites</option><option value="unassigned">Unassigned</option>
           {[...(sites.data?.sites ?? [])].sort((a,b) => a.name.localeCompare(b.name)).map(s =>
             <option key={s.id} value={s.id}>{s.name}{s.source_type === "DEMO" ? " (Demo)" : ""}</option>)}
-        </select></div>
+        </select>
+        <label><input type="checkbox" checked={needsAttention} disabled={busy || !!testing}
+          onChange={e => {setNeedsAttention(e.target.checked); changeSelection([]);}} /> Needs attention</label></div>
     </div>
       {admin && <form className="inm-cardbody flex flex-wrap items-end gap-3" onSubmit={async e => {
         e.preventDefault();
@@ -141,7 +146,7 @@ export default function DeviceInventory() {
       </details>}
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
-        <p>Profile assigned: {result.profileName}. Test each device to verify that its credentials work.</p>
+        <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
         <div className="inm-tablewrap"><table className="inm-table">
           <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
@@ -149,18 +154,24 @@ export default function DeviceInventory() {
             return <tr key={d.id}>
               <td>{d.name}</td><td>{d.address ?? "Missing"}</td><td>Saved</td>
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
-                ? (check.ok ? "Verified" : "Failed") + (check.message ? " · " + check.message : "")
+                ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
               <td><button type="button" className={btn} disabled={busy || !!testing || !d.address}
                 onClick={async () => {
                   if (!d.address) return;
                   setTesting(d.id);
                   try {
-                    const response = await onboardingApi.testCredential(result.profileId, d.address);
-                    setChecks(previous => ({...previous, [d.id]: {ok: response.status === "SUCCESS",
-                      message: [response.hostname, response.model].filter(Boolean).join(" · ")}}));
+                    const response = await onboardingApi.checkRestApi(result.profileId, d.address);
+                    const labels = {
+                      ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
+                      AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
+                      UNREACHABLE: "Unreachable",
+                    };
+                    setChecks(previous => ({...previous, [d.id]: {
+                      status: labels[response.state], message: response.detail,
+                    }}));
                   } catch (error) {
-                    setChecks(previous => ({...previous, [d.id]: {ok: false,
+                    setChecks(previous => ({...previous, [d.id]: {status: "Check failed",
                       message: error instanceof Error ? error.message : "Connection test failed"}}));
                   } finally { setTesting(null); }
                 }}>Test connection</button></td>
