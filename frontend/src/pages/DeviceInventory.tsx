@@ -5,6 +5,7 @@ import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
 import { ApiError, getSession, request } from "../services/api";
 import { onboardingApi, type RestPreflight } from "../services/onboarding";
+import DeviceRestBootstrap from "../components/DeviceRestBootstrap";
 import { ops } from "../services/ops";
 import { v1 } from "../services/inm";
 
@@ -37,6 +38,7 @@ export default function DeviceInventory() {
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const [restBootstrapDevice, setRestBootstrapDevice] = useState<string | null>(null);
   const [reviewAccess, setReviewAccess] = useState(false);
   const [profile, setProfile] = useState("");
   const [savedProfile, setSavedProfile] = useState("");
@@ -90,7 +92,7 @@ export default function DeviceInventory() {
       UNREACHABLE: "Unreachable",
     };
     const check = async () => {
-      const response = await onboardingApi.checkRestApi(profileId, d.address!);
+      const response = await onboardingApi.checkRestApi(profileId, d.address!, d.id);
       setChecks(previous => ({...previous, [d.id]: {
         status: labels[response.state] ?? "Checked", message: response.detail,
         restState: response.state,
@@ -312,6 +314,7 @@ export default function DeviceInventory() {
           setResult({profileId: chosen.id, profileName: chosen.name, devices: targets});
           setChecks({});
           setOnboardResults({});
+          setRestBootstrapDevice(null);
           changeSelection([]);
           setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
         } catch (e) {
@@ -390,6 +393,7 @@ export default function DeviceInventory() {
               setResult({profileId: assigned.profile_id, profileName: assigned.profile_name, devices: assigned.devices});
               setChecks({});
               setOnboardResults({});
+              setRestBootstrapDevice(null);
               setFeedback({message: "Loaded " + assigned.devices.length + " registered devices with saved profile " +
                 assigned.profile_name + ". Run Test & Approve All, then Onboard Successful."});
             } catch (error) {
@@ -449,10 +453,27 @@ export default function DeviceInventory() {
                   onClick={() => void testConnection(result.profileId, d, null, true)}>
                   Approve IP &amp; Test
                 </button>
+                {(check?.restState === "UNREACHABLE" || check?.restState === "DISABLED") &&
+                  <button type="button" className={btn}
+                    disabled={busy || !!testing || testingBatch || onboardingBusy}
+                    onClick={() => setRestBootstrapDevice(current => current === d.id ? null : d.id)}>
+                    {restBootstrapDevice === d.id ? "Close SSH diagnostic" : "Check SSH / Enable REST"}
+                  </button>}
               </div></td>
             </tr>;
           })}</tbody>
         </table></div>
+        {restBootstrapDevice && (() => {
+          const target = result.devices.find(d => d.id === restBootstrapDevice);
+          const family = devices.data?.find(d => d.id === restBootstrapDevice)?.family;
+          return target?.address && family && ["access_point", "switch"].includes(family) ?
+            <DeviceRestBootstrap key={restBootstrapDevice} deviceId={target.id}
+              credentialId={result.profileId} address={target.address} family={family as "access_point" | "switch"}
+              onEnabled={async () => {
+                await testConnection(result.profileId, target);
+                setRestBootstrapDevice(null);
+              }}/> : null;
+        })()}
       </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
