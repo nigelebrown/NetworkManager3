@@ -27,7 +27,7 @@ export function CapChip({ op, status, evidence }: { op: string; status: string; 
 
 export function PlannedNotice({ phase, title, children }: { phase: number; title: string; children?: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-5">
+    <div className="inm-planned-notice">
       <div className="flex items-center gap-2">
         <span className="rounded bg-slate-700/50 px-2 py-0.5 text-xs font-bold text-slate-300">PLANNED · Phase {phase}</span>
         <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
@@ -39,16 +39,16 @@ export function PlannedNotice({ phase, title, children }: { phase: number; title
 
 export function Table({ head, children, empty }: { head: string[]; children: ReactNode; empty?: boolean }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase text-slate-500"><tr>{head.map((h) => <th key={h} className="px-2 py-2 font-medium">{h}</th>)}</tr></thead>
-        <tbody className="divide-y divide-slate-800">{children}</tbody>
+    <div className="inm-tablewrap">
+      <table className="inm-table">
+        <thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{children}</tbody>
       </table>
-      {empty && <div className="py-6 text-center text-sm text-slate-500">Nothing to show.</div>}
+      {empty && <div className="inm-empty">Nothing to show.</div>}
     </div>
   );
 }
 
-export const btn = "rounded border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-50";
-export const btnPrimary = "rounded bg-sky-600 px-3 py-1.5 text-sm font-medium hover:bg-sky-500 disabled:opacity-50";
-export const input = "rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm";
+export const btn = "inm-btn-secondary disabled:opacity-50";
+export const btnPrimary = "inm-btn-primary disabled:opacity-50";
+export const input = "inm-form-control";
