@@ -144,6 +144,11 @@ class ArubaClient:
             )
         except httpx.HTTPError as exc:
             raise ArubaConnectionError(self._describe(exc)) from None
+        if resp.status_code == 503:
+            from .errors import ArubaRestUnavailableError
+            raise ArubaRestUnavailableError(
+                "Aruba REST returned HTTP 503. Check whether this AP is managed through its Instant Virtual Controller."
+            )
         try:
             data = resp.json()
         except ValueError:

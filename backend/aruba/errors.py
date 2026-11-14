@@ -6,6 +6,10 @@ class ArubaConnectionError(ArubaError):
     """Network-level failure: timeout, refused, DNS, TLS verification failed."""
 
 
+class ArubaRestUnavailableError(ArubaConnectionError):
+    """The HTTPS endpoint returned HTTP 503 during REST login."""
+
+
 class ArubaAuthError(ArubaError):
     """Login rejected or session invalid and re-login failed."""
 

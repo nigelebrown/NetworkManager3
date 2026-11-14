@@ -197,6 +197,8 @@ services:
   # ---------------------------------------------------------------- 01 web/API
   api:
     <<: *hardening
+    sysctls:
+      net.ipv4.ping_group_range: "10001 10001"
     image: inm/backend:${INM_VERSION:?}
     environment:
       <<: *app-env

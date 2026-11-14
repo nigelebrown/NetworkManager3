@@ -45,6 +45,7 @@ export type RestPreflight = {
   state: "ENABLED" | "DISABLED" | "AUTH_REJECTED" | "UNSUPPORTED_API" | "UNREACHABLE";
   detail: string; rest_enabled: boolean; write_unlock_required: boolean;
   ap_rest_only_authorized?: boolean;
+  ping?: "REPLIED" | "NO_REPLY" | "UNAVAILABLE";
   cluster_managed?: boolean;
   cluster_endpoint?: string | null;
   cluster_monitoring_active?: boolean;

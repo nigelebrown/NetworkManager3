@@ -11,6 +11,8 @@ from ..infrastructure.posture import read_only, write_posture
 
 import ipaddress
 import json
+import os
+import subprocess
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -271,11 +273,7 @@ class RestEnable(RestTarget):
 
 def _locked_ap_rest_bootstrap_allowed(db: Session, profile: OnboardingCredential,
                                       body: RestTarget) -> bool:
-    """Explicit /32, credential-bound AP-only bootstrap; never unlock general writes.
-
-    A successful ping, a subnet allowlist or an untrusted inventory model does NOT
-    replace administrator approval, host-enforced /32 egress, or SSH pinning.
-    """
+    """Limit REST bootstrap to a registered, credential-bound AP under the installed access policy."""
     import re
     from .management_approvals import _registered_target, host_applied_ips
     s = get_settings()
@@ -285,13 +283,14 @@ def _locked_ap_rest_bootstrap_allowed(db: Session, profile: OnboardingCredential
             and body.device_id):
         return False
     ip = str(body.management_ip)
-    if ip not in host_applied_ips():
+    if os.environ.get("INM_ON_PREMISES_MANAGEMENT") != "true" and ip not in host_applied_ips():
         return False
     try:
+        _permit_probe(body.management_ip)
         device = _registered_target(db, body.device_id, profile.id, ip)
     except HTTPException:
         return False
-    return bool(device.vendor == "Aruba" and re.search(r"(?i)\bAP[-\s]?(?:505|535)\b", device.model or ""))
+    return bool(device.vendor.casefold() == "aruba" and re.search(r"(?i)\bAP[-\s]?(?:505|535)\b", device.model or ""))
 
 
 def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tuple[str, str]:
@@ -311,8 +310,10 @@ def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tu
                 client.open()
         return "ENABLED", "REST API responds and the saved credentials were accepted."
     except Exception as exc:
-        from ..aruba.errors import ArubaAuthError, ArubaRestDisabledError
+        from ..aruba.errors import ArubaAuthError, ArubaRestDisabledError, ArubaRestUnavailableError
         from ..infrastructure.writers import WriterError
+        if isinstance(exc, ArubaRestUnavailableError):
+            return "UNREACHABLE", str(exc)
         if isinstance(exc, ArubaRestDisabledError) or (isinstance(exc, WriterError) and exc.category == "REST_DISABLED"):
             return "DISABLED", "REST endpoint did not respond as an enabled API; SSH bootstrap may be necessary."
         if isinstance(exc, ArubaAuthError) or (isinstance(exc, WriterError) and exc.category == "AUTH_REJECTED"):
@@ -381,6 +382,17 @@ def _check_instant_cluster(db: Session, device: InmDevice, cluster: InmCluster,
     }
 
 
+def _ping_status(ip: ipaddress.IPv4Address) -> str:
+    try:
+        result = subprocess.run(["ping", "-4", "-n", "-c", "1", "-W", "1", str(ip)],
+                                capture_output=True, timeout=2, check=False)
+    except subprocess.TimeoutExpired:
+        return "NO_REPLY"
+    except OSError:
+        return "UNAVAILABLE"
+    return {0: "REPLIED", 1: "NO_REPLY"}.get(result.returncode, "UNAVAILABLE")
+
+
 @router.post("/credentials/{profile_id}/rest-api/check")
 def check_credential_rest(profile_id: str, body: RestTarget, request: Request, db: Session = Depends(get_db),
                           admin: User = Depends(require_role("admin"))):
@@ -392,12 +404,19 @@ def check_credential_rest(profile_id: str, body: RestTarget, request: Request, d
     linked = _linked_instant_device(db, body, profile)
     if linked:
         result = _check_instant_cluster(db, *linked, profile, request, admin)
-        return {**result, "management_ip": str(body.management_ip)}
+        try:
+            _permit_probe(body.management_ip)
+        except HTTPException:
+            ping = "UNAVAILABLE"
+        else:
+            ping = _ping_status(body.management_ip)
+        return {**result, "management_ip": str(body.management_ip), "ping": ping}
     _permit_probe(body.management_ip)
+    ping = _ping_status(body.management_ip)
     state, detail = _rest_status(profile, body.management_ip)
     ip = str(body.management_ip)
     ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)
-    result = {"management_ip": ip, "family": profile.device_family, "state": state, "detail": detail,
+    result = {"management_ip": ip, "family": profile.device_family, "state": state, "detail": detail, "ping": ping,
               "rest_enabled": state in ("ENABLED", "AUTH_REJECTED", "UNSUPPORTED_API"),
               "ap_rest_only_authorized": ap_rest_only,
               "write_unlock_required": not (get_settings().device_writes_permitted or ap_rest_only),
@@ -411,7 +430,8 @@ def check_credential_rest(profile_id: str, body: RestTarget, request: Request, d
         except ArubaError:
             result["ssh"] = {"error": "SSH port 22 unavailable or negotiation failed; use device console to enable REST."}
     audit(db, "onboarding_rest_preflight", username=admin.username, target=ip,
-          detail=f"profile={profile.id} family={profile.device_family} state={state}", request=request)
+          detail=f"profile={profile.id} family={profile.device_family} state={state} ping={ping}",
+          request=request, success=state == "ENABLED")
     return result
 
 

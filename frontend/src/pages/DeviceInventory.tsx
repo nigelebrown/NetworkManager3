@@ -39,7 +39,7 @@ export default function DeviceInventory() {
     id: string; name: string; address?: string;
   }[] } | null>(null);
   const [checks, setChecks] = useState<Record<string, {status: string; message: string;
-    restState?: RestPreflight["state"]; clusterManaged?: boolean}>>({});
+    restState?: RestPreflight["state"]; clusterManaged?: boolean; ping?: RestPreflight["ping"]}>>({});
   const [onboardResults, setOnboardResults] = useState<Record<string, {status: string; message: string}>>({});
   const [onboardingBusy, setOnboardingBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{done: number; total: number} | null>(null);
@@ -79,7 +79,7 @@ export default function DeviceInventory() {
     const labels: Record<string, string> = {
       ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
       AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
-      UNREACHABLE: "Unreachable",
+      UNREACHABLE: "REST unavailable",
     };
     const check = async () => {
       const response = await onboardingApi.checkRestApi(profileId, d.address!, d.id);
@@ -87,6 +87,7 @@ export default function DeviceInventory() {
         status: response.cluster_managed && response.state === "ENABLED"
           ? "Managed via cluster" : labels[response.state] ?? "Checked", message: response.detail,
         restState: response.state,
+        ping: response.ping,
         clusterManaged: response.cluster_managed,
       }}));
     };
@@ -363,14 +364,17 @@ export default function DeviceInventory() {
           {" "}<Link className="inm-link" to="/collection">Live monitoring</Link>.
         </p>
         <div className="inm-tablewrap"><table className="inm-table">
-          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
+          <thead><tr><th>Device</th><th>Management IP</th><th>Reachability</th><th>Assignment</th><th>Connection</th><th>Onboarding</th><th>Action</th></tr></thead>
           <tbody>{result.devices.map(d => {
             const check = checks[d.id];
             const device = devices.data?.find(device => device.id === d.id);
             return <tr key={d.id}>
               <td>{d.name}{device?.family === "access_point" &&
                 <div className="text-xs text-slate-600">{clusterLabel(device.cluster_id)}</div>}</td>
-              <td>{d.address ?? "Missing"}</td><td>Saved</td>
+              <td>{d.address ?? "Missing"}</td>
+              <td>{testing === d.id ? "Checking…" : check?.ping === "REPLIED" ? "Ping replied" :
+                check?.ping === "NO_REPLY" ? "No ping reply" : check?.ping === "UNAVAILABLE" ?
+                  "Ping unavailable" : "Not checked"}</td><td>Saved</td>
               <td aria-live="polite">{testing === d.id ? "Testing…" : check
                 ? check.status + (check.message ? " · " + check.message : "")
                 : "Not tested"}</td>
