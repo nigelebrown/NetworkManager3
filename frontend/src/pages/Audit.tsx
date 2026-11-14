@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { Table, btn, input } from "../components/inm";
@@ -16,7 +17,7 @@ export default function Audit() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Audit trail</h1>
+        <PageHeader eyebrow="Governance & security" title="Audit trail" subtitle="Operator actions, security events, and verifiable evidence history." />
         <div className="flex gap-2">
           <input className={input} placeholder="filter by action" value={action} onChange={(e) => setAction(e.target.value.trim())} />
           <button className={btn} onClick={verify}>Verify hash chain</button>
