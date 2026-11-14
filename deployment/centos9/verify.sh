@@ -46,14 +46,19 @@ only_expected_ports() {
   return $bad
 }
 
-worker_has_no_external_route() {
-  # Phase 1: the network worker must not be able to reach any address outside the internal Docker networks.
+worker_public_egress_blocked() {
+  # Worker needs opt-in private device management egress but never general
+  # internet access. Require a host firewall policy AND live socket denial.
+  bash "$ROOT/scripts/inm_worker_egress_guard.sh" --check || return 1
   compose exec -T worker python -c "
 import socket,sys
 s=socket.socket(); s.settimeout(3)
 try:
-    s.connect(('1.1.1.1',443)); print('       worker reached 1.1.1.1:443'); sys.exit(1)
+    s.connect(('1.1.1.1',443))
+    print('       SECURITY FAILURE: worker reached public 1.1.1.1:443')
+    sys.exit(1)
 except OSError:
+    print('       public internet egress blocked as expected')
     sys.exit(0)"
 }
 
@@ -65,7 +70,7 @@ JSON=""; [[ "${1:-}" == "--json" ]] && JSON=1
 check "containers: all seven roles running" containers_running
 check "security: secrets files protected (0600/0700, not in git)" secrets_protected
 check "security: only web and syslog publish ports" only_expected_ports
-check "safety: network worker has no external route" worker_has_no_external_route
+check "safety: worker egress firewall and public internet denied" worker_public_egress_blocked
 check "application: health, safety, AI isolation, syslog, end-to-end event" app_checks
 
 echo
