@@ -94,17 +94,18 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
             assert page.locator("#inm-main-content").inner_text().strip(), route
         page.goto(URL + "/")
         page.get_by_role("heading", name="Network command center").wait_for()
+        page.route("**/api/printers/credential-profiles", lambda route: route.fulfill(json=[
+            {"id": "ci-profile", "name": "CI printers", "version": "2c"},
+        ]))
         page.goto(URL + "/printers")
-        page.get_by_role("button", name="Discover printers / test SNMPv3").click()
-        page.route("**/api/printers/discover-snmpv3", lambda route: route.fulfill(json={
+        page.get_by_role("button", name="Discover printers", exact=True).click()
+        page.route("**/api/printers/credential-profiles/ci-profile/discover", lambda route: route.fulfill(json={
             "scanned": 2,
             "printers": [{"management_ip": "10.190.1.21", "hostname": "CI Test Printer",
                           "system_description": "Simulated Printer-MIB device", "meter": None}],
         }))
         page.get_by_label("Management IP or CIDR").fill("10.190.1.20/30")
-        page.get_by_label("SNMPv3 username").fill("ci-reader")
-        page.get_by_label("Authentication passphrase (SHA-256)").fill("test-auth-passphrase")
-        page.get_by_label("Privacy passphrase (AES-128)").fill("test-private-passphrase")
+        page.get_by_label("Saved profile").select_option("ci-profile")
         page.get_by_role("button", name="Discover", exact=True).click()
         page.get_by_role("button", name="Review and register").click()
         assert page.get_by_label("Management IPv4").input_value() == "10.190.1.21"
