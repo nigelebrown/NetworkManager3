@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Git-only deployment entrypoint and shell syntax
         run: |
-          for script in deployment/centos9/*.sh scripts/inm.sh scripts/rebuild-demo.sh scripts/allow-readonly-device-range.sh scripts/enable-lan-demo.sh scripts/ensure-lan-schema.sh; do
+          for script in deployment/centos9/*.sh scripts/inm.sh scripts/rebuild-demo.sh scripts/allow-readonly-device-range.sh scripts/enable-lan-demo.sh scripts/ensure-lan-schema.sh scripts/inm_full_server_test.sh scripts/inm_hardware_readonly_test.sh scripts/inm_one_click_test.sh; do
             bash -n "$script"
           done
           bash scripts/inm.sh --help | grep -q 'Git-managed Intelligent Network Manager'
