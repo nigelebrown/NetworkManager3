@@ -74,6 +74,9 @@ export type ManagementIPApproval = {
 
 export const onboardingApi = {
   credentials: () => request<CredentialProfile[]>("/v1/onboarding/credentials"),
+  credentialDevices: (id: string) => request<{ profile_id: string; profile_name: string;
+    family: "access_point" | "switch"; devices: {id: string; name: string; address?: string}[];
+    device_writes: "LOCKED" }>(`/v1/onboarding/credentials/${enc(id)}/devices`),
   acceptance: (id: string) => request<DeviceAcceptance>(`/v1/onboarding/devices/${enc(id)}/acceptance`),
   fleetAcceptance: () => request<FleetAcceptance>("/v1/onboarding/acceptance"),
   createCredential: (body: {
