@@ -1,9 +1,11 @@
-import { PageHeader } from "../components/viz";
-import { useMemo } from "react";
+import { PageHeader, btn, inputCls } from "../components/viz";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { v1, type MetricPoint } from "../services/inm";
+
+import { getSession, request } from "../services/api";
 
 const labels: Record<string, string> = {
   clients: "Connected clients",
@@ -28,6 +30,10 @@ export default function DeviceDetails() {
   const device = useLoad(() => v1.getDevice(id), [id], 30000, ["devices"]);
   const points = useLoad(() => v1.metrics(id, 168), [id], 30000, ["devices", "metrics"]);
   const sites = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
+  const [siteName, setSiteName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [assigned, setAssigned] = useState<string | null>(null);
   const latest = useMemo(() => {
     const first: Record<string, MetricPoint> = {};
     for (const p of points.data?.points ?? []) {
@@ -39,7 +45,7 @@ export default function DeviceDetails() {
   const site = sites.data?.sites.find((s) => s.id === d?.site_id)?.name ?? "Unassigned";
   return (
     <div className="space-y-4">
-      <Link to="/onboarding/manual" className="text-sm text-sky-400 hover:underline">← Back to device inventory</Link>
+      <Link to="/inventory" className="text-sm text-sky-400 hover:underline">← Back to device inventory</Link>
       <div>
         <PageHeader eyebrow="Sites & inventory" title={d?.hostname ?? "Device details"} subtitle="Device identity, provenance, observations and management details." />
         <p className="mt-1 text-sm text-slate-400">
@@ -48,6 +54,28 @@ export default function DeviceDetails() {
       </div>
       <ErrorNote error={device.error ?? points.error ?? sites.error} />
       {d && <>
+        {d.source_type === "REAL" && getSession()?.role === "admin" && <Card title="Physical site">
+          <form className="flex flex-wrap items-end gap-3" onSubmit={async e => {
+            e.preventDefault();
+            setSaving(true); setAssignmentError(null); setAssigned(null);
+            try {
+              const result = await request<{site_name: string}>(`/v1/quick-devices/${encodeURIComponent(id)}/site`, {
+                method: "PATCH", body: JSON.stringify({ site_name: siteName.trim() }),
+              });
+              setAssigned(result.site_name); setSiteName(""); sites.reload(); device.reload();
+            } catch (err) {
+              setAssignmentError(err instanceof Error ? err.message : "Could not save the site");
+            } finally { setSaving(false); }
+          }}>
+            <label>Site name<input className={inputCls} list="physical-site-options" required maxLength={100}
+              placeholder={site} value={siteName} onChange={e => setSiteName(e.target.value)} /></label>
+            <datalist id="physical-site-options">{sites.data?.sites.filter(s => s.source_type === "REAL")
+              .map(s => <option key={s.id} value={s.name} />)}</datalist>
+            <button className={btn} disabled={saving || !siteName.trim()}>Save physical site</button>
+          </form>
+          <ErrorNote error={assignmentError} />
+          {assigned && <p role="status">Assigned to {assigned}.</p>}
+        </Card>}
         <div className="grid gap-4 lg:grid-cols-2">
           <Card title="Device identity">
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
