@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card, ErrorNote } from "../components/ui";
@@ -122,7 +123,7 @@ export default function ConfigTemplates() {
   });
   if (getSession()?.role !== "admin") return <Card>Administrator role required.</Card>;
   return <div className="space-y-4">
-    <div><h1 className="text-xl font-semibold">Templates & inheritance</h1>
+    <div><PageHeader eyebrow="Configuration & changes" title="Templates & inheritance" subtitle="Global, group, site, model and device policy inheritance with preview and controlled deployment." />
       <p className="text-sm text-slate-400">Global → group → site → device (optionally restricted to a model). Switch templates can define reusable port roles and assign them to port ranges; ranges fit each model's real port count. Templates never write: the exact operations are previewed, then deployed through an independently approved change plan.</p>
     </div>
     <ErrorNote error={error ?? templates.error ?? devices.error ?? sites.error}/>
