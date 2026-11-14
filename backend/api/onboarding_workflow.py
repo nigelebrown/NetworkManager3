@@ -258,12 +258,40 @@ def test_credential(profile_id: str, body: TargetCheck, request: Request,
 # ---- REST API prerequisites: authenticated, explicit SSH bootstrap for new hardware ---------
 class RestTarget(BaseModel):
     management_ip: ipaddress.IPv4Address
+    # The narrow live/lab-readonly AP-505/535 exception requires an existing,
+    # credential-bound REAL inventory device, never an arbitrary supplied IP.
+    device_id: str | None = Field(default=None, min_length=36, max_length=36)
 
 
 class RestEnable(RestTarget):
     host_key_sha256: str = Field(min_length=16, max_length=120)
     confirm_text: str = Field(min_length=1, max_length=100)
     vrf: Literal["default", "mgmt"] = "default"
+
+
+def _locked_ap_rest_bootstrap_allowed(db: Session, profile: OnboardingCredential,
+                                      body: RestTarget) -> bool:
+    """Explicit /32, credential-bound AP-only bootstrap; never unlock general writes.
+
+    A successful ping, a subnet allowlist or an untrusted inventory model does NOT
+    replace administrator approval, host-enforced /32 egress, or SSH pinning.
+    """
+    import re
+    from .management_approvals import _registered_target, host_applied_ips
+    s = get_settings()
+    if not (s.mode == "live" and s.inm_profile == "lab-readonly" and
+            s.device_write_lock and not s.allow_config_changes and
+            not s.device_writes_permitted and profile.device_family == "access_point"
+            and body.device_id):
+        return False
+    ip = str(body.management_ip)
+    if ip not in host_applied_ips():
+        return False
+    try:
+        device = _registered_target(db, body.device_id, profile.id, ip)
+    except HTTPException:
+        return False
+    return bool(re.search(r"(?i)\\bAP[-\\s]?(?:505|535)\\b", device.model or ""))
 
 
 def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tuple[str, str]:
@@ -307,9 +335,11 @@ def check_credential_rest(profile_id: str, body: RestTarget, request: Request, d
         raise HTTPException(423, "REST readiness checks require live mode and an explicitly allowed management IP.")
     state, detail = _rest_status(profile, body.management_ip)
     ip = str(body.management_ip)
+    ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)
     result = {"management_ip": ip, "family": profile.device_family, "state": state, "detail": detail,
               "rest_enabled": state in ("ENABLED", "AUTH_REJECTED", "UNSUPPORTED_API"),
-              "write_unlock_required": not get_settings().device_writes_permitted,
+              "ap_rest_only_authorized": ap_rest_only,
+              "write_unlock_required": not (get_settings().device_writes_permitted or ap_rest_only),
               "untrusted_device_certificates_accepted": not get_settings().aruba_verify_tls,
               "confirm_phrase": f"ENABLE REST API {ip}",
               "commands": list(ssh.ENABLE_REST_COMMANDS) if profile.device_family == "access_point" else
@@ -333,9 +363,11 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     profile = _profile(db, profile_id)
     _permit_probe(body.management_ip)
     ip = str(body.management_ip)
-    if get_settings().mode != "live" or not get_settings().device_writes_permitted:
-        raise HTTPException(423, "REST bootstrap is a device configuration change. Enable live mode and "
-                              "explicitly unlock configuration changes for this authorized test device.")
+    ap_rest_only = _locked_ap_rest_bootstrap_allowed(db, profile, body)
+    if get_settings().mode != "live" or not (get_settings().device_writes_permitted or ap_rest_only):
+        raise HTTPException(423, "REST bootstrap is locked. For AP-505/AP-535, first register the real AP, "
+                              "bind its saved credential, approve its exact /32 IP, then verify SSH host identity. "
+                              "General configuration writes remain locked.")
     if body.confirm_text.strip() != f"ENABLE REST API {ip}":
         raise HTTPException(422, f"Type exactly ENABLE REST API {ip} to confirm this device change.")
     if profile.device_family == "access_point" and body.vrf != "default":
@@ -348,7 +380,8 @@ def enable_credential_rest(profile_id: str, body: RestEnable, request: Request, 
     password = decrypt_secret(profile.password_enc)
     try:
         if profile.device_family == "access_point":
-            steps = ssh.enable_rest_api(ip, profile.username, password, body.host_key_sha256)
+            steps = ssh.enable_rest_api(ip, profile.username, password, body.host_key_sha256,
+                                        approved_ap_rest_only=ap_rest_only)
             rollback = ssh.ROLLBACK_TEXT
         else:
             steps = enable_cx_rest_api(ip, profile.username, password, body.host_key_sha256, vrf=body.vrf)
