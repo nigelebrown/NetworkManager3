@@ -79,3 +79,20 @@ def test_bulk_limit_and_role_enforced(client, admin):
     assert client.post("/api/v1/quick-devices/bulk", headers=operator, json=payload).status_code == 403
     payload = {"devices": [_device("switch", f"SERIAL-{i:03d}") for i in range(101)]}
     assert client.post("/api/v1/quick-devices/bulk", headers=admin, json=payload).status_code == 422
+
+
+def test_assign_imported_device_to_new_or_existing_site(client, admin):
+    imported = client.post("/api/v1/quick-devices/bulk", headers=admin, json={"devices": [
+        _device("switch", "SITE-MOVE-SW"), _device("access_point", "SITE-MOVE-AP"),
+    ]})
+    assert imported.status_code == 201
+    switch, ap = [row["id"] for row in imported.json()["results"]]
+    site_ids = []
+    for device in (switch, ap):
+        path = f"/api/v1/quick-devices/{device}/site"
+        response = client.patch(path, headers=admin, json={"site_name": "Office Center Building"})
+        assert response.status_code == 200, response.text
+        site_id = response.json()["site_id"]
+        assert client.get(f"/api/v1/devices/{device}", headers=admin).json()["site_id"] == site_id
+        site_ids.append(site_id)
+    assert site_ids[0] == site_ids[1]
