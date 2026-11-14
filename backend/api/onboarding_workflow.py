@@ -108,6 +108,34 @@ def assign_credentials(body: CredentialAssignment, request: Request, db: Session
     return {"assigned": len(ids), "credential_id": profile.id}
 
 
+@router.get("/credentials/{profile_id}/devices")
+def devices_assigned_to_credential(profile_id: str, db: Session = Depends(get_db),
+                                   admin: User = Depends(require_role("admin"))):
+    """Resume a saved connection-test group after browser refresh.
+
+    Returns only registered REAL devices bound to the selected active profile.
+    Passwords and encrypted credential material are never returned.
+    """
+    _locked()
+    profile = _profile(db, profile_id)
+    devices = list(db.scalars(
+        select(InmDevice).join(OnboardingDeviceCredential,
+                               OnboardingDeviceCredential.device_id == InmDevice.id)
+        .where(OnboardingDeviceCredential.credential_id == profile.id,
+               InmDevice.source_type == "REAL", InmDevice.family == profile.device_family)
+        .order_by(InmDevice.hostname, InmDevice.id).limit(501)
+    ))
+    if len(devices) > 500:
+        raise HTTPException(409, "Over 500 devices share this credential. Split the assignment before bulk testing.")
+    return {"profile_id": profile.id, "profile_name": profile.name,
+            "family": profile.device_family,
+            "devices": [
+                {"id": device.id, "name": device.hostname or device.serial_number,
+                 "address": (device.mgmt_addresses or [None])[0]}
+                for device in devices
+            ], "device_writes": "LOCKED"}
+
+
 class CredentialInput(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     device_family: FAMILY
