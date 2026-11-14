@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
@@ -10,7 +10,8 @@ import { v1 } from "../services/inm";
 /** Inventory view is backed exclusively by the real versioned inventory endpoints. */
 export default function DeviceInventory() {
   const [params, setParams] = useSearchParams();
-  const [family, setFamily] = useState("ALL");
+  const handoff = useLocation().state as {credentialDeviceIds?: string[]; family?: string} | null;
+  const [family, setFamily] = useState(handoff?.family ?? "ALL");
   const query = params.get("q") ?? "";
   const devices = useLoad(v1.devices, [], 30000, ["devices"]);
   const sites = useLoad(() => v1.physicalSites().catch(() => ({ sites: [] })), [], 60000, ["sites"]);
@@ -21,7 +22,7 @@ export default function DeviceInventory() {
       .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query]);
   const admin = getSession()?.role === "admin";
   const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
   const [profile, setProfile] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
@@ -88,6 +89,32 @@ export default function DeviceInventory() {
         </button>
         <p className="basis-full text-sm text-slate-600">Select devices of one type. The new profile replaces any previous assignment.</p>
       </form>}
+      {admin && selectedFamily && <details className="inm-cardbody">
+        <summary className="cursor-pointer font-medium">Create a credential profile for selected devices</summary>
+        <form className="mt-3 flex flex-wrap items-end gap-3" onSubmit={async e => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const data = new FormData(form);
+          setBusy(true); setFeedback({});
+          try {
+            const saved = await onboardingApi.createCredential({
+              name: String(data.get("name") ?? "").trim(), device_family: selectedFamily,
+              username: String(data.get("username") ?? "").trim(), password: String(data.get("password") ?? ""),
+            });
+            profiles.reload(); setProfile(saved.id);
+            setFeedback({message: "Profile saved. Click Assign profile to apply it to the selected devices."});
+          } catch (error) {
+            setFeedback({error: error instanceof Error ? error.message : "Could not create the profile"});
+          } finally {
+            form.reset(); setBusy(false);
+          }
+        }}>
+          <label>Profile name<input className={inputCls} name="name" required /></label>
+          <label>Username<input className={inputCls} name="username" required /></label>
+          <label>Password<input className={inputCls} name="password" type="password" autoComplete="new-password" required /></label>
+          <button className={btn} disabled={busy}>Save credential profile</button>
+        </form>
+      </details>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col">Select</th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
       </tr></thead><tbody>{rows.map(d=><tr key={d.id}>
