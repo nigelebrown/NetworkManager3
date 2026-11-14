@@ -65,7 +65,9 @@ def _open_transport(host: str, port: int, timeout: float):  # patched in tests
             sock = socket.create_connection((host, port), timeout=timeout)
         except OSError as exc:
             raise ArubaConnectionError(f"SSH connection to {host}:{port} failed: {exc.strerror or type(exc).__name__}") from None
-        t = paramiko.Transport(sock, disabled_algorithms=_UNSAFE_KEX if legacy else {\n            "keys": _LEGACY_ALGS["keys"], "kex": [*_LEGACY_ALGS["kex"], *_UNSAFE_KEX["kex"]],\n        })
+        t = paramiko.Transport(sock, disabled_algorithms=_UNSAFE_KEX if legacy else {
+            "keys": _LEGACY_ALGS["keys"], "kex": [*_LEGACY_ALGS["kex"], *_UNSAFE_KEX["kex"]],
+        })
         t.banner_timeout = timeout
         try:
             t.start_client(timeout=timeout)
