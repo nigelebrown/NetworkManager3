@@ -183,6 +183,10 @@ export interface DeviceOriginLogs {
   device_id: string; environment: string; kind: string; count: number;
   hardware_verified: boolean; records: DeviceOriginLog[];
 }
+export interface DeviceDiagnostic {
+  device_id: string; environment: string; kind: string; command: string; source: string;
+  output: string; hardware_verified: boolean; device_writes: number;
+}
 
 export const rw = {
   render: (id: string) => request<{ environment: string; operations: { op: Record<string, unknown>; requests?: unknown[]; error?: string }[];
@@ -197,6 +201,8 @@ export const rw = {
   ports: (id: string) => request<Ports>(`/v1/devices/${enc(id)}/ports`),
   deviceLogs: (id: string, kind: "audit" | "event" | "system" | "security" | "user", limit = 50) =>
     request<DeviceOriginLogs>(`/v1/devices/${enc(id)}/device-logs?kind=${enc(kind)}&limit=${limit}`),
+  diagnostics: (id: string, kind: string) =>
+    request<DeviceDiagnostic>(`/v1/devices/${enc(id)}/diagnostics?kind=${enc(kind)}`),
   authority: (id: string) => request<{ authority: string; detail: string; environment: string }>(`/v1/devices/${enc(id)}/authority`),
   scanKey: (id: string) => post<{ fingerprint?: string; sha256?: string; environment: string }>(`/v1/devices/${enc(id)}/ssh-key/scan`),
   pinKey: (id: string, fingerprint: string, vc_host?: string) => post(`/v1/devices/${enc(id)}/ssh-key/pin`, { fingerprint, vc_host: vc_host || null }),
