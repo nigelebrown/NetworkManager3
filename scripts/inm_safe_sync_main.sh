@@ -17,8 +17,8 @@ case "$ORIGIN" in
 esac
 [[ "$(git symbolic-ref --quiet --short HEAD)" == main ]] ||
   die 'Checkout must be on local main. No changes made.'
-[[ -z "$(git status --porcelain --untracked-files=no)" ]] ||
-  die 'Tracked files have uncommitted modifications. Preserve them before syncing.'
+[[ -z "$(git status --porcelain --untracked-files=normal)" ]] ||
+  die 'Uncommitted changes or untracked files exist. Preserve them before syncing; no source files were changed.'
 say 'Fetching GitHub main without merging.'
 git fetch --no-tags origin main
 BEFORE="$(git rev-parse --verify refs/heads/main)"
