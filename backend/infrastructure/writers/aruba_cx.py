@@ -230,6 +230,21 @@ class ArubaCxWriter:
         """What was negotiated with this switch — recorded with every execution and capability report."""
         return {"api_version": self.session.api_version, "csrf": self.session.csrf is not None}
 
+    def read_audit_logs(self, *, kind: str = "audit", limit: int = 50) -> list[dict]:
+        """Read documented AOS-CX 10.09+ REST audit/event log resource.
+
+        No change to device configuration. Unknown response attributes are
+        dropped by a bounded redacting normalizer; no raw log JSON escapes.
+        """
+        from ..device_audit import normalize_cx
+        if kind not in ("audit", "event") or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise WriterError("INVALID", "Unsupported switch log category or count.")
+        data = self._req("GET", f"/logs/{kind}").json()
+        try:
+            return normalize_cx(data, kind=kind, limit=limit)
+        except ValueError:
+            raise WriterError("PARSE_ERROR", "AOS-CX returned an unexpected log format.") from None
+
     # ---- read ------------------------------------------------------------------------------
     def identity(self) -> dict:
         d = self._req("GET", "/system", params={"attributes": "platform_name,software_version,hostname,"
