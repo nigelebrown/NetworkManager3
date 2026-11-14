@@ -39,6 +39,7 @@ export default function DeviceInventory() {
   const [testing, setTesting] = useState<string | null>(null);
   const [reviewAccess, setReviewAccess] = useState(false);
   const [profile, setProfile] = useState("");
+  const [savedProfile, setSavedProfile] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
   const accessRows = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => {
@@ -371,6 +372,35 @@ export default function DeviceInventory() {
           <button className={btn} disabled={busy}>Save credential profile</button>
         </form>
       </details>}
+      {admin && <section className="inm-cardbody flex flex-wrap items-end gap-3" aria-label="Resume saved device connection group">
+        <label>Load saved device assignments
+          <select className={inputCls} value={savedProfile}
+            disabled={busy || testingBatch || onboardingBusy}
+            onChange={e => setSavedProfile(e.target.value)}>
+            <option value="">Choose a saved credential profile</option>
+            {(profiles.data ?? []).filter(p => p.enabled).map(p =>
+              <option key={p.id} value={p.id}>{p.name} ({p.device_family === "switch" ? "Switches" : "APs"})</option>)}
+          </select>
+        </label>
+        <button type="button" className={btn} disabled={!savedProfile || busy || !!testing || testingBatch || onboardingBusy}
+          onClick={async () => {
+            setBusy(true); setFeedback({});
+            try {
+              const assigned = await onboardingApi.credentialDevices(savedProfile);
+              setResult({profileId: assigned.profile_id, profileName: assigned.profile_name, devices: assigned.devices});
+              setChecks({});
+              setOnboardResults({});
+              setFeedback({message: "Loaded " + assigned.devices.length + " registered devices with saved profile " +
+                assigned.profile_name + ". Run Test & Approve All, then Onboard Successful."});
+            } catch (error) {
+              setFeedback({error: error instanceof Error ? error.message : "Could not load saved device assignments"});
+            } finally { setBusy(false); }
+          }}>Load assigned devices</button>
+        <p className="basis-full text-sm text-slate-600">
+          Resume testing already registered devices across sites, including after refreshing the browser.
+          No duplicate equipment records are created.
+        </p>
+      </section>}
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
