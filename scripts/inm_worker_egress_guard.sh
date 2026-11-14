@@ -26,8 +26,8 @@ docker info >/dev/null 2>&1 || die 'Docker daemon unavailable.'
 [[ "$(docker network inspect inm_devices --format '{{.EnableIPv6}}' 2>/dev/null)" == false ]] ||
   die 'IPv6 on inm_devices must be disabled or independently filtered (fail closed).'
 NETID="$(docker network inspect inm_devices --format '{{.Id}}')"
-BRIDGE="$(docker network inspect inm_devices --format '{{index .Options "com.docker.network.bridge.name"}}' 2>/dev/null || true)"
-BRIDGE="${BRIDGE:-br-${NETID:0:12}}"
+# compose.yaml uses Docker's default bridge naming (no custom driver options).
+BRIDGE="br-${NETID:0:12}"
 [[ "$BRIDGE" =~ ^[a-zA-Z0-9_.:-]+$ ]] || die 'Unexpected Docker bridge name.'
 ip link show dev "$BRIDGE" >/dev/null 2>&1 || die "Docker bridge $BRIDGE missing."
 
