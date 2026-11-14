@@ -32,7 +32,7 @@ df -h /var/lib/docker /opt /etc/inm 2>/dev/null || true
 echo
 echo '=== Service process and direct health endpoint (only if running) ==='
 if [[ "$(docker inspect inm-ai-1 -f '{{.State.Running}}' 2>/dev/null || true)" == true ]]; then
-  docker exec inm-ai-1 python -I - <<'PY' || true
+  docker exec -i inm-ai-1 python -I - <<'PY' || true
 import urllib.request
 try:
     r=urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=6)
