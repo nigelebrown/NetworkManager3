@@ -256,6 +256,10 @@ class ProfileRange(BaseModel):
     management_range: IPv4Network
 
 
+class ProfileAddresses(BaseModel):
+    management_ips: list[IPv4Address] = Field(min_length=1, max_length=256)
+
+
 class ProfileTarget(BaseModel):
     management_ip: IPv4Address
 
@@ -348,7 +352,7 @@ async def discover_snmp(body: DiscoveryInput, request: Request, db: Session = De
 
 
 @router.post("/credential-profiles/{profile_id}/discover")
-async def discover_with_profile(profile_id: str, body: ProfileRange, request: Request,
+async def discover_with_profile(profile_id: str, body: ProfileRange | ProfileAddresses, request: Request,
                                 db: Session = Depends(get_db), admin: User = admin_only):
     row = db.get(AppSetting, PROFILE_PREFIX + profile_id)
     if row is None:
@@ -361,6 +365,9 @@ async def discover_with_profile(profile_id: str, body: ProfileRange, request: Re
     async def read(host):
         return await read_printer(host, row.value["version"], *secrets)
 
+    if isinstance(body, ProfileAddresses):
+        hosts = list(dict.fromkeys(map(str, body.management_ips)))
+        return await _discover_printer_hosts(hosts, "explicit IP list", read, request, db, admin)
     return await _discover_printers(body.management_range, read, request, db, admin)
 
 
@@ -368,6 +375,10 @@ async def _discover_printers(network, read, request, db, admin):
     if network.prefixlen < 24:
         raise HTTPException(422, "Use a /24 or smaller range")
     hosts = [str(host) for host in network.hosts()]
+    return await _discover_printer_hosts(hosts, str(network), read, request, db, admin)
+
+
+async def _discover_printer_hosts(hosts, target, read, request, db, admin):
     if not all(permitted_target(host) for host in hosts):
         raise HTTPException(403, "The entire range must be within approved management ranges")
     if discovery_lock.locked():
@@ -389,11 +400,13 @@ async def _discover_printers(network, read, request, db, admin):
                 return {"management_ip": host, **details}
 
         results = [item for item in await asyncio.gather(*(identify(host) for host in hosts)) if item]
-        audit(db, "printer_discovery", username=admin.username, target=str(network),
+        audit(db, "printer_discovery", username=admin.username, target=target,
               detail=f"Read-only SNMP discovery: {len(results)} printers among {len(hosts)} targets",
               request=request)
         db.commit()
-        return {"scanned": len(hosts), "printers": results}
+        found = {item["management_ip"] for item in results}
+        return {"scanned": len(hosts), "printers": results,
+                "unverified": [host for host in hosts if host not in found]}
 
 
 @router.get("/{printer_id}")

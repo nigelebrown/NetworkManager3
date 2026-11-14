@@ -38,12 +38,11 @@ export function Printers() {
     manufacturer: "HP", model: "", serial_number: "", hostname: "", management_ip: "",
     area: "", division: "", branch: "", station: "", section_unit: "", building: "",
   });
-  const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[] } | null>(null);
+  const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[]; unverified?: string[] } | null>(null);
   const profiles = useLoad(() => request<PrinterProfile[]>(profilePath), [], 0);
   const [credentials, setCredentials] = useState({name: "", version: "3"});
   const [profileId, setProfileId] = useState("");
   const [target, setTarget] = useState("");
-  const [profileResult, setProfileResult] = useState<Record<string, unknown> | null>(null);
   const [analysis, setAnalysis] = useState<PrinterAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,39 +116,48 @@ export function Printers() {
       </Card>}</div>
       <div id="printer-discovery" hidden={!snmp}>{snmp && <Card title="Discover printers">
         <ErrorNote error={profiles.error} />
-        <p>Choose a saved SNMP profile and enter an approved IPv4 address or CIDR from /24 to /32.</p>
+        <p>Choose a saved SNMP profile and paste management IPs from Excel, or enter a CIDR from /24 to /32.</p>
         <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={e => {
           e.preventDefault();
-          setProfileResult(null); setDiscovery(null);
+          setDiscovery(null);
           action(async () => {
             const scope = target.trim();
+            const url = `${profilePath}/${encodeURIComponent(profileId)}`;
+            if (!scope.includes("/")) {
+              const ips = [...new Set(scope.split(/[\s,]+/).filter(Boolean))];
+              if (!ips.length || ips.length > 256 || ips.some(ip =>
+                !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) ||
+                ip.split(".").some(part => Number(part) > 255 || String(Number(part)) !== part))) {
+                throw new Error("Enter up to 256 valid IPv4 addresses.");
+              }
+              setDiscovery(await request<{scanned: number; printers: DiscoveredPrinter[]; unverified?: string[]}>(url + "/discover", {
+                method: "POST", body: JSON.stringify({management_ips: ips}),
+              }));
+              return;
+            }
             const address = scope.split("/")[0];
             if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address) ||
                 address.split(".").some(part => Number(part) > 255 || String(Number(part)) !== part) ||
                 (scope.includes("/") && !/^\/(?:2[4-9]|3[0-2])$/.test(scope.slice(address.length)))) {
               throw new Error("Enter an IPv4 address or an approved CIDR from /24 to /32.");
             }
-            const url = `${profilePath}/${encodeURIComponent(profileId)}`;
-            if (scope.includes("/")) {
-              setDiscovery(await request<{ scanned: number; printers: DiscoveredPrinter[] }>(url + "/discover", {
-                method: "POST", body: JSON.stringify({management_range: scope}),
-              }));
-            } else {
-              setProfileResult(await request<Record<string, unknown>>(url + "/test", {
-                method: "POST", body: JSON.stringify({management_ip: scope}),
-              }));
-            }
+            setDiscovery(await request<{scanned: number; printers: DiscoveredPrinter[]; unverified?: string[]}>(url + "/discover", {
+              method: "POST", body: JSON.stringify({management_range: scope}),
+            }));
           }, "Printer check completed.");
         }}>
           <label>Saved profile<select className={fieldStyle} required value={profileId} onChange={e => setProfileId(e.target.value)}>
             <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version})</option>)}
           </select></label>
-          <label>Management IP or CIDR<input className={fieldStyle} required value={target} onChange={e => setTarget(e.target.value)} /></label>
+          <label>Management IPs or CIDR<textarea className={fieldStyle} required rows={3} value={target} onChange={e => setTarget(e.target.value)} /></label>
           <button className={sub} disabled={busy || !profileId}>{busy ? "Checking…" : "Discover"}</button>
         </form>
-        {profileResult && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(profileResult, null, 2)}</pre>}
         {discovery && <div className="mt-4 space-y-2 text-sm">
           <p>{discovery.printers.length} printers responded across {discovery.scanned} addresses.</p>
+          {!!discovery.unverified?.length && <details>
+            <summary>{discovery.unverified.length} addresses without a verified printer response</summary>
+            <p>{discovery.unverified.join(", ")}</p>
+          </details>}
           {discovery.printers.map(printer => <div key={printer.management_ip} className="flex flex-wrap items-center gap-3 border-b py-2">
             <span className="font-mono">{printer.management_ip}</span>
             <span>{printer.hostname ?? "Hostname unavailable"}</span>
