@@ -161,7 +161,7 @@ export default function DeviceInventory() {
       const more = ips.length > 20 ? "\n  …plus " + (ips.length - 20) + " additional listed device IPs" : "";
       if (!window.confirm(
         "Test " + targets.length + " registered devices using " + result.profileName + "?\n\n" +
-        "Only if a device is blocked, approve its exact /32 IP after this administrator confirmation:\n" +
+        "Approve the listed exact /32 device IPs before running REST tests:\n" +
         list + more + "\n\n" +
         "No /24 subnets or device configuration writes will be authorized. Continue?"
       )) return;
@@ -172,7 +172,7 @@ export default function DeviceInventory() {
     try {
       for (const [index, device] of result.devices.entries()) {
         if (device.address) {
-          await testConnection(result.profileId, device, approveBlocked);
+          await testConnection(result.profileId, device, approveBlocked, approveBlocked);
         } else {
           setChecks(previous => ({...previous, [device.id]: {
             status: "Missing IP", message: "Device has no management address; skipped",
