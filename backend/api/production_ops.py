@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -320,6 +320,43 @@ def authority(device_id: str, request: Request, db: Session = Depends(get_db),
     audit(db, "management_authority_checked", username=user.username, target=d.id,
           detail=f"{res['authority']} env={env}", request=request)
     return {"device_id": d.id, "environment": env, **{k: v for k, v in res.items() if k != "raw"}}
+
+
+# ---- read-only device accounting and operational logs ---------------------------------------------
+@router.get("/devices/{device_id}/device-logs")
+def read_device_logs(device_id: str, request: Request, kind: str | None = None,
+                     limit: int = Query(default=50, ge=1, le=100),
+                     db: Session = Depends(get_db),
+                     user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    """Device-originated audit logs. Separate from the app's hash-chained audit trail.
+
+    Always a read-only vendor call, with access controlled by the device target
+    allowlist and encrypted credential binding in writer_for(). No raw secrets
+    or HTTP headers are returned. No configuration changes are performed.
+    """
+    d = real_device(db, device_id)
+    chosen = kind or ("audit" if d.family == "switch" else "system")
+    choices = ("audit", "event") if d.family == "switch" else ("system", "security", "user")
+    if chosen not in choices:
+        raise HTTPException(422, f"Unsupported log kind for this device family; use {', '.join(choices)}.")
+    try:
+        w, env = X.writer_for(db, d)
+        w.open()
+        try:
+            if not hasattr(w, "read_audit_logs"):
+                raise WriterError("UNSUPPORTED", "This device has no supported audit-log reader.")
+            entries = w.read_audit_logs(kind=chosen, limit=limit)
+        finally:
+            w.close()
+    except WriterError as exc:
+        audit(db, "device_logs_read_failed", username=user.username, target=d.id,
+              detail=f"category={chosen} failure={exc.category}", request=request, success=False)
+        raise HTTPException(409 if exc.category in ("PRECONDITION", "TARGET_NOT_ALLOWED", "UNSUPPORTED", "INVALID")
+                            else 502, f"Device log read refused: {exc.category}") from None
+    audit(db, "device_logs_read", username=user.username, target=d.id,
+          detail=f"category={chosen} records={len(entries)} environment={env}", request=request)
+    return {"device_id": d.id, "environment": env, "kind": chosen, "records": entries,
+            "count": len(entries), "hardware_verified": False}
 
 
 # ---- INM alerts, thresholds, maintenance windows ---------------------------------------------------
