@@ -112,10 +112,52 @@ def test_forced_password_change_blocks_everything_else(client, admin):
     assert client.get("/api/auth/me", headers=h).json()["must_change_password"] is True
     assert client.post("/api/auth/change-password", headers=h, json={"current_password": "temporary-pass-123",
                                                                       "new_password": "temporary-pass-123"}).status_code == 422
-    assert client.post("/api/auth/change-password", headers=h, json={"current_password": "temporary-pass-123",
-                                                                      "new_password": "a-better-password-1"}).status_code == 200
-    assert client.get("/api/aps", headers=h).status_code == 200
+    changed = client.post("/api/auth/change-password", headers=h, json={"current_password": "temporary-pass-123",
+                                                                          "new_password": "a-better-password-1"})
+    assert changed.status_code == 200
+    rotated = {"Authorization": f"Bearer {changed.json()['access_token']}"}
+    assert changed.json()["must_change_password"] is False
+    assert client.get("/api/aps", headers=h).status_code == 401  # previous session revoked
+    assert client.get("/api/aps", headers=rotated).status_code == 200
 
+
+
+def test_password_reset_revokes_all_existing_sessions_including_other_tokens(client, admin):
+    """Admin-initiated reset revokes independently issued bearer tokens immediately."""
+    r = client.post("/api/v1/users", headers=admin, json={
+        "username": "rotate.target", "role": "operator",
+        "temporary_password": "initial-credential-123", "site_scope": "all"})
+    assert r.status_code == 201, r.text
+    user_id = r.json()["id"]
+    first = login(client, "rotate.target", "initial-credential-123")
+    second = login(client, "rotate.target", "initial-credential-123")
+    assert client.get("/api/auth/me", headers=first).status_code == 200
+    assert client.get("/api/auth/me", headers=second).status_code == 200
+    reset = client.post(f"/api/v1/users/{user_id}/reset-password", headers=admin,
+                        json={"temporary_password": "reset-credential-456"})
+    assert reset.status_code == 200, reset.text
+    assert client.get("/api/auth/me", headers=first).status_code == 401
+    assert client.get("/api/auth/me", headers=second).status_code == 401
+    current = login(client, "rotate.target", "reset-credential-456")
+    assert client.get("/api/auth/me", headers=current).json()["must_change_password"] is True
+
+
+def test_tokens_do_not_expose_password_hash_or_accept_missing_credential_version(client, admin):
+    """The JWT includes only an HMAC credential stamp; older unbound tokens cannot authenticate."""
+    import jwt
+    from backend.config import get_settings
+    from backend.database.models import User
+    from backend.database.session import session_scope
+    headers = login(client)
+    token = headers["Authorization"].removeprefix("Bearer ")
+    payload = jwt.decode(token, options={"verify_signature": False})
+    with session_scope() as db:
+        stored_hash = db.query(User).filter_by(username="admin").one().password_hash
+    assert "credential_version" in payload and stored_hash not in token
+    legacy = dict(payload)
+    legacy.pop("credential_version")
+    unbound = jwt.encode(legacy, get_settings().jwt_secret, algorithm="HS256")
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {unbound}"}).status_code == 401
 
 def test_logout_revokes_token_and_session_fields_are_audited(client, admin):
     """P1-07: login/logout recorded with actor, UTC time, target, outcome, request ID, session hash."""

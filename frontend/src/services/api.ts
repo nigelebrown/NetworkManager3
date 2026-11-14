@@ -79,7 +79,7 @@ export const api = {
     request<Session>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   changePassword: (current_password: string, new_password: string) =>
-    request<{ ok: boolean }>("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
+    request<Session & { ok: boolean }>("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
   status: () => request<SystemStatus>("/system/status"),
   summary: (site_id?: number) => request<Summary>(`/dashboard/summary${q({ site_id })}`),
   history: (hours: number, site_id?: number) => request<HistoryPoint[]>(`/dashboard/history${q({ hours, site_id })}`),

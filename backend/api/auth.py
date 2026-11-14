@@ -50,7 +50,7 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
 
     user.failed_logins, user.locked_until = 0, None
-    token, expires = create_access_token(user.username, user.role)
+    token, expires = create_access_token(user.username, user.role, user.password_hash)
     set_actor(Actor(user.username, user.role, session_hash(decode_access_token(token).get("jti"))))
     audit(db, "login", username=user.username, request=request)
     return {"access_token": token, "token_type": "bearer", "expires_at": expires.isoformat(),
@@ -89,5 +89,10 @@ def change_password(body: ChangePasswordRequest, request: Request, user: User = 
     if body.new_password == body.current_password:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The new password must differ from the current one")
     user.password_hash, user.must_change_password = hash_password(body.new_password), False
+    # Rotate the current session immediately; all previously issued sessions
+    # fail credential-version verification after this transaction commits.
+    token, expires = create_access_token(user.username, user.role, user.password_hash)
     audit(db, "password_changed", username=user.username, request=request)
-    return {"ok": True}
+    return {"ok": True, "access_token": token, "token_type": "bearer",
+            "expires_at": expires.isoformat(), "username": user.username,
+            "role": user.role, "must_change_password": False}
