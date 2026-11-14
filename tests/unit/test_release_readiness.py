@@ -203,3 +203,23 @@ def test_acceptance_register_rejects_partial_missing_actual_and_duplicates(tmp_p
     m["artifacts"]["acceptance.csv"] = hashlib.sha256((root / "acceptance.csv").read_bytes()).hexdigest()
     sign(m, private)
     assert any("minimum 220" in e for e in verdict(m, root, trusted)["failures"])
+
+
+def test_generated_template_cannot_be_misread_as_production_pass(tmp_path):
+    cli = Path(__file__).resolve().parents[2] / "scripts" / "init-release-attestation.py"
+    out = tmp_path / "acceptance.json"
+    p = subprocess.run([
+        sys.executable, str(cli), "--output", str(out), "--commit", SHA,
+        "--prepared-by", "implementer",
+    ], capture_output=True, text=True, timeout=20)
+    assert p.returncode == 0, p.stderr
+    m = json.loads(out.read_text())
+    assert all(v["status"] == "NOT_RUN" for v in m["phases"].values())
+    assert all(v["environment"] == "UNVERIFIED" for v in m["device_certifications"])
+    assert verdict(m, tmp_path, {})["decision"] == "NO_GO"
+    assert out.stat().st_mode & 0o777 == 0o600
+    again = subprocess.run([
+        sys.executable, str(cli), "--output", str(out), "--commit", SHA,
+        "--prepared-by", "implementer",
+    ], capture_output=True, text=True, timeout=20)
+    assert again.returncode != 0  # cannot overwrite a previously reviewed file
