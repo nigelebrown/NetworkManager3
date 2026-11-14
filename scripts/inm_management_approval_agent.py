@@ -172,5 +172,17 @@ if __name__ == "__main__":
         install() if sys.argv[1] == "--install" else apply()
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError,
             subprocess.TimeoutExpired) as exc:
-        print("[INM approvals] FAIL:", type(exc).__name__, file=sys.stderr)
+        # Only approved static errors may be reported verbatim. Arbitrary
+        # exception text can include database values, credentials or CLI args.
+        safe_errors = {
+            "Management approval agent requires locked live/lab-readonly mode",
+            "Management approval agent requires the device-write lock",
+            "Malformed approval request in DB",
+            "Invalid or excessive management approval entries",
+            "Nonstring management approval",
+            "Only exact RFC1918 management IPs may be approved",
+            "Too many approved management IPs",
+        }
+        reason = str(exc) if isinstance(exc, ValueError) and str(exc) in safe_errors else type(exc).__name__
+        print("[INM approvals] FAIL:", reason, file=sys.stderr)
         sys.exit(1)
