@@ -68,14 +68,24 @@ def _lifecycle(c, adm, appr, dev, family) -> dict:
 
 
 def _cx_protocol(model: str, firmware: str) -> dict:
-    """Strict-emulator protocol checks: CSRF on every request, re-login after session expiry, no
+    """Strict-emulator protocol checks: CSRF on every request, no write replay after expiry, safe read re-login, no
     credentials in URLs, version negotiation, and refusal of firmware older than the supported range."""
     emu = CxEmulator(model=model, firmware=firmware, ports=24 if "24G" in model else 48)
     w = emu.writer()
     w.open()
     w.apply({"op": "switch.vlan.define", "value": 401})
     emu.expire_sessions()
-    w.apply({"op": "switch.vlan.define", "value": 402})          # must transparently re-login once
+    # Never automatically replay a mutating REST call after auth expiration:
+    # production code must reconcile an uncertain write before any retry.
+    try:
+        w.apply({"op": "switch.vlan.define", "value": 402})
+        blocked = False
+    except WriterError as exc:
+        blocked = exc.category == "AUTH_REJECTED" and emu.writes == 1 and "402" not in emu.state["vlans"]
+    # A read-only observation may reauthenticate once. The test then starts a
+    # fresh manual emulator operation with a known-good session.
+    w.identity()
+    w.apply({"op": "switch.vlan.define", "value": 402})
     ok, _ = w.readback({"op": "switch.vlan.define", "value": 402})
     w.close()
     old = CxEmulator(model=model, firmware=firmware.split(".")[0] + ".10.08.1010")
@@ -84,7 +94,7 @@ def _cx_protocol(model: str, firmware: str) -> dict:
         refused = None
     except WriterError as exc:
         refused = exc.category
-    return {"relogin_after_expiry": emu.logins == 2 and ok and getattr(emu, "expired_hits", 0) == 1, "protocol_violations": list(emu.violations),
+    return {"relogin_after_expiry": blocked and emu.logins == 2 and ok and getattr(emu, "expired_hits", 0) == 1, "protocol_violations": list(emu.violations),
             "negotiated_api": emu.writer().protocol().get("api_version") if hasattr(emu.writer(), "protocol") else None,
             "firmware_10_08": refused}
 
