@@ -80,8 +80,10 @@ export function Printers() {
         <Stat label="Low consumables" value={stats.data?.low_supplies.length ?? "—"} tone="warn" />
       </div>
       <div className="flex flex-wrap gap-2">
-        <button className={btn} onClick={() => { setEditing(!editing); setSnmp(false); }}> {editing ? "Close registration" : "Add a printer"} </button>
-        <button className={sub} onClick={() => { setSnmp(!snmp); setEditing(false); }}>Discover printers / test SNMPv3</button>
+        <button className={editing || !snmp ? btn : sub} aria-expanded={editing} aria-controls="printer-registration"
+          onClick={() => { setEditing(!editing); setSnmp(false); }}> {editing ? "Close registration" : "Add a printer"} </button>
+        <button className={snmp ? btn : sub} aria-expanded={snmp} aria-controls="printer-discovery"
+          onClick={() => { setSnmp(!snmp); setEditing(false); }}>Discover printers / test SNMPv3</button>
         <button className={sub} disabled={busy} onClick={() => action(async () => { setAnalysis(await printerApi.analyse()); }, "Rule-based analysis completed.")}>Analyse now</button>
       </div>
       <ErrorNote error={error ?? inventory.error ?? stats.error} />
@@ -133,7 +135,7 @@ export function Printers() {
         </form>
         {profileResult && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(profileResult, null, 2)}</pre>}
       </Card>
-      {editing && <Card title="Register a physical printer">
+      <div id="printer-registration" hidden={!editing}>{editing && <Card title="Register a physical printer">
         <p className="mb-3 text-xs text-slate-400">Step 1: identify equipment. Step 2: assign JCF location. Step 3: save. Step 4: open the printer to enter actual readings.</p>
         <form onSubmit={submit} className="space-y-3">
           <div className="grid gap-3 md:grid-cols-3">
@@ -162,8 +164,8 @@ export function Printers() {
           <p className="text-xs text-amber-300">Location entries are provisional free text until the JCF location registry is connected. Device writes remain disabled.</p>
           <button className={btn} disabled={busy}>Register printer</button>
         </form>
-      </Card>}
-      {snmp && <Card title="Discover printers with SNMPv3">
+      </Card>}</div>
+      <div id="printer-discovery" hidden={!snmp}>{snmp && <Card title="Discover printers with SNMPv3">
         <p className="mb-3 text-xs text-slate-400">Enter a server-approved private IPv4 address or CIDR up to /24. Use read-only SNMPv3 SHA-256 and AES-128 credentials. Discovery looks for Printer-MIB responses.</p>
         <form onSubmit={e => {
           e.preventDefault();
@@ -214,7 +216,7 @@ export function Printers() {
           <p className="font-semibold">Returned device information (not yet enrolled)</p>
           <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(probeResult, null, 2)}</pre>
         </div>}
-      </Card>}
+      </Card>}</div>
       {analysis && <Card title="Rule-based recommendations — not trained ML">
         <p className="mb-2 text-xs text-slate-400">{analysis.disclaimer}</p>
         {analysis.recommendations.length === 0
