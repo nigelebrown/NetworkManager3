@@ -25,6 +25,11 @@ export default function DeviceInventory() {
   const admin = getSession()?.role === "admin";
   const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
   const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
+  const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
+    id: string; name: string; address?: string;
+  }[] } | null>(null);
+  const [checks, setChecks] = useState<Record<string, {ok: boolean; message: string}>>({});
+  const [testing, setTesting] = useState<string | null>(null);
   const [profile, setProfile] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
@@ -77,11 +82,17 @@ export default function DeviceInventory() {
       {admin && <form className="inm-cardbody flex flex-wrap items-end gap-3" onSubmit={async e => {
         e.preventDefault();
         if (!selected.length || !matchingProfiles.some(p => p.id === profile)) return;
+        const chosen = matchingProfiles.find(p => p.id === profile)!;
+        const targets = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => ({
+          id: d.id, name: d.hostname || d.serial_number, address: d.management_addresses?.[0],
+        }));
         setBusy(true); setFeedback({});
         try {
           const result = await request<{assigned: number}>("/v1/onboarding/credentials/assign", {
             method: "POST", body: JSON.stringify({credential_id: profile, device_ids: selected}),
           });
+          setResult({profileId: chosen.id, profileName: chosen.name, devices: targets});
+          setChecks({});
           changeSelection([]);
           setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
         } catch (e) {
@@ -97,7 +108,7 @@ export default function DeviceInventory() {
           onChange={e => setProfile(e.target.value)}>
           <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select></label>
-        <button className={btn} disabled={busy || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
+        <button className={btn} disabled={busy || !!testing || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
           {busy ? "Assigning…" : "Assign profile"}
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
@@ -128,6 +139,35 @@ export default function DeviceInventory() {
           <button className={btn} disabled={busy}>Save credential profile</button>
         </form>
       </details>}
+      {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
+        <h3 className="font-semibold">Connection verification</h3>
+        <p>Profile assigned: {result.profileName}. Test each device to verify that its credentials work.</p>
+        <div className="inm-tablewrap"><table className="inm-table">
+          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
+          <tbody>{result.devices.map(d => {
+            const check = checks[d.id];
+            return <tr key={d.id}>
+              <td>{d.name}</td><td>{d.address ?? "Missing"}</td><td>Saved</td>
+              <td aria-live="polite">{testing === d.id ? "Testing…" : check
+                ? (check.ok ? "Verified" : "Failed") + (check.message ? " · " + check.message : "")
+                : "Not tested"}</td>
+              <td><button type="button" className={btn} disabled={busy || !!testing || !d.address}
+                onClick={async () => {
+                  if (!d.address) return;
+                  setTesting(d.id);
+                  try {
+                    const response = await onboardingApi.testCredential(result.profileId, d.address);
+                    setChecks(previous => ({...previous, [d.id]: {ok: response.status === "SUCCESS",
+                      message: [response.hostname, response.model].filter(Boolean).join(" · ")}}));
+                  } catch (error) {
+                    setChecks(previous => ({...previous, [d.id]: {ok: false,
+                      message: error instanceof Error ? error.message : "Connection test failed"}}));
+                  } finally { setTesting(null); }
+                }}>Test connection</button></td>
+            </tr>;
+          })}</tbody>
+        </table></div>
+      </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
           checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
