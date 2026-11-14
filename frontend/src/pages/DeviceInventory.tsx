@@ -63,22 +63,62 @@ export default function DeviceInventory() {
     setFeedback({});
   };
   const [testingBatch, setTestingBatch] = useState(false);
-  const testConnection = async (profileId: string, d: {id: string; address?: string}) => {
+  // A test never silently extends management access. On a blocked target,
+  // an administrator confirms an exact /32 before the host reconciler applies it.
+  const testConnection = async (profileId: string, d: {id: string; address?: string}, batchApproved = false) => {
     if (!d.address) return;
     setTesting(d.id);
-    try {
-      const response = await onboardingApi.checkRestApi(profileId, d.address);
-      const labels = {
-        ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
-        AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
-        UNREACHABLE: "Unreachable",
-      };
+    const labels: Record<string, string> = {
+      ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
+      AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
+      UNREACHABLE: "Unreachable",
+    };
+    const check = async () => {
+      const response = await onboardingApi.checkRestApi(profileId, d.address!);
       setChecks(previous => ({...previous, [d.id]: {
-        status: labels[response.state], message: response.detail,
+        status: labels[response.state] ?? "Checked", message: response.detail,
       }}));
+    };
+    try {
+      try {
+        await check();
+      } catch (firstError) {
+        const blocked = firstError instanceof ApiError && firstError.status === 403 &&
+          /approved management ranges|Live polling is disabled/i.test(firstError.message);
+        if (!blocked) throw firstError;
+        const confirmed = batchApproved || window.confirm(
+          "Approve only " + d.address + "/32 for read-only management access and retry? " +
+          "This will update the server's worker firewall after an audited administrator approval. " +
+          "It will NOT enable configuration writes."
+        );
+        if (!confirmed) {
+          setChecks(previous => ({...previous, [d.id]: {
+            status: "Blocked", message: "Administrator declined IP approval",
+          }}));
+          return;
+        }
+        setChecks(previous => ({...previous, [d.id]: {
+          status: "Approving IP", message: "Awaiting host firewall enforcement for " + d.address + "/32",
+        }}));
+        await onboardingApi.approveDeviceIP({
+          device_id: d.id, profile_id: profileId, management_ip: d.address,
+          confirmation: "APPROVE IP " + d.address,
+        });
+        let applied = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address);
+          if (status.state === "APPLIED") { applied = true; break; }
+          if (status.state === "ERROR") throw new Error("The host approval policy is invalid");
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        if (!applied) throw new Error("IP approval is queued but not yet applied by the server. Check the INM management approval timer.");
+        await check();
+      }
     } catch (error) {
-      setChecks(previous => ({...previous, [d.id]: {status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
-        message: error instanceof Error ? error.message : "Connection test failed"}}));
+      setChecks(previous => ({...previous, [d.id]: {
+        status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
+        message: error instanceof Error ? error.message : "Connection test failed",
+      }}));
     } finally { setTesting(null); }
   };
   const update = (value: string) => { const p = new URLSearchParams(params);
@@ -194,12 +234,17 @@ export default function DeviceInventory() {
       {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
         <h3 className="font-semibold">Connection verification</h3>
         <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
+        <p className="text-sm text-slate-600">Blocked management IPs can be approved here by an administrator after confirmation. Each approval is only for that device's /32 address; the host applies its firewall rule before testing. Configuration writes remain locked.</p>
         <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !result.devices.some(d => d.address)}
           onClick={async () => {
+            const approveBlocked = window.confirm(
+              "Test all devices? If an IP is blocked, approve that individual registered /32 management IP " +
+              "automatically after your authorization. No device configuration writes will be enabled."
+            );
             setTestingBatch(true);
             try {
               for (const device of result.devices) {
-                await testConnection(result.profileId, device);
+                await testConnection(result.profileId, device, approveBlocked);
               }
             } finally { setTestingBatch(false); }
           }}>{testingBatch ? "Testing devices…" : "Test all connections"}</button>
