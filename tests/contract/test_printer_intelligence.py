@@ -190,3 +190,22 @@ def test_range_discovery_filters_devices_and_preserves_manual_registration(clien
                 json={"supply_name": "Toner", "colour": "black", "percent_remaining": 3})
     dashboard = client.get("/api/printers/dashboard", headers=admin).json()
     assert dashboard["low_supplies"][0]["printer_id"] == printer["id"]
+
+
+@pytest.mark.parametrize("version", ["1", "2c", "3"])
+def test_saved_printer_profile_checks_only_selected_address(client, admin, monkeypatch, version):
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.44.0/24")
+    secrets = {"username": "printer-reader", "auth_passphrase": "test-auth-pass",
+               "privacy_passphrase": "test-private-pass"} if version == "3" else {"community": "test-community"}
+    response = client.post("/api/printers/credential-profiles", headers=admin,
+                           json={"name": "Office printers", "version": version, **secrets})
+    assert response.status_code == 201, response.text
+    profile = response.json()
+    assert set(profile) == {"id", "name", "version"}
+    route = f"/api/printers/credential-profiles/{profile['id']}/test"
+    with patch("backend.api.printers.read_printer", new_callable=AsyncMock) as read:
+        read.return_value = {"hostname": "printer", "printer_mib": True}
+        assert client.post(route, headers=admin, json={"management_ip": "10.103.45.21"}).status_code == 403
+        read.assert_not_called()
+        assert client.post(route, headers=admin, json={"management_ip": "10.103.44.21"}).status_code == 200
+        read.assert_awaited_once_with("10.103.44.21", version, *secrets.values())
