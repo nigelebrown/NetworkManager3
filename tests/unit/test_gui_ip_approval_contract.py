@@ -50,7 +50,7 @@ def test_batch_test_and_onboard_are_admin_only_read_only_and_status_gated():
     assert 'd => checks[d.id]?.restState === "ENABLED"' in page
     assert 'if (live.state !== "ENABLED")' in page
     assert "window.confirm(" in page
-    assert "Only if a device is blocked, approve its exact /32 IP" in page
+    assert "Approve the listed exact /32 device IPs before running REST tests" in page
     assert "await onboardingApi.approveDeviceIP" in page
     assert "await onboardingApi.capture(device.id, result.profileId)" in page
     assert "await ops.previewPlan(plan)" in page
