@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ApiError } from "../services/api";
 import { v1 } from "../services/inm";
 
 type InputRow = {
@@ -118,12 +119,13 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
   const [rows, setRows] = useState<InputRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [rejections, setRejections] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const sample = headers.join(",") + "\n" +
     "access_point,Head Office,HQ-AP-535-01,CN-AP-001,AP-535,10.101.1.15,8.10.0.21,unknown\n" +
     "switch,Head Office,HQ-CX6200-01,CN-CX-001,CX 6200F,10.103.1.20,10.14,unknown\n";
   const onFile = async (file: File | undefined) => {
-    setRows([]); setSummary(null); setError(null);
+    setRows([]); setSummary(null); setError(null); setRejections({});
     if (!file) return;
     if (file.size > 1024 * 1024) { setError("CSV file exceeds the 1 MB upload limit."); return; }
     try { setRows(parseDeviceCsv(await file.text())); }
@@ -131,28 +133,79 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
   };
   const ipCounts = new Map<string, number>();
   for (const row of rows) if (row.management_ip) ipCounts.set(row.management_ip, (ipCounts.get(row.management_ip) ?? 0) + 1);
-  const ready = rows.filter(row => row.site_name.trim() && (!row.management_ip || ipCounts.get(row.management_ip) === 1));
+  const reason = (row: InputRow) => {
+    const site = normalizeSite(row.site_name);
+    if (!site) return "Missing site";
+    if (Array.from(site).length > 100 || /[\x00-\x1f]/.test(site)) return "Invalid site name";
+    if (row.management_ip) {
+      const parts = row.management_ip.split(".");
+      if (parts.length !== 4 || parts.some(p => !/^(0|[1-9]\d{0,2})$/.test(p) || Number(p) > 255))
+        return "Invalid IPv4 address";
+      if ((ipCounts.get(row.management_ip) ?? 0) > 1) return "Repeated management IP";
+    }
+    for (const [field, value, max] of [
+      ["Device name", row.hostname, 100], ["Serial number", row.serial_number, 64],
+      ["Model", row.model, 64], ["Firmware", row.firmware ?? "", 64],
+    ] as const) {
+      if (Array.from(value).length > max || /[\x00-\x1f]/.test(value)) return `${field} is invalid`;
+    }
+    return rejections[row.serial_number] ?? "";
+  };
+  const ready = rows.filter(row => !reason(row));
+  const skipped = rows.filter(row => reason(row));
+  const exportSkipped = () => {
+    const csv = [
+      [...headers, "exported_group", "exported_status", "reason"],
+      ...skipped.map(r => [r.family, r.site_name, r.hostname, r.serial_number, r.model,
+        r.management_ip, r.firmware, r.status, r.exported_group, r.exported_status, reason(r)]),
+    ].map(row => row.map(value => {
+      const cell = value ?? "";
+      const safe = /^[\s]*[=+\-@]/.test(cell) ? "'" + cell : cell;
+      return '"' + safe.replace(/"/g, '""') + '"';
+    }).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], {type: "text/csv;charset=utf-8"}));
+    const link = document.createElement("a");
+    link.href = url; link.download = "inventory-rows-to-fix.csv"; link.click();
+    URL.revokeObjectURL(url);
+  };
   const importRows = async () => {
     setBusy(true); setError(null); setSummary(null);
+    let added = 0, updated = 0;
+    const completed = new Set<string>();
+    const rejected: Record<string, string> = {};
     try {
-      let added = 0, updated = 0;
-      const completed = new Set<string>();
-      try {
-        for (let offset = 0; offset < ready.length; offset += 100) {
-          const batch = ready.slice(offset, offset + 100);
-          const result = await v1.bulkQuickDevices(batch.map(({ exported_group, exported_status, ...record }) => ({ ...record, site_name: normalizeSite(record.site_name) })));
-          added += result.added; updated += result.updated;
-          batch.forEach(row => completed.add(row.serial_number));
-        }
-      } finally {
-        if (completed.size) {
-          setRows(current => current.filter(row => !completed.has(row.serial_number)));
-          setSummary(`${added} added, ${updated} updated. ${rows.length - completed.size} rows remain in review.`);
-          onImported?.();
+      for (let offset = 0; offset < ready.length; offset += 100) {
+        let batch = ready.slice(offset, offset + 100);
+        while (batch.length) {
+          try {
+            const result = await v1.bulkQuickDevices(batch.map(({ exported_group, exported_status, ...record }) =>
+              ({ ...record, site_name: normalizeSite(record.site_name) })));
+            added += result.added; updated += result.updated;
+            batch.forEach(row => completed.add(row.serial_number));
+            break;
+          } catch (exc) {
+            if (!(exc instanceof ApiError) || exc.status !== 422) throw exc;
+            let details: {loc: unknown[]; msg: string}[];
+            try { details = JSON.parse(exc.message); } catch { throw exc; }
+            if (!Array.isArray(details) || !details.length || details.some(d =>
+              !Array.isArray(d?.loc) || d.loc[0] !== "body" || d.loc[1] !== "devices" ||
+              typeof d.loc[2] !== "number" || !batch[d.loc[2]] || typeof d.msg !== "string")) throw exc;
+            for (const detail of details) {
+              const row = batch[detail.loc[2] as number];
+              rejected[row.serial_number] = `${String(detail.loc[3] ?? "Row")}: ${detail.msg}`;
+            }
+            batch = batch.filter(row => !Object.prototype.hasOwnProperty.call(rejected, row.serial_number));
+          }
         }
       }
     } catch (exc) { setError(exc instanceof Error ? exc.message : "Import failed."); }
-    finally { setBusy(false); }
+    finally {
+      setRejections(previous => ({...previous, ...rejected}));
+      setRows(current => current.filter(row => !completed.has(row.serial_number)));
+      setSummary(`${added} added, ${updated} updated. ${rows.length - completed.size} rows remain in review.`);
+      if (completed.size) onImported?.();
+      setBusy(false);
+    }
   };
 
   return <div className="space-y-3">
@@ -178,11 +231,11 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
     {error && <p role="alert" className="rounded border border-red-800 p-2 text-sm text-red-300">{error}</p>}
     {summary && <p role="status" className="rounded border border-emerald-800 p-2 text-sm text-emerald-200">{summary}</p>}
     {!!rows.length && <>
-      <p className="text-sm font-semibold">Review {rows.length} devices · {ready.length} ready. Rows with missing sites or repeated IPs need review.</p>
+      <p className="text-sm font-semibold">Review {rows.length} devices · {ready.length} ready. {skipped.length} need review.</p>
       <div className="max-h-64 overflow-auto rounded border border-slate-700">
         <table className="w-full min-w-[680px] text-left text-sm">
           <thead className="sticky top-0 bg-slate-900 text-slate-400"><tr>
-            {["Type", "Location", "Name", "Serial", "Model", "Management IP", "Exported group", "Exported status"].map(h => <th key={h} className="px-2 py-2">{h}</th>)}
+            {["Type", "Location", "Name", "Serial", "Model", "Management IP", "Exported group", "Exported status", "Import status"].map(h => <th key={h} className="px-2 py-2">{h}</th>)}
           </tr></thead>
           <tbody>{rows.map(r => <tr key={r.serial_number} className="border-t border-slate-800">
             <td className="px-2 py-2">{r.family === "switch" ? "Switch" : "AP"}</td>
@@ -201,9 +254,12 @@ export default function BulkDeviceImport({ onImported }: { onImported?: () => vo
               }} />{r.management_ip && (ipCounts.get(r.management_ip) ?? 0) > 1 && <p className="text-amber-700">Repeated IP</p>}</td>
             <td className="px-2 py-2">{r.exported_group || "—"}</td>
             <td className="px-2 py-2">{r.exported_status || "—"}</td>
+            <td className="px-2 py-2">{reason(r) || "Ready"}</td>
           </tr>)}</tbody>
         </table>
       </div>
+      {skipped.length > 0 && <button type="button" disabled={busy} onClick={exportSkipped}
+        className="mr-2 rounded border px-3 py-2 text-sm">Export {skipped.length} rows to fix</button>}
       <button type="button" disabled={busy || !ready.length} className="rounded bg-sky-600 px-4 py-2 text-sm font-medium disabled:opacity-50"
         onClick={importRows}>{busy ? "Importing…" : `Confirm and import ${ready.length} device(s)`}</button>
     </>}
