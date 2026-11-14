@@ -9,7 +9,7 @@ export default function InventoryImport() {
   return <div className="space-y-4">
     <PageHeader eyebrow="Sites & inventory" title="Import Aruba inventory"
       subtitle="Upload an AP or switch export, review sites and management addresses, then confirm the import." />
-    <Link className="text-sm text-blue-700 underline" to="/inventory">Open Device Inventory</Link>
+    <Link className="text-sm text-blue-700 underline" to="/inventory">Assign credentials to devices already in inventory</Link>
     {admin ? <Card title="Upload and review CSV">
       <BulkDeviceImport />
     </Card> : <Card>Administrator access is required to import devices.</Card>}
