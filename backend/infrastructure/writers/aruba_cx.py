@@ -159,14 +159,30 @@ class CxSession:
             raise WriterError("CONNECTION_LOST", f"{method} {path}: {type(exc).__name__}") from None
         if r.status_code in (301, 302, 303, 307, 308):
             raise WriterError("DEVICE_REJECTED", f"{method} {path}: unexpected redirect HTTP {r.status_code}.")
-        if r.status_code == 401 and retry_auth:   # session expired / idle timeout: one fresh login, then retry
+        # Only idempotent reads may be replayed after an auth/CSRF expiry.
+        # Never retry a configuration POST/PATCH/PUT/DELETE: a firmware-specific
+        # proxy or server could have processed the write before returning 401/403.
+        # Fail closed and let the change executor reconcile through readback and
+        # its durable recovery journal instead of potentially writing twice.
+        replayable_read = method.upper() in ("GET", "HEAD", "OPTIONS")
+        expired = r.status_code == 401 or (
+            r.status_code == 403 and self.csrf is not None and "csrf" in r.text.lower()
+        )
+        if expired and not replayable_read:
+            self._open, self.csrf = False, None
+            raise WriterError(
+                "AUTH_REJECTED",
+                f"{method} {path}: credentials/session expired during a state-changing request; "
+                "not replayed automatically. Reconcile device state before retrying.",
+            )
+        if r.status_code == 401 and retry_auth:
             self._open, self.csrf = False, None
             self.open()
             return self.request(method, path, retry_auth=False, headers=extra, **kw)
         if r.status_code == 401:
             raise WriterError("AUTH_REJECTED", f"{method} {path}: session rejected after re-login.")
         if r.status_code == 403 and self.csrf is not None and "csrf" in r.text.lower() and retry_auth:
-            self._open, self.csrf = False, None        # token expired/rotated: renegotiate once
+            self._open, self.csrf = False, None
             self.open()
             return self.request(method, path, retry_auth=False, headers=extra, **kw)
         if r.status_code == 429:
