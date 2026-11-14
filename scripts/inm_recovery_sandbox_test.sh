@@ -55,8 +55,9 @@ docker compose version >/dev/null 2>&1 || fail 'Cannot run sandbox: Docker Compo
 for t in git python3 openssl curl; do command -v "$t" >/dev/null || fail "Cannot run sandbox: $t missing."; done
 
 # Avoid overloading production Docker hosts.
-FREE_KB="$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2{print $4}')"
-[[ "$FREE_KB" =~ ^[0-9]+$ ]] || FREE_KB="$(df -Pk /var/lib | awk 'NR==2{print $4}')"
+DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib)"
+[[ -d "$DOCKER_ROOT" ]] || DOCKER_ROOT=/var/lib
+FREE_KB="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2{print $4}')"
 (( FREE_KB >= 12*1024*1024 )) || fail 'Less than 12 GiB free on Docker data filesystem; sandbox not started.'
 MEM_KB="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
 (( MEM_KB >= 3*1024*1024 )) || fail 'Less than 3 GiB available RAM; sandbox not started.'
