@@ -18,7 +18,7 @@ def test_device_write_control_has_bash_validity_and_read_only_defaults():
     assert '"$(env_get INM_PROFILE)" == lab-readonly' in s
     assert 'INM_DEMO_SIMPLE_LOGIN' in s
     assert "INM_READONLY_DEVICE_CIDRS" in s
-    assert "net.prefixlen < 24" in s
+    assert "cidr.prefixlen < 24" in s
     assert "set_env_value INM_AUTOMATIC_OPTIMIZATION false" in s
     assert "set_env_value INM_DEVICE_WRITE_LOCK false" in s
     assert "set_env_value INM_ALLOW_CONFIG_CHANGES true" in s
