@@ -134,6 +134,15 @@ if systemctl is-active -q firewalld; then
   firewall-cmd --reload || die 'Firewall reload failed.'
   log "Opened TCP $PORT on firewall zone $ZONE (upstream ACLs also need to allow it)."
 fi
+# firewalld reloads can remove runtime Docker forwarding filter entries.
+# Reinstate the fail-closed worker policy and rerun full on-host acceptance.
+log 'Reapplying worker egress firewall after host firewall changes.'
+bash "$ROOT/scripts/inm_worker_egress_guard.sh" --apply ||
+  die 'Could not restore safe Docker worker egress policy after firewall reload.'
+log 'Rechecking Docker services, device lock, public egress denial and synthetic pipeline.'
+bash "$ROOT/deployment/centos9/verify.sh" ||
+  die 'Post-proxy Docker verification failed; inspect the named failing check.'
+
 curl --fail --silent --show-error --cacert "$CRT" \
   "https://$IP:$PORT/healthz" >/dev/null || die 'Proxy health check failed.'
 curl --fail --silent --show-error --cacert "$CRT" \
