@@ -49,8 +49,12 @@ def parse_printer_marker(unit: int | None, count: int | None) -> dict[str, Any] 
 
 async def read_snmpv3(host: str, username: str, auth_key: str, privacy_key: str) -> dict[str, Any]:
     """Single SNMPv3 SHA-256/AES-128 target, timeout ≈ 8s, read-only GET/GETNEXT."""
+    return await read_printer(host, "3", username, auth_key, privacy_key)
+
+
+async def read_printer(host: str, version: str, identity: str, auth_key: str = "", privacy_key: str = "") -> dict[str, Any]:
     from pysnmp.hlapi.v3arch.asyncio import (
-        ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget,
+        CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget,
         UsmUserData, get_cmd, next_cmd,
         USM_AUTH_HMAC192_SHA256, USM_PRIV_CFB128_AES,
     )
@@ -58,11 +62,16 @@ async def read_snmpv3(host: str, username: str, auth_key: str, privacy_key: str)
     if not permitted_target(host):
         raise ValueError("Target outside authorized read-only management ranges")
     engine = SnmpEngine()
-    auth = UsmUserData(
-        username, authKey=auth_key, privKey=privacy_key,
-        authProtocol=USM_AUTH_HMAC192_SHA256,
-        privProtocol=USM_PRIV_CFB128_AES,
-    )
+    if version == "3":
+        auth = UsmUserData(
+            identity, authKey=auth_key, privKey=privacy_key,
+            authProtocol=USM_AUTH_HMAC192_SHA256, privProtocol=USM_PRIV_CFB128_AES,
+        )
+    elif version in ("1", "2c"):
+        auth = CommunityData(identity, mpModel=0 if version == "1" else 1)
+    else:
+        raise ValueError("Unsupported SNMP version")
+    source = "SNMPV" + version.upper()
     try:
         transport = await UdpTransportTarget.create((host, 161), timeout=3, retries=1)
         async def get_one(oid: str) -> str | None:
@@ -106,11 +115,13 @@ async def read_snmpv3(host: str, username: str, auth_key: str, privacy_key: str)
             except (ValueError, TypeError):
                 unit = None
             counter = parse_printer_marker(unit, total)
+            if counter:
+                counter["source"] = source
 
-        if not (name or descr or obj):
-            raise RuntimeError("SNMPv3 authentication failed, timed out, or printer has no standard system MIB")
+        if not (name or descr or obj or marker):
+            raise RuntimeError("SNMP authentication failed, timed out, or printer has no standard system MIB")
         return {"hostname": name, "system_description": descr,
-                "system_object_id": obj, "meter": counter,
-                "source": "SNMPV3", "device_writes": "LOCKED"}
+                "system_object_id": obj, "meter": counter, "printer_mib": marker is not None,
+                "source": source, "device_writes": "LOCKED"}
     finally:
         engine.close_dispatcher()
