@@ -62,7 +62,7 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
             "/inventory": "Device inventory",
             "/onboarding": "Add & configure devices",
             "/changes": "Configuration change workflow",
-            "/system": "System health",
+            "/system": "Platform health",
             "/platform": "Platform: vendors, roles & rules",
         }
         for route, heading in screens.items():
