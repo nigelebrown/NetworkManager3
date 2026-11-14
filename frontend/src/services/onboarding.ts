@@ -67,6 +67,11 @@ export type ConfigData = {
 
 const enc = (v: string) => encodeURIComponent(v);
 const opts = (obj: unknown) => ({ method: "POST", body: JSON.stringify(obj) });
+export type ManagementIPApproval = {
+  management_ip: string; prefix: 32; state: "APPLIED" | "PENDING" | "NOT_APPROVED" | "ERROR";
+  device_id?: string; write_lock: string;
+};
+
 export const onboardingApi = {
   credentials: () => request<CredentialProfile[]>("/v1/onboarding/credentials"),
   acceptance: (id: string) => request<DeviceAcceptance>(`/v1/onboarding/devices/${enc(id)}/acceptance`),
@@ -84,6 +89,11 @@ export const onboardingApi = {
   enableRestApi: (id: string, body: { management_ip: string; host_key_sha256: string;
     confirm_text: string; vrf: "default" | "mgmt" }) =>
     request<RestBootstrapResult>(`/v1/onboarding/credentials/${enc(id)}/rest-api/enable`, opts(body)),
+  approveDeviceIP: (body: { device_id: string; profile_id: string; management_ip: string; confirmation: string }) =>
+    request<ManagementIPApproval>("/v1/management-access/approve-ip", opts(body)),
+  managementIPApprovalStatus: (deviceId: string, profileId: string, ip: string) =>
+    request<ManagementIPApproval>(
+      `/v1/management-access/approval-status/${enc(deviceId)}?profile_id=${enc(profileId)}&management_ip=${enc(ip)}`),
   testCredential: (id: string, ip: string) =>
     request<{ status: string; model: string | null; hostname: string | null }>(
       `/v1/onboarding/credentials/${enc(id)}/test`, opts({ management_ip: ip })),

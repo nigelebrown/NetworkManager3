@@ -1,24 +1,128 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
-import { ago } from "../components/viz";
-import { getSession } from "../services/api";
+import { ago, btn, inputCls } from "../components/viz";
+import { ApiError, getSession, request } from "../services/api";
+import { onboardingApi } from "../services/onboarding";
 import { v1 } from "../services/inm";
 
 /** Inventory view is backed exclusively by the real versioned inventory endpoints. */
 export default function DeviceInventory() {
   const [params, setParams] = useSearchParams();
-  const [family, setFamily] = useState("ALL");
+  const handoff = useLocation().state as {credentialDeviceIds?: string[]; family?: string} | null;
+  const [family, setFamily] = useState(handoff?.family ?? "ALL");
+  const [site, setSite] = useState("");
+  const [needsAttention, setNeedsAttention] = useState(false);
   const query = params.get("q") ?? "";
   const devices = useLoad(v1.devices, [], 30000, ["devices"]);
   const sites = useLoad(() => v1.physicalSites().catch(() => ({ sites: [] })), [], 60000, ["sites"]);
   const siteNames = useMemo(() => new Map((sites.data?.sites ?? []).map(s => [s.id, s.name])), [sites.data]);
   const rows = useMemo(() => (devices.data ?? []).filter(d =>
     (family === "ALL" || d.family === family) &&
-    (!query || [d.hostname,d.model,d.serial_number,d.firmware,d.site_id,...(d.management_addresses ?? [])]
-      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query]);
+    (!needsAttention || (d.source_type === "REAL" && !["ONLINE", "UP"].includes(
+      (("state" in d ? String(d.state ?? d.status) : d.status)).toUpperCase()))) &&
+    (!site || (d.site_id ?? "unassigned") === site) &&
+    (!query || [d.hostname,d.model,d.serial_number,d.firmware,siteNames.get(d.site_id ?? ""),...(d.management_addresses ?? [])]
+      .some(v => (v ?? "").toLowerCase().includes(query.toLowerCase())))), [devices.data, family, query, site, siteNames, needsAttention]);
+  const admin = getSession()?.role === "admin";
+  const profiles = useLoad(() => admin ? onboardingApi.credentials() : Promise.resolve([]), [admin], 30000);
+  const [selected, setSelected] = useState<string[]>(handoff?.credentialDeviceIds ?? []);
+  const [result, setResult] = useState<{ profileId: string; profileName: string; devices: {
+    id: string; name: string; address?: string;
+  }[] } | null>(null);
+  const [checks, setChecks] = useState<Record<string, {status: string; message: string}>>({});
+  const [testing, setTesting] = useState<string | null>(null);
+  const [reviewAccess, setReviewAccess] = useState(false);
+  const [profile, setProfile] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
+  const accessRows = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => {
+    const address = d.management_addresses?.[0] ?? "";
+    const parts = address.split(".");
+    const [first, second] = parts.map(Number);
+    const privateIp = parts.length === 4 && parts.every(p => /^(0|[1-9]\d{0,2})$/.test(p) && Number(p) <= 255)
+      && (first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168));
+    const duplicate = address && (devices.data ?? []).some(other => other.id !== d.id &&
+      other.source_type === "REAL" && other.management_addresses?.includes(address));
+    return {device: d, address, reason: !address ? "Missing management IP" : !privateIp ? "Private IPv4 required"
+      : duplicate ? "Repeated IP in inventory" : ""};
+  });
+  const approvedAddresses = accessRows.filter(row => !row.reason).map(row => row.address);
+  const selectedFamily = devices.data?.find(d => d.id === selected[0])?.family;
+  const eligible = rows.filter(d => d.source_type === "REAL" && d.family === (selectedFamily ?? family));
+  const allVisibleSelected = eligible.length > 0 && eligible.every(d => selected.includes(d.id));
+  const toggleVisible = () => changeSelection(allVisibleSelected
+    ? selected.filter(id => !eligible.some(d => d.id === id))
+    : [...new Set([...selected, ...eligible.map(d => d.id)])].slice(0, 500));
+  const matchingProfiles = profiles.data?.filter(p => p.enabled && p.device_family === selectedFamily) ?? [];
+  const changeSelection = (ids: string[]) => {
+    setSelected(ids);
+    setReviewAccess(false);
+    if (!ids.length || !selected.length) setProfile("");
+    setFeedback({});
+  };
+  const [testingBatch, setTestingBatch] = useState(false);
+  // A test never silently extends management access. On a blocked target,
+  // an administrator confirms an exact /32 before the host reconciler applies it.
+  const testConnection = async (profileId: string, d: {id: string; address?: string}, batchApproved: boolean | null = null) => {
+    if (!d.address) return;
+    setTesting(d.id);
+    const labels: Record<string, string> = {
+      ENABLED: "REST login verified", DISABLED: "REST unavailable or disabled",
+      AUTH_REJECTED: "Credentials rejected", UNSUPPORTED_API: "Unsupported REST API",
+      UNREACHABLE: "Unreachable",
+    };
+    const check = async () => {
+      const response = await onboardingApi.checkRestApi(profileId, d.address!);
+      setChecks(previous => ({...previous, [d.id]: {
+        status: labels[response.state] ?? "Checked", message: response.detail,
+      }}));
+    };
+    try {
+      try {
+        await check();
+      } catch (firstError) {
+        const blocked = firstError instanceof ApiError && firstError.status === 403 &&
+          /approved management ranges|Live polling is disabled/i.test(firstError.message);
+        if (!blocked) throw firstError;
+        const confirmed = batchApproved === null ? window.confirm(
+          "Approve only " + d.address + "/32 for read-only management access and retry? " +
+          "This will update the server's worker firewall after an audited administrator approval. " +
+          "It will NOT enable configuration writes."
+        ) : batchApproved;
+        if (!confirmed) {
+          setChecks(previous => ({...previous, [d.id]: {
+            status: "Blocked", message: "Administrator declined IP approval",
+          }}));
+          return;
+        }
+        setChecks(previous => ({...previous, [d.id]: {
+          status: "Approving IP", message: "Awaiting host firewall enforcement for " + d.address + "/32",
+        }}));
+        await onboardingApi.approveDeviceIP({
+          device_id: d.id, profile_id: profileId, management_ip: d.address,
+          confirmation: "APPROVE IP " + d.address,
+        });
+        let applied = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const status = await onboardingApi.managementIPApprovalStatus(d.id, profileId, d.address);
+          if (status.state === "APPLIED") { applied = true; break; }
+          if (status.state === "ERROR") throw new Error("The host approval policy is invalid");
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        if (!applied) throw new Error("IP approval is queued but not yet applied by the server. Check the INM management approval timer.");
+        await check();
+      }
+    } catch (error) {
+      setChecks(previous => ({...previous, [d.id]: {
+        status: error instanceof ApiError && error.status === 403 ? "Blocked" : "Check failed",
+        message: error instanceof Error ? error.message : "Connection test failed",
+      }}));
+    } finally { setTesting(null); }
+  };
   const update = (value: string) => { const p = new URLSearchParams(params);
+    changeSelection([]);
     if (value) p.set("q",value); else p.delete("q"); setParams(p,{replace:true}); };
   return <div className="space-y-4">
     <div className="inm-titlebar"><div><div className="inm-section-label">Sites & inventory</div>
@@ -26,7 +130,8 @@ export default function DeviceInventory() {
       <p className="inm-subtitle">Manage registered access points and CX switches, inspect status, view existing configuration and open Device 360°.</p></div>
       {getSession()?.role === "admin" && <Link to="/onboarding" className="inm-header-action">＋ Add & configure devices</Link>}
     </div>
-    <ErrorNote error={devices.error}/>
+    <ErrorNote error={feedback.error ?? devices.error ?? profiles.error}/>
+    {feedback.message && <p role="status">{feedback.message}</p>}
     <div className="inm-kpis" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
       {[
         ["All devices",devices.data?.length ?? "—"],
@@ -38,15 +143,135 @@ export default function DeviceInventory() {
         <div style={{color:"#63748b",fontSize:11}}>{label}</div><div className="inm-kpi-value">{value}</div></div>)}
     </div>
     <section className="inm-card"><div className="inm-cardhead"><h2>Registered equipment ({rows.length})</h2>
-      <div className="inm-actionbar"><input aria-label="Search inventory" value={query} onChange={e=>update(e.target.value)}
+      <div className="inm-actionbar"><input aria-label="Search inventory" disabled={busy} value={query} onChange={e=>update(e.target.value)}
         placeholder="Hostname, serial, model or IP" style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}/>
-        <select aria-label="Device family" value={family} onChange={e=>setFamily(e.target.value)}
+        <select aria-label="Device family" disabled={busy} value={family} onChange={e=>{setFamily(e.target.value); changeSelection([]);}}
           style={{border:"1px solid #d3e0ec",borderRadius:7,padding:"8px 10px"}}>
-          <option value="ALL">All equipment</option><option value="access_point">Access points</option><option value="switch">CX switches</option></select></div>
+          <option value="ALL">All equipment</option><option value="access_point">Access points</option><option value="switch">CX switches</option></select>
+        <select className={inputCls} aria-label="Physical site" disabled={busy} value={site}
+          onChange={e => {setSite(e.target.value); changeSelection([]);}}>
+          <option value="">All sites</option><option value="unassigned">Unassigned</option>
+          {[...(sites.data?.sites ?? [])].sort((a,b) => a.name.localeCompare(b.name)).map(s =>
+            <option key={s.id} value={s.id}>{s.name}{s.source_type === "DEMO" ? " (Demo)" : ""}</option>)}
+        </select>
+        <label><input type="checkbox" checked={needsAttention} disabled={busy || (!!testing || testingBatch)}
+          onChange={e => {setNeedsAttention(e.target.checked); changeSelection([]);}} /> Needs attention</label></div>
     </div>
+      {admin && <form className="inm-cardbody flex flex-wrap items-end gap-3" onSubmit={async e => {
+        e.preventDefault();
+        if (!selected.length || !matchingProfiles.some(p => p.id === profile)) return;
+        const chosen = matchingProfiles.find(p => p.id === profile)!;
+        const targets = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => ({
+          id: d.id, name: d.hostname || d.serial_number, address: d.management_addresses?.[0],
+        }));
+        setBusy(true); setFeedback({});
+        try {
+          const result = await request<{assigned: number}>("/v1/onboarding/credentials/assign", {
+            method: "POST", body: JSON.stringify({credential_id: profile, device_ids: selected}),
+          });
+          setResult({profileId: chosen.id, profileName: chosen.name, devices: targets});
+          setChecks({});
+          changeSelection([]);
+          setFeedback({message: `Saved profile assigned to ${result.assigned} devices.`});
+        } catch (e) {
+          setFeedback({error: e instanceof Error ? e.message : "Could not assign the profile"});
+        } finally { setBusy(false); }
+      }}>
+        <p>{selected.length} selected</p>
+        <button type="button" className={btn} disabled={busy || !selected.length}
+          onClick={() => setReviewAccess(!reviewAccess)}>Review management access</button>
+        <button type="button" className={btn} disabled={busy || !eligible.length}
+          onClick={toggleVisible}>{allVisibleSelected ? "Deselect visible" : "Select visible"}</button>
+        <button type="button" className={btn} disabled={busy || !selected.length}
+          onClick={() => changeSelection([])}>Clear selection</button>
+        <label>Saved credential profile<select className={inputCls} value={profile} disabled={busy || !selected.length}
+          onChange={e => setProfile(e.target.value)}>
+          <option value="">Choose a profile</option>{matchingProfiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select></label>
+        <button className={btn} disabled={busy || (!!testing || testingBatch) || !selected.length || !matchingProfiles.some(p => p.id === profile)}>
+          {busy ? "Assigning…" : "Assign profile"}
+        </button>
+        <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
+      </form>}
+      {admin && reviewAccess && <section className="inm-cardbody space-y-2">
+        <h3 className="font-semibold">Review management access</h3>
+        <p>Export exact addresses for a server administrator to approve. Resolve repeated or missing addresses in inventory first.</p>
+        <ul className="max-h-48 overflow-auto">{accessRows.map(({device, address, reason}) =>
+          <li key={device.id}>{device.hostname || device.serial_number} · {address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
+        <button type="button" className={btn} disabled={!approvedAddresses.length} onClick={() => {
+          const url = URL.createObjectURL(new Blob([approvedAddresses.join("\n") + "\n"], {type: "text/plain"}));
+          const link = document.createElement("a");
+          link.href = url; link.download = "inm-management-approvals.txt"; link.click();
+          URL.revokeObjectURL(url);
+        }}>Export {approvedAddresses.length} addresses for approval</button>
+      </section>}
+      {admin && selectedFamily && <details className="inm-cardbody">
+        <summary className="cursor-pointer font-medium">Create a credential profile for selected devices</summary>
+        <form className="mt-3 flex flex-wrap items-end gap-3" onSubmit={async e => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const data = new FormData(form);
+          setBusy(true); setFeedback({});
+          try {
+            const saved = await onboardingApi.createCredential({
+              name: String(data.get("name") ?? "").trim(), device_family: selectedFamily,
+              username: String(data.get("username") ?? "").trim(), password: String(data.get("password") ?? ""),
+            });
+            profiles.reload(); setProfile(saved.id);
+            setFeedback({message: "Profile saved. Click Assign profile to apply it to the selected devices."});
+          } catch (error) {
+            setFeedback({error: error instanceof Error ? error.message : "Could not create the profile"});
+          } finally {
+            form.reset(); setBusy(false);
+          }
+        }}>
+          <label>Profile name<input className={inputCls} name="name" required /></label>
+          <label>Username<input className={inputCls} name="username" required /></label>
+          <label>Password<input className={inputCls} name="password" type="password" autoComplete="new-password" required /></label>
+          <button className={btn} disabled={busy}>Save credential profile</button>
+        </form>
+      </details>}
+      {admin && result && <section className="inm-cardbody space-y-2" aria-label="Credential assignment results">
+        <h3 className="font-semibold">Connection verification</h3>
+        <p>Profile assigned: {result.profileName}. Test a device to check its REST login. Live status still depends on collection.</p>
+        <p className="text-sm text-slate-600">Blocked management IPs can be approved here by an administrator after confirmation. Each approval is only for that device's /32 address; the host applies its firewall rule before testing. Configuration writes remain locked.</p>
+        <button type="button" className={btn} disabled={busy || !!testing || testingBatch || !result.devices.some(d => d.address)}
+          onClick={async () => {
+            const approveBlocked = window.confirm(
+              "Test all devices? If an IP is blocked, approve that individual registered /32 management IP " +
+              "automatically after your authorization. No device configuration writes will be enabled."
+            );
+            setTestingBatch(true);
+            try {
+              for (const device of result.devices) {
+                await testConnection(result.profileId, device, approveBlocked);
+              }
+            } finally { setTestingBatch(false); }
+          }}>{testingBatch ? "Testing devices…" : "Test all connections"}</button>
+        <div className="inm-tablewrap"><table className="inm-table">
+          <thead><tr><th>Device</th><th>Management IP</th><th>Assignment</th><th>Connection</th><th>Action</th></tr></thead>
+          <tbody>{result.devices.map(d => {
+            const check = checks[d.id];
+            return <tr key={d.id}>
+              <td>{d.name}</td><td>{d.address ?? "Missing"}</td><td>Saved</td>
+              <td aria-live="polite">{testing === d.id ? "Testing…" : check
+                ? check.status + (check.message ? " · " + check.message : "")
+                : "Not tested"}</td>
+              <td><button type="button" className={btn} disabled={busy || (!!testing || testingBatch) || !d.address}
+                onClick={() => void testConnection(result.profileId, d)}>
+                {check?.status === "Blocked" ? "Approve IP & Test" : "Test connection"}</button></td>
+            </tr>;
+          })}</tbody>
+        </table></div>
+      </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
-        <th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
+        {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
+          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
       </tr></thead><tbody>{rows.map(d=><tr key={d.id}>
+        {admin && <td><input type="checkbox" aria-label={`Select ${d.hostname || d.serial_number}`}
+          checked={selected.includes(d.id)} disabled={busy || d.source_type !== "REAL" ||
+            (!!selectedFamily && selectedFamily !== d.family) || (selected.length >= 500 && !selected.includes(d.id))}
+          onChange={e => changeSelection(e.target.checked ? [...selected, d.id] : selected.filter(id => id !== d.id))} /></td>}
         <td><Link className="inm-link" to={"/devices/"+d.id+"/360"}>{d.hostname || d.serial_number}</Link>
           <div style={{fontSize:10,color:"#7b8a9d"}}>{d.serial_number}</div></td>
         <td>{d.model ?? d.family}<div style={{fontSize:10,color:"#7b8a9d"}}>{d.firmware ?? "Not observed"}</div></td>

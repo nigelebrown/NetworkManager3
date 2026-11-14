@@ -59,6 +59,13 @@ for t in openssl git ss python3; do command -v "$t" >/dev/null || die "required 
 install -d -m 0750 "$STATE" "$BACKUP_DIR"
 generate_secrets
 ensure_tls
+# Host-only reconciler writes this NON-SECRET status file. API/worker receive
+# a read-only mount; no host secrets, Docker socket or writable state.
+install -d -m 0755 /var/lib/inm/approvals
+if [[ ! -e /var/lib/inm/approvals/applied.json ]]; then
+  printf '{"ips":[],"applied_at":null}\n' > /var/lib/inm/approvals/applied.json
+  chmod 0644 /var/lib/inm/approvals/applied.json
+fi
 # Containerized Loki/NATS/Alloy and Nginx read these PUBLIC, tracked configs as
 # non-root users. Root-run git clone under umask 077 otherwise makes them mode
 # 0600 with 0700 parent directories and the services fail startup.
@@ -105,6 +112,12 @@ if ! command -v iptables >/dev/null; then
 fi
 bash "$ROOT/scripts/inm_worker_egress_guard.sh" --install ||
   die "cannot enforce worker egress security; installation blocked" 8
+if [[ "$MODE" == live ]]; then
+  python3 -I "$ROOT/scripts/inm_management_approval_agent.py" --install ||
+    die "could not install host-side management IP approval reconciler" 8
+  python3 -I "$ROOT/scripts/inm_management_approval_agent.py" --apply ||
+    die "could not reconcile device IP approvals; no approval activated" 8
+fi
 
 # ---------------------------------------------------------------- VERIFY
 log "VERIFY"

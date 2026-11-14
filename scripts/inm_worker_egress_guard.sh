@@ -49,7 +49,7 @@ PROFILE="$(getenv INM_PROFILE)"
   die 'Configuration-write lock is not engaged; do not apply this acceptance guard.'
 CIDRS="$(getenv INM_READONLY_DEVICE_CIDRS)"
 # Validate every CIDR before touching firewall state (fail closed).
-VALIDATED="$(python3 -I - "$CIDRS" <<'PY'
+VALIDATED="$(python3 -I - "$CIDRS" "$(getenv INM_APPROVED_DEVICE_IPS)" <<'PY'
 import ipaddress,sys
 raw=[v.strip() for v in sys.argv[1].split(',') if v.strip()]
 if len(raw)>20: raise SystemExit('More than 20 CIDRs.')
@@ -59,6 +59,15 @@ for value in raw:
     if n.version!=4 or n.prefixlen<24 or not any(n.subnet_of(block) for block in rfc1918):
         raise SystemExit('Only approved RFC1918 IPv4 /24-/32 networks may be used.')
     print(n)
+exact = [v for v in sys.argv[2].split(",") if v]
+if len(exact) > 1000:
+    raise SystemExit("More than 1000 exact device addresses.")
+private = [ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+for value in exact:
+    address = ipaddress.IPv4Address(value)
+    if not any(address in net for net in private):
+        raise SystemExit("Exact approvals must be RFC1918 addresses.")
+    print(f"{address}/32")
 PY
 )" || die 'CIDR validation failed; leaving firewall unchanged.'
 if [[ "$MODE" == --check ]]; then

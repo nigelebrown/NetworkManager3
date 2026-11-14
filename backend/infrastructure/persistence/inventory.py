@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...database.models import AccessPoint, Site
+from ...database.models import AccessPoint, AppSetting, Site
 from ...database.models_inm import DeviceCapability, InmCluster, InmDevice, InmSite
 from ...domain.model import Capability, CapabilityStatus
 from ..adapters.demo_switch import DemoSwitchAdapter
@@ -72,6 +72,8 @@ def sync_inventory(db: Session) -> dict[str, int]:
         counts["sites"] += 1
         counts["clusters"] += 1
 
+    site_overrides = {row.key.removeprefix('device-site:'): row.value['site_id'] for row in db.scalars(
+        select(AppSetting).where(AppSetting.key.startswith('device-site:')))}
     for ap in db.scalars(select(AccessPoint)):
         cl = clusters_by_legacy.get(ap.site_id)
         src = _src(ap.simulated)
@@ -85,7 +87,8 @@ def sync_inventory(db: Session) -> dict[str, int]:
             db.add(dev)
         dev.model, dev.hostname, dev.firmware = ap.model, ap.name, ap.firmware
         dev.mgmt_addresses = [ap.ip] if ap.ip else []
-        dev.cluster_id, dev.site_id = (cl.id, cl.site_id) if cl else (None, None)
+        dev.cluster_id = cl.id if cl else None
+        dev.site_id = site_overrides.get(dev.id, cl.site_id if cl else None)
         dev.legacy_ap_id, dev.legacy_site_id, dev.status = ap.id, ap.site_id, ap.status
         if ap.last_seen:
             dev.last_observed_at = ap.last_seen

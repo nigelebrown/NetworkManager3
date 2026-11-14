@@ -210,9 +210,14 @@ services:
       INM_WEB_BIND: ${INM_WEB_BIND:-127.0.0.1}
       INM_LAN_DEMO_ACK: ${INM_LAN_DEMO_ACK:-false}
       INM_LAN_CLIENT_CIDR: ${INM_LAN_CLIENT_CIDR:-}
+      INM_APPROVED_DEVICE_IPS: ${INM_APPROVED_DEVICE_IPS:-}
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       SIMS_CORS_ORIGINS: ""
-    volumes: ["app-data:/data"]
+    volumes:
+      - app-data:/data
+      # Non-secret host-applied exact-IP approval status: read-only in API/worker.
+      # The web/API containers have no Docker socket or firewall privileges.
+      - /var/lib/inm/approvals:/run/inm-approvals:ro,z
     # Egress for opt-in, CIDR-allowlisted, read-only probes. The worker has the same allowlisted
     # egress (network `devices`) for scheduled read-only collection.
     networks: [frontend, backend, ai, edge]
@@ -258,9 +263,14 @@ services:
       INM_NATS_PASSWORD: ${INM_NATS_WORKER_PASSWORD:?}
       # WP-02 scheduled READ-ONLY collection: the same private-CIDR allowlist the API probe enforces.
       # Empty = no device is ever contacted (plans record TARGET_NOT_ALLOWED, never fabricated data).
+      INM_APPROVED_DEVICE_IPS: ${INM_APPROVED_DEVICE_IPS:-}
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       INM_SCHEDULED_COLLECTION: ${INM_SCHEDULED_COLLECTION:-true}
-    volumes: ["app-data:/data"]
+    volumes:
+      - app-data:/data
+      # Non-secret host-applied exact-IP approval status: read-only in API/worker.
+      # The web/API containers have no Docker socket or firewall privileges.
+      - /var/lib/inm/approvals:/run/inm-approvals:ro,z
     # `devices` gives egress for allowlisted read-only polls; the code-level CIDR allowlist and the
     # absence of any write path in the collector are the controls. No published ports.
     networks: [backend, devices]
