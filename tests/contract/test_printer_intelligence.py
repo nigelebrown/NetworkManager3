@@ -163,3 +163,30 @@ def test_invalid_negative_supply_or_meter_rejected(client, admin):
         "meter_kind": "impressions_total", "counter_value": -5}).status_code == 422
     assert client.post(f"/api/printers/{did}/supplies", headers=admin, json={
         "supply_name": "Toner", "colour": "black", "percent_remaining": 130}).status_code == 422
+
+
+def test_range_discovery_filters_devices_and_preserves_manual_registration(client, admin, monkeypatch):
+    monkeypatch.setenv("INM_READONLY_DEVICE_CIDRS", "10.103.44.0/24")
+    async def read(host, *_credentials):
+        return {"hostname": "Test printer", "printer_mib": host.endswith(".21"), "meter": None}
+
+    credentials = {"username": "reader", "auth_passphrase": "test-auth", "privacy_passphrase": "test-private"}
+    with patch("backend.api.printers.read_snmpv3", side_effect=read) as probe:
+        for scope, status in [("10.103.44.0/23", 422), ("10.103.45.0/24", 403)]:
+            denied = client.post("/api/printers/discover-snmpv3", headers=admin,
+                                 json={**credentials, "management_range": scope})
+            assert denied.status_code == status, denied.text
+        probe.assert_not_called()
+        result = client.post("/api/printers/discover-snmpv3", headers=admin,
+                             json={**credentials, "management_range": "10.103.44.20/30"})
+        assert result.status_code == 200, result.text
+        assert result.json()["scanned"] == 2
+        assert [p["management_ip"] for p in result.json()["printers"]] == ["10.103.44.21"]
+        assert probe.await_count == 2
+
+    assert client.get("/api/printers", headers=admin).json() == []
+    printer = register(client, admin).json()
+    client.post(f"/api/printers/{printer['id']}/supplies", headers=admin,
+                json={"supply_name": "Toner", "colour": "black", "percent_remaining": 3})
+    dashboard = client.get("/api/printers/dashboard", headers=admin).json()
+    assert dashboard["low_supplies"][0]["printer_id"] == printer["id"]
