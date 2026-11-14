@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
@@ -121,7 +122,7 @@ export default function DeviceIntake() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">Add a network device</h1>
+        <PageHeader eyebrow="Sites & inventory" title="Manual / CSV intake" subtitle="Register devices without changing hardware. Use guided onboarding for discovery, credentials and baseline capture." />
         <p className="mt-1 text-sm text-slate-400">Add an Aruba access point or Aruba CX switch to your real inventory. Demo fixtures stay separate. No device configuration is changed.</p>
       </div>
       {!canAdd && <Card>Administrator access is required to register devices.</Card>}
