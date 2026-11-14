@@ -1,10 +1,13 @@
 import { PageHeader } from "../components/viz";
+import { request } from "../services/api";
 import { FormEvent, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Card, ErrorNote, Stat, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { printerApi, type DiscoveredPrinter, type PrinterAnalysis } from "../services/printers";
 
+type PrinterProfile = { id: string; name: string; version: string };
+const profilePath = "/printers/credential-profiles";
 const fieldStyle = "mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm";
 const btn = "rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50";
 const sub = "rounded border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800";
@@ -38,6 +41,11 @@ export function Printers() {
   const [probe, setProbe] = useState({ management_ip: "", username: "", auth_passphrase: "", privacy_passphrase: "" });
   const [range, setRange] = useState("");
   const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[] } | null>(null);
+  const profiles = useLoad(() => request<PrinterProfile[]>(profilePath), [], 0);
+  const [credentials, setCredentials] = useState({name: "", version: "3"});
+  const [profileId, setProfileId] = useState("");
+  const [target, setTarget] = useState("");
+  const [profileResult, setProfileResult] = useState<Record<string, unknown> | null>(null);
   const [probeResult, setProbeResult] = useState<Record<string, unknown> | null>(null);
   const [analysis, setAnalysis] = useState<PrinterAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
@@ -78,6 +86,53 @@ export function Printers() {
       </div>
       <ErrorNote error={error ?? inventory.error ?? stats.error} />
       {message && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-300">{message}</p>}
+      <Card title="Printer credential profiles">
+        <ErrorNote error={profiles.error} />
+        <form className="flex flex-wrap items-end gap-3" onSubmit={e => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const body = {...Object.fromEntries(new FormData(form)), ...credentials};
+          action(async () => {
+            try {
+              const saved = await request<PrinterProfile>(profilePath, {method: "POST", body: JSON.stringify(body)});
+              setProfileId(saved.id);
+              setCredentials(previous => ({...previous, name: ""}));
+              profiles.reload();
+            } finally {
+              form.reset();
+            }
+          }, "Printer credential profile saved.");
+        }}>
+          <label>Profile name<input className={fieldStyle} required maxLength={100} value={credentials.name}
+            onChange={e => setCredentials({...credentials, name: e.target.value})} /></label>
+          <label>SNMP version<select className={fieldStyle} value={credentials.version}
+            onChange={e => setCredentials({...credentials, version: e.target.value})}>
+            <option value="1">SNMPv1</option><option value="2c">SNMPv2c</option><option value="3">SNMPv3 (SHA-256 / AES-128)</option>
+          </select></label>
+          {credentials.version === "3" ? <>
+            <label>Username<input className={fieldStyle} name="username" required maxLength={100} /></label>
+            <label>Authentication passphrase<input className={fieldStyle} name="auth_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+            <label>Privacy passphrase<input className={fieldStyle} name="privacy_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+          </> : <label>Read-only community<input className={fieldStyle} name="community" type="password" required maxLength={200} /></label>}
+          <button className={btn} disabled={busy}>Save profile</button>
+        </form>
+        <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={e => {
+          e.preventDefault();
+          setProfileResult(null);
+          action(async () => {
+            setProfileResult(await request<Record<string, unknown>>(`${profilePath}/${encodeURIComponent(profileId)}/test`, {
+              method: "POST", body: JSON.stringify({management_ip: target.trim()}),
+            }));
+          }, "Printer check completed.");
+        }}>
+          <label>Saved profile<select className={fieldStyle} required value={profileId} onChange={e => setProfileId(e.target.value)}>
+            <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version})</option>)}
+          </select></label>
+          <label>Printer management IP<input className={fieldStyle} required value={target} onChange={e => setTarget(e.target.value)} /></label>
+          <button className={sub} disabled={busy || !profileId}>Check printer</button>
+        </form>
+        {profileResult && <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(profileResult, null, 2)}</pre>}
+      </Card>
       {editing && <Card title="Register a physical printer">
         <p className="mb-3 text-xs text-slate-400">Step 1: identify equipment. Step 2: assign JCF location. Step 3: save. Step 4: open the printer to enter actual readings.</p>
         <form onSubmit={submit} className="space-y-3">
