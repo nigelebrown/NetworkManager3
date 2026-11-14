@@ -270,3 +270,12 @@ html,body,#root{min-height:100%;margin:0}body{background:#f4f7fa;color:#172437;f
 @media(min-width:1221px){.inm-topbar .inm-topsearch{display:flex}}
 @media(max-width:1220px){.inm-topbar .inm-topsearch{display:none}}
 @media(max-width:650px){.inm-account-label{display:none}.inm-account{max-width:36px}}
+
+
+/* Accessible primary-action contrast on the light canvas; override generic link styles. */
+.inm-body a.inm-header-action,
+.inm-body a.inm-btn-primary{color:#fff!important;text-decoration:none}
+.inm-body a.inm-header-action:hover,
+.inm-body a.inm-btn-primary:hover{color:#fff!important;background:#1957b2}
+.inm-body .inm-header-action:focus-visible,
+.inm-body .inm-btn-primary:focus-visible{outline:3px solid #87b9f7;outline-offset:2px}
