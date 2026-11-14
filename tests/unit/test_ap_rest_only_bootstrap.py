@@ -32,7 +32,7 @@ def test_model_and_host_exact_ip_gate(monkeypatch):
     gate = workflow._locked_ap_rest_bootstrap_allowed
     monkeypatch.setattr(workflow, "get_settings", locked_policy)
     monkeypatch.setattr(management_approvals, "host_applied_ips", lambda: {IP})
-    device = SimpleNamespace(model="Aruba AP-505 (RW)")
+    device = SimpleNamespace(model="Aruba AP-505 (RW)", vendor="Aruba")
     monkeypatch.setattr(management_approvals, "_registered_target",
                         lambda db, device_id, profile_id, ip: device)
     profile = SimpleNamespace(id=PROFILE, device_family="access_point")
@@ -45,6 +45,9 @@ def test_model_and_host_exact_ip_gate(monkeypatch):
     device.model = "AP-515"
     assert not gate(None, profile, target)
     device.model = "AP-505"
+    device.vendor = "Other"
+    assert not gate(None, profile, target)
+    device.vendor = "Aruba"
     assert not gate(None, profile, workflow.RestTarget(management_ip=IP))
     assert not gate(None, SimpleNamespace(id=PROFILE, device_family="switch"), target)
     monkeypatch.setattr(management_approvals, "host_applied_ips", lambda: set())
