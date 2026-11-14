@@ -40,7 +40,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     { to: "/optimization", label: "RF optimization", tag: "OPT-IN" },
     { to: "/recommendations", label: "Recommendations" },
     { to: "/predictive", label: "Predictive health", tag: "CONCEPT" },
-    { to: "/analytics", label: "Operational analytics" },
+    { to: "/analytics", label: "Operational analytics", roles: ["admin","auditor","approver","operator"] },
     { to: "/learning", label: "AI learning centre" },
     { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" },
     { to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI rules" }] },
@@ -53,7 +53,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     { to: "/credentials", label: "Credential profiles", roles: ["admin"] },
     { to: "/notifications", label: "Alert notifications" },
     { to: "/firmware", label: "Firmware lifecycle", tag: "PARTIAL" },
-    { to: "/integrations", label: "Integrations", tag: "CONCEPT" },
+    { to: "/integrations", label: "Integrations", roles: ["admin","auditor"], tag: "CONCEPT" },
     { to: "/data", label: "Data management", roles: ["admin"] },
     { to: "/platform", label: "Platform settings" }] },
 ];
