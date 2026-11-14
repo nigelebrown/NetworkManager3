@@ -57,6 +57,17 @@ class CxEmulator:
         }
         self.checkpoints: dict[str, dict] = {}
         self.startup: dict | None = None
+        self.audit_records = {
+            "audit": {
+                "a-001": {"timestamp": "2026-11-13T13:00:00Z", "user": "lab-admin",
+                          "service": "https-server", "data": "GET /rest/v10.14/system",
+                          "severity": "info"},
+                "a-002": {"timestamp": "2026-11-13T13:00:03Z", "user": "lab-admin",
+                          "service": "https-server", "data": "password=example-secret", "severity": "warning"},
+            },
+            "event": {"e-001": {"timestamp": "2026-11-13T13:01:00Z",
+                               "message": "Interface 1/1/3 is down", "severity": "warning"}},
+        }
         self.writes = 0
         self.fail_path: str | None = None
         self.fail_read: str | None = None        # substring -> HTTP 500 on GET (failed snapshot/telemetry read)
@@ -168,6 +179,8 @@ class CxEmulator:
         elif self.fail_read and self.fail_read in p:
             return httpx.Response(500, text="emulated device read error")
         body = json.loads(req.content) if req.content else {}
+        if p in ("/logs/audit", "/logs/event") and m == "GET":
+            return httpx.Response(200, json=copy.deepcopy(self.audit_records[p.rsplit("/", 1)[-1]]))
         if p == "/system":
             return httpx.Response(200, json=self.state["system"])
         if p == "/system/subsystems":
@@ -321,6 +334,11 @@ class InstantEmulator:
         # on real hardware; those differences can only be certified on hardware).
         self.model, self.firmware = model, firmware
         self.text = INSTANT_BASE
+        self.log_records = {
+            "system": "Nov 13 13:00:00 cli: System started\\nNov 13 13:00:02 auth: password=example-secret",
+            "security": "Nov 13 13:01:00 auth: Administrator logged in",
+            "user": "Nov 13 13:02:00 station: Wireless user associated",
+        }
         self.radios = [{"band": "5", "channel": "36", "tx_power_dbm": 15}, {"band": "2.4", "channel": "1", "tx_power_dbm": 12}]
         self.fail_on: str | None = None
         self.lie = False
@@ -335,6 +353,14 @@ class InstantEmulator:
                 return None
 
             def show(self, cmd, iap_ip=None):
+                if cmd.startswith("show log "):
+                    from ...aruba.client import validate_command
+                    import re as _re
+                    validate_command(cmd)
+                    match = _re.fullmatch(r"show log (system|security|user) ([1-9][0-9]{0,2})", cmd)
+                    if not match:
+                        raise ValueError("Unsupported emulated log query")
+                    return {"Command output": emu.log_records[match.group(1)]}
                 return {"Command output": emu.text}
 
             def config_post(self, endpoint, body):
