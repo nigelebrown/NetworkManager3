@@ -48,21 +48,7 @@ PROFILE="$(getenv INM_PROFILE)"
    "$(getenv INM_ALLOW_CONFIG_CHANGES)" != true ]] ||
   die 'Configuration-write lock is not engaged; do not apply this acceptance guard.'
 CIDRS="$(getenv INM_READONLY_DEVICE_CIDRS)"
-# Validate on host before touching the firewall. No public networks and no
-# /0, large subnets, loopback, multicast or link-local ranges.
-mapfile -t VALID_CIDRS < <(python3 -I - "$CIDRS" <<'PY'
-import ipaddress,sys
-raw=[c.strip() for c in sys.argv[1].split(',') if c.strip()]
-if len(raw)>20: raise SystemExit('Too many authorized networks (maximum 20).')
-for cidr in raw:
-    net=ipaddress.ip_network(cidr,strict=False)
-    if net.version!=4 or not net.is_private or net.prefixlen<24 or net.is_loopback or net.is_link_local:
-        raise SystemExit('Only private IPv4 /24-/32 targets are permitted: '+cidr)
-    print(str(net))
-PY
-)
-# Process substitution does not propagate child exit status: independently
-# re-run validation with ordinary command substitution to fail closed.
+# Validate every CIDR before touching firewall state (fail closed).
 VALIDATED="$(python3 -I - "$CIDRS" <<'PY'
 import ipaddress,sys
 raw=[v.strip() for v in sys.argv[1].split(',') if v.strip()]
@@ -94,9 +80,12 @@ while IFS= read -r cidr; do
   iptables -w -A INM_WKR_EGRESS -d "$cidr" -j RETURN
 done <<< "$VALIDATED"
 iptables -w -A INM_WKR_EGRESS -j DROP
-if ! iptables -w -C DOCKER-USER -i "$BRIDGE" -j INM_WKR_EGRESS 2>/dev/null; then
-  iptables -w -I DOCKER-USER 2 -i "$BRIDGE" -j INM_WKR_EGRESS
-fi
+# Replace any old jump while the temporary DROP is still active.
+# The validated chain must be the first non-temporary matching rule.
+while iptables -w -C DOCKER-USER -i "$BRIDGE" -j INM_WKR_EGRESS 2>/dev/null; do
+  iptables -w -D DOCKER-USER -i "$BRIDGE" -j INM_WKR_EGRESS
+done
+iptables -w -I DOCKER-USER 2 -i "$BRIDGE" -j INM_WKR_EGRESS
 iptables -w -D DOCKER-USER -i "$BRIDGE" -j DROP ||
   die 'Could not remove temporary guard: the egress bridge remains BLOCKED.'
 say "Worker egress locked on $BRIDGE; allowed private network count: $(printf '%s\n' "$VALIDATED" | grep -c . || true)."
