@@ -50,6 +50,7 @@ READ_ONLY_COMMANDS = (
     "show log system",
     "show log security",
     "show log user",
+    "show log wireless",
     "show alert",
     "show ap association",
     "show running-config",
