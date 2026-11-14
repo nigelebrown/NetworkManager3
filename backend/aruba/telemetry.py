@@ -1,6 +1,6 @@
 """Parsers for per-AP RF and system telemetry (Phase 2b).
 
-Formats come from a real AP-505/AP-535 cluster on Instant 8.13 (`show ap arm rf-summary` and
+Formats come from Aruba Instant AP RF outputs, including a physical AP test on 2026-11-09 (`show ap arm rf-summary` and
 `show ap debug system-status`). Rules for every parser here:
 
 * Return None / omit a key when the value is not present. Never estimate or default to 0.
@@ -52,6 +52,8 @@ def parse_channel_summary(text: str) -> list[dict[str, Any]]:
             "util_pct": _pct(_num(util[0])),
             "rx_pct": _pct(_num(util[1])),
             "tx_pct": _pct(_num(util[2])),
+            "ext_channel_util_pct": _pct(_num(util[3])) if len(util) > 3 else None,
+            "quality_percent": _pct(_num(util[4])) if len(util) > 4 else None,
         })
     return rows
 
@@ -100,6 +102,7 @@ def parse_rf_summary(text: str | None) -> dict[str, Any] | None:
         if row:
             for k_out, k_in in (("noise_floor_dbm", "noise_floor_dbm"), ("util_percent", "util_pct"),
                                 ("rx_percent", "rx_pct"), ("tx_percent", "tx_pct"),
+                                ("quality_percent", "quality_percent"),
                                 ("retry", "retry"), ("phy_err", "phy_err"), ("mac_err", "mac_err")):
                 if row[k_in] is not None:
                     r[k_out] = row[k_in]
@@ -138,3 +141,71 @@ def parse_system_status(text: str | None) -> dict[str, Any] | None:
     cpu, mem = parse_cpu_memory(text)
     out = {"uptime_seconds": parse_uptime(text), "cpu_percent": cpu, "memory_percent": mem}
     return out if any(v is not None for v in out.values()) else None
+
+
+# Verified on a physical Aruba Instant AP via read-only /rest/show-cmd.
+# These counters are cumulative since driver reset; never treat them as rates
+# without taking a second timed sample and handling counter resets.
+_RADIO_COUNTERS = {
+    "tx_frames_transmitted": "Tx Frames Transmitted",
+    "tx_frames_dropped": "Tx Frames Dropped",
+    "tx_success_with_retry": "Tx Success With Retry",
+    "tx_multiple_retries": "Tx Multiple Retries",
+    "tx_missed_acks": "Tx Missed ACKs",
+    "rx_frames_received": "Rx Frames Received",
+    "rx_bad_frames": "Rx Bad Frames",
+    "rx_retry_frames": "Rx Retry Frames",
+    "rx_crc_errors": "Rx CRC Errors",
+    "rx_plcp_errors": "Rx PLCP Errors",
+    "rx_phy_events": "Rx PHY Events",
+    "rx_radar_events": "Rx RADAR Events",
+    "radio_resets": "Total Radio Resets",
+    "tx_power_changes": "TX Power Changes",
+    "channel_changes": "Channel Changes",
+    "failed_channel_changes": "Failed Channel Changes",
+}
+_RADIO_GAUGES = {
+    "channel_busy_1s_percent": "Channel Busy 1s",
+    "channel_busy_4s_percent": "Channel Busy 4s",
+    "channel_busy_64s_percent": "Channel Busy 64s",
+    "cca_own_bss_percent": "CCA percentage of our bss",
+    "cca_other_bss_percent": "CCA percentage of other bss",
+    "cca_interference_percent": "CCA percentage of interference",
+}
+
+
+def parse_radio_stats(text: str | None) -> dict[str, Any] | None:
+    """Parse a compact, typed subset of 'show ap debug radio-stats'.
+
+    Per-radio target selection happens at REST call time. Do not log or persist
+    the entire vendor debug response (it can be very large).
+    """
+    if not text or "RADIO Stats" not in text:
+        return None
+    wanted = {label.lower(): key for key, label in {**_RADIO_COUNTERS, **_RADIO_GAUGES}.items()}
+    wanted.update({
+        "current noise floor": "noise_floor_dbm",
+        "eirp": "eirp_dbm",
+        "max eirp": "max_eirp_dbm",
+        "rx last snr": "rx_last_snr_db",
+    })
+    result: dict[str, Any] = {}
+    for line in text.splitlines():
+        parts = re.match(r"^\s*(.*?)\s{2,}(-?\d+(?:\.\d+)?)\s*$", line)
+        if not parts:
+            continue
+        key = wanted.get(parts.group(1).strip().lower())
+        if key is None:
+            continue
+        number = float(parts.group(2))
+        if key == "noise_floor_dbm":
+            result[key] = -abs(number) if number > 0 else number
+        elif key.endswith("_percent"):
+            value = _pct(number)
+            if value is not None:
+                result[key] = value
+        elif key.endswith("_dbm") or key.endswith("_db"):
+            result[key] = number
+        elif number >= 0 and number.is_integer():
+            result[key] = int(number)
+    return result or None
