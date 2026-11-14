@@ -38,3 +38,31 @@ def test_one_click_update_detects_old_web_bundle_and_checks_host_timer():
     assert "merge --ff-only" in sync
     assert "docker volume rm" not in updater + sync
     assert "down -v" not in updater + sync
+
+
+
+def test_batch_test_and_onboard_are_admin_only_read_only_and_status_gated():
+    page = (ROOT / "frontend/src/pages/DeviceInventory.tsx").read_text()
+    api = (ROOT / "backend/api/onboarding_workflow.py").read_text()
+    assert "Test &amp; Approve All" in page
+    assert "Test All (no approvals)" in page
+    assert "Onboard Successful" in page
+    assert 'd => checks[d.id]?.restState === "ENABLED"' in page
+    assert 'if (live.state !== "ENABLED")' in page
+    assert "window.confirm(" in page
+    assert "Only if a device is blocked, approve its exact /32 IP" in page
+    assert "await onboardingApi.approveDeviceIP" in page
+    assert "await onboardingApi.capture(device.id, result.profileId)" in page
+    assert "await ops.previewPlan(plan)" in page
+    assert "await ops.createPlan(plan)" in page
+    assert 'interval_seconds: 300' in page
+    assert 'if (existing)' in page
+    assert 'preview.warnings.length' in page
+    assert 'await onboardingApi.credentialDevices(savedProfile)' in page
+    assert 'require_role("admin")' in api
+    assert '@router.get("/credentials/{profile_id}/devices")' in api
+    assert 'InmDevice.source_type == "REAL"' in api
+    # Data-plane reads and management DB collection plans only: no device writes.
+    assert "enableRestApi(" not in page
+    assert "executeChange(" not in page
+    assert "deleteDevice(" not in page
