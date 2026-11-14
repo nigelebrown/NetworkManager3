@@ -55,8 +55,9 @@ raw=[v.strip() for v in sys.argv[1].split(',') if v.strip()]
 if len(raw)>20: raise SystemExit('More than 20 CIDRs.')
 for value in raw:
     n=ipaddress.ip_network(value,strict=False)
-    if n.version!=4 or not n.is_private or n.prefixlen<24 or n.is_loopback or n.is_link_local:
-        raise SystemExit('Invalid non-private management CIDR.')
+    rfc1918=[ipaddress.ip_network(s) for s in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16')]
+    if n.version!=4 or n.prefixlen<24 or not any(n.subnet_of(block) for block in rfc1918):
+        raise SystemExit('Only approved RFC1918 IPv4 /24-/32 networks may be used.')
     print(n)
 PY
 )" || die 'CIDR validation failed; leaving firewall unchanged.'
