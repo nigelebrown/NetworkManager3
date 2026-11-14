@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
 import { Card, ErrorNote } from "../components/ui";
 import { Table, btn, btnPrimary, input } from "../components/inm";
@@ -20,7 +21,7 @@ export default function Users() {
   const reset = (u: UserRow) => { const p = prompt(`Temporary password for ${u.username} (12+ characters). They must change it at next sign-in.`); if (p) act(() => v1.resetPassword(u.id, p)); };
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Users &amp; access</h1>
+      <PageHeader eyebrow="Administration" title="Users & roles" subtitle="Named accounts, site grants, RBAC and mandatory first-login credential changes." />
       <p className="text-sm text-slate-400">Every person gets a named account (no shared technician identities). New and reset accounts must change their password at first sign-in. “Granted” scope limits a user to the sites ticked below, including live updates.</p>
       <ErrorNote error={err || users.error} />
       <Card title="Add user">
