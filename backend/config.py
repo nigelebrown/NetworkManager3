@@ -29,8 +29,10 @@ class Settings(BaseSettings):
     session_minutes: int = 60
 
     aruba_timeout_seconds: float = 10.0
-    aruba_verify_tls: bool = False
+    aruba_verify_tls: bool = True
     aruba_ca_bundle: str = ""
+    # Exact management-IP exception; verify other device certificates.
+    aruba_untrusted_tls_hosts: str = ""
 
     poll_interval_seconds: int = 60
     telemetry_enabled: bool = True  # per-AP RF + system telemetry (2 extra read-only commands per AP per poll)
@@ -94,6 +96,24 @@ class Settings(BaseSettings):
         if not self.aruba_verify_tls:
             return False
         return self.aruba_ca_bundle or True
+
+    def tls_verify_for(self, host: str) -> bool | str:
+        """Honor explicit, exact-IP TLS exceptions; verify all other device certificates."""
+        import ipaddress
+
+        try:
+            candidate = ipaddress.ip_address(host)
+            exceptions = {
+                ipaddress.ip_address(item.strip())
+                for item in self.aruba_untrusted_tls_hosts.split(",") if item.strip()
+            }
+        except ValueError:
+            # Malformed configuration cannot silently disable certificate verification.
+            return self.tls_verify_arg
+        if candidate.version == 4 and candidate.is_private and candidate in exceptions:
+            log.warning("TLS certificate verification explicitly waived for device %s; lab exception", host)
+            return False
+        return self.tls_verify_arg
 
     @property
     def device_writes_permitted(self) -> bool:

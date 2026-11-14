@@ -211,12 +211,12 @@ def _rest_status(profile: OnboardingCredential, ip: ipaddress.IPv4Address) -> tu
             from ..aruba.errors import ArubaAuthError, ArubaRestDisabledError
             with ArubaClient(ArubaTarget(str(ip), 4343, profile.username, password),
                              timeout=min(8.0, get_settings().aruba_timeout_seconds),
-                             verify=get_settings().tls_verify_arg) as client:
+                             verify=get_settings().tls_verify_for(str(ip))) as client:
                 client.login()
         else:
             from ..infrastructure.writers.aruba_cx import CxSession
             with CxSession(str(ip), profile.username, password, timeout=8.0,
-                           verify=get_settings().tls_verify_arg) as client:
+                           verify=get_settings().tls_verify_for(str(ip))) as client:
                 client.open()
         return "ENABLED", "REST API responds and the saved credentials were accepted."
     except Exception as exc:
@@ -532,7 +532,7 @@ def _cx_baseline(host: str, username: str, password: str) -> dict:
     from ..infrastructure.writers import WriterError
     from ..infrastructure.writers.aruba_cx import CxSession
     try:
-        with CxSession(host, username, password, timeout=8.0, verify=get_settings().tls_verify_arg) as s:
+        with CxSession(host, username, password, timeout=8.0, verify=get_settings().tls_verify_for(host)) as s:
             vdata = s.request("GET", "/system/vlans", params={"depth": 1}).json()
             pdata = s.request("GET", "/system/interfaces", params={"depth": 1}).json()
     except WriterError as exc:
@@ -586,7 +586,7 @@ def capture_baseline(device_id: str, body: CaptureInput, request: Request,
         if device.family == "access_point":
             with ArubaClient(ArubaTarget(str(ip), 4343, profile.username, password),
                              timeout=min(8, get_settings().aruba_timeout_seconds),
-                             verify=get_settings().tls_verify_arg) as client:
+                             verify=get_settings().tls_verify_for(str(ip))) as client:
                 client.login()
                 text = fetch_running_config(client)  # redacted by vendor parser
                 config = parse_running_config(text)

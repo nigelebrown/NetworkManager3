@@ -134,7 +134,9 @@ def record_observation(db: Session, body: QuickDevice, actor: str, request: Requ
 @router.post("", status_code=201)
 def create_device(body: QuickDevice, request: Request, db: Session = Depends(get_db),
                   admin: User = Depends(require_role("admin"))):
-    return record_observation(db, body, admin.username, request)
+    result = record_observation(db, body, admin.username, request)
+    db.commit()  # Visibility must precede HTTP 201; FastAPI yield cleanup can run after response.
+    return result
 
 
 class BulkQuickDeviceInput(BaseModel):
@@ -175,6 +177,7 @@ def create_device_batch(body: BulkQuickDeviceInput, request: Request,
         results.append({"id": result["id"], "hostname": result["hostname"],
                         "serial_number": row.serial_number,
                         "action": "UPDATED" if already else "ADDED"})
+    db.commit()  # Keep the bulk import atomic and visible before responding.
     return {"count": len(results), "added": sum(x["action"] == "ADDED" for x in results),
             "updated": sum(x["action"] == "UPDATED" for x in results),
             "source_type": "REAL", "collection_method": "MANUAL",
@@ -218,7 +221,7 @@ def _probe_ap(body: QuickProbe) -> dict:
     from ..aruba.monitoring import collect_snapshot
     s = get_settings()
     with ArubaClient(ArubaTarget(str(body.management_ip), 4343, body.username, body.password),
-                     timeout=min(s.aruba_timeout_seconds, 8), verify=s.tls_verify_arg) as client:
+                     timeout=min(s.aruba_timeout_seconds, 8), verify=s.tls_verify_for(str(body.management_ip))) as client:
         client.login()
         snap = collect_snapshot(client)
     ap = next((a for a in snap.aps if a.get("ip") == str(body.management_ip)), None)
@@ -242,7 +245,7 @@ def _probe_cx(body: QuickProbe) -> dict:
     from ..infrastructure.writers.aruba_cx import CxSession, PORT_RE
     try:
         with CxSession(body.management_ip, body.username, body.password, timeout=8.0,
-                       verify=get_settings().tls_verify_arg) as s:
+                       verify=get_settings().tls_verify_for(str(body.management_ip))) as s:
             data = s.request("GET", "/system", params={"attributes": "hostname,platform_name,software_version,"
                                                                      "serial_number"}).json()
             if not isinstance(data, dict):
