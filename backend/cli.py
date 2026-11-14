@@ -180,8 +180,12 @@ def cmd_verify(a) -> int:
         r = httpx.post(api + "/api/config/changes/1/apply", json={}, timeout=5)
         return r.status_code == 403 and "device_write_locked" in r.text, f"HTTP {r.status_code}"
     _check(results, "safety:device-write-lock", write_lock)
-    _check(results, "safety:profile", lambda: (s.inm_profile == "demo" and s.mode == "demo" and not s.device_writes_permitted,
-                                              f"profile={s.inm_profile} mode={s.mode} writes={s.device_writes_permitted}"))
+    _check(results, "safety:profile", lambda: (
+        (s.inm_profile, s.mode) in {("demo", "demo"), ("lab-readonly", "live")}
+        and s.device_write_lock and not s.allow_config_changes
+        and not s.device_writes_permitted,
+        f"profile={s.inm_profile} mode={s.mode} writes={s.device_writes_permitted}"
+        f" lock={s.device_write_lock} allow_changes={s.allow_config_changes}"))
 
     def ai_isolated():
         j = httpx.get(inm.ai_url.rstrip("/") + "/health", timeout=5).json()
