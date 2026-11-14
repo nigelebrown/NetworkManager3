@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { StatusBadge, Table, btnPrimary } from "../components/inm";
@@ -38,7 +39,7 @@ export default function SystemHealth() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">System health {data && <StatusBadge status={data.overall} />}</h1>
+        <PageHeader eyebrow="Overview & command" title="Platform health" subtitle="Live service checks, messaging, telemetry persistence and end-to-end traces." right={data && <StatusBadge status={data.overall} />} />
         <span className="text-xs text-slate-500">Measured {data ? fmtTime(data.checked_at) : "…"} — every status comes from a live probe</span>
       </div>
       <ErrorNote error={error} />
