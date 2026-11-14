@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
@@ -84,7 +85,7 @@ export default function DeviceConfig() {
   if (getSession()?.role !== "admin") return <Card>Administrator access required to review configuration baselines and drafts.</Card>;
   return <div className="space-y-4">
     <Link className="text-sm text-sky-400 underline" to={`/devices/${id}`}>← Device details</Link>
-    <h1 className="text-xl font-semibold">Device configuration — {device.data?.hostname || "Loading…"}</h1>
+    <PageHeader eyebrow="Configuration & changes" title={`Device configuration — ${device.data?.hostname || "Loading…"}`} subtitle="Inspect current settings and prepare reviewed, certified change plans." />
     <p className="text-sm text-amber-300">
       This page edits application-side configuration drafts only; saving a draft never writes to hardware.
       Approved change plans and the certified read/write execution engine are available separately in Change Management.
