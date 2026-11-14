@@ -108,7 +108,7 @@ export default function WireframeWorkspace({ kind }: { kind: WorkspaceKind }) {
       : ["ports", "switchconfig"].includes(kind) ? d.family === "switch" : true) &&
     (state === "ALL" || d.state === state) &&
     (!search.trim() || [d.hostname, d.site, d.model, d.device_id].some(x => (x || "").toLowerCase().includes(search.toLowerCase())))
-  ), [all, state, search, kind]);
+  )), [all, state, search, kind]);
   const healthy = filtered.filter(x => x.state === "ONLINE").length;
   const atRisk = filtered.filter(x => ["OFFLINE", "DEGRADED", "STALE"].includes(x.state)).length;
   return <div className="space-y-4" data-wireframe-workspace={kind}>
