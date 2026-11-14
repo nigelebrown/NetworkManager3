@@ -95,6 +95,17 @@ compose up -d --wait --wait-timeout 600 --remove-orphans \
   management-db timeseries-db nats loki alloy ai api web worker
 images_lock
 
+# Enforce explicit private-management allowlists at the host forwarding layer.
+# Docker's devices bridge otherwise NATs to the internet by default, even
+# while the application denies unapproved targets at the API layer.
+# Must run before readiness verification, and never remove existing volumes.
+log "SECURITY: restricting worker Docker egress to approved private management ranges"
+if ! command -v iptables >/dev/null; then
+  dnf -y install iptables-nft || die "cannot install required host egress firewall support" 8
+fi
+bash "$ROOT/scripts/inm_worker_egress_guard.sh" --install ||
+  die "cannot enforce worker egress security; installation blocked" 8
+
 # ---------------------------------------------------------------- VERIFY
 log "VERIFY"
 bash "$ROOT/deployment/centos9/verify.sh" || die "verification failed: see the [FAIL] lines above" 8
