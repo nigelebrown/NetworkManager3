@@ -31,7 +31,11 @@ if [[ -e "$SITE" ]]; then
   grep -q '^# INM managed reverse proxy' "$SITE" ||
     { echo '[INM] Existing 8787 proxy is not managed by INM; refusing replacement.' >&2; exit 2; }
   echo '[INM] Existing Nginx reverse proxy found; updating Docker only.'
-  bash "$ROOT/deployment/centos9/install.sh" --mode live
+  echo '[INM] Checking existing TEST-installation storage without deleting images, build cache, or Docker volumes.'
+  docker system df || true
+  # For an already running INM web container, permit a restricted testing-only
+  # update at 30-39 GB free. Clean installs still require the original >=40 GB.
+  INM_EXISTING_TEST_UPDATE=1 bash "$ROOT/deployment/centos9/install.sh" --mode live
   nginx -t
   systemctl reload nginx
 else
