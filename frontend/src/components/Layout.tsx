@@ -5,16 +5,74 @@ import { live, type LiveState } from "../services/live";
 import { ops, type DemoStatus } from "../services/ops";
 
 type Item = { to: string; label: string; roles?: Role[]; tag?: string };
-// Workflow-first navigation (master design K.4). Unfinished modules are reachable and say PLANNED.
+// Approved full-system wireframe navigation. Existing SIMS tools remain discoverable.
 const GROUPS: { title: string; items: Item[] }[] = [
-  { title: "Overview & command", items: [{ to: "/", label: "Network command center" }, { to: "/executive", label: "Executive overview", roles: ["admin", "auditor", "approver", "operator"] }, { to: "/wifi", label: "Wi-Fi dashboard" }, { to: "/system", label: "System health", roles: ["admin", "auditor"] }] },
-  { title: "Sites & inventory", items: [{ to: "/inventory", label: "Device inventory" },{ to: "/onboarding", label: "Add & configure devices", roles: ["admin"], tag: "START HERE" }, { to: "/onboarding/manual", label: "Manual / CSV import", roles: ["admin"] }, { to: "/discovery", label: "Discovery ranges", roles: ["admin"] }, { to: "/sites", label: "Sites" }, { to: "/aps", label: "Access points" }, { to: "/switches", label: "Switches" }, { to: "/clients", label: "Clients" }] },
-  { title: "Monitoring & diagnostics", items: [{ to: "/collection", label: "Live collection", roles: ["admin", "operator"] }, { to: "/experience", label: "User experience" }, { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" }, { to: "/device-alerts", label: "Device alerts & thresholds", tag: "LIVE" }, { to: "/topology", label: "Topology (LLDP)" }, { to: "/notifications", label: "Alert notifications" }, { to: "/alerts", label: "Wi-Fi alerts" }, { to: "/logs", label: "Events & logs", roles: ["admin", "auditor", "operator"] }] },
-  { title: "Configuration & changes", items: [{ to: "/compliance", label: "Best practice & compliance" }, { to: "/changes", label: "Change workflow", tag: "APPROVAL" }, { to: "/config-templates", label: "Templates & inheritance", roles: ["admin"] }, { to: "/deployments", label: "Groups & deployment", roles: ["admin", "approver", "operator"] }, { to: "/vault", label: "Config vault", roles: ["admin", "auditor", "operator"] }, { to: "/config", label: "SSID & AP config (SIMS)" }, { to: "/replace", label: "Replace device", roles: ["admin"] }, { to: "/certification", label: "Write certification", roles: ["admin", "approver", "auditor"] }] },
-  { title: "Governance & security", items: [{ to: "/accountability", label: "Who changed what", roles: ["admin", "auditor", "operator"] }, { to: "/audit", label: "Audit log", roles: ["admin", "auditor"] }] },
-  { title: "Intelligence & automation", items: [{ to: "/learning", label: "AI learning centre" }, { to: "/optimization", label: "RF optimization", tag: "OPT-IN" }, { to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI rules" }] },
-  { title: "Administration", items: [{ to: "/firmware", label: "Firmware & certificates" }, { to: "/printers", label: "Printer intelligence", roles: ["admin"] }, { to: "/platform", label: "Vendors, roles & rules" }, { to: "/recovery", label: "Recovery & change journal", roles: ["admin"] }, { to: "/data", label: "Data management (demo)", roles: ["admin"] }, { to: "/users", label: "Users", roles: ["admin"] }] },
+  { title: "Overview & command", items: [
+    { to: "/", label: "Network command center" }, { to: "/executive", label: "Executive overview", roles: ["admin","auditor","approver","operator"] },
+    { to: "/system", label: "Platform health", roles: ["admin","auditor"] },
+    { to: "/wifi", label: "Wi-Fi dashboard" }] },
+  { title: "Sites & inventory", items: [
+    { to: "/sites", label: "Sites & formations" }, { to: "/inventory", label: "Device inventory" },
+    { to: "/aps", label: "Access points" }, { to: "/switches", label: "CX switches" },
+    { to: "/clients", label: "Wireless clients" }, { to: "/printers", label: "Printers", roles: ["admin"], tag: "PARTIAL" },
+    { to: "/onboarding", label: "Add & configure devices", roles: ["admin"], tag: "START" },
+    { to: "/discovery", label: "Discovery jobs", roles: ["admin"] },
+    { to: "/onboarding/manual", label: "Manual / CSV intake", roles: ["admin"] }] },
+  { title: "Monitoring & diagnostics", items: [
+    { to: "/collection", label: "Live collection", roles: ["admin","operator"] },
+    { to: "/rf-health", label: "Wireless & RF health" }, { to: "/port-health", label: "Ports, PoE & LLDP" },
+    { to: "/client-journeys", label: "Client connectivity", tag: "CONCEPT" },
+    { to: "/device-alerts", label: "Alerts & incidents" }, { to: "/topology", label: "Network topology" },
+    { to: "/logs", label: "Logs & events", roles: ["admin","auditor","operator"] },
+    { to: "/device-360", label: "Device 360°" },
+    { to: "/experience", label: "User experience" }, { to: "/alerts", label: "Wi-Fi alerts" }] },
+  { title: "Configuration & changes", items: [
+    { to: "/config-templates", label: "Templates & inheritance", roles: ["admin"] },
+    { to: "/ssid-policies", label: "WLAN & SSID policies" }, { to: "/switch-config", label: "Switch configuration" },
+    { to: "/changes", label: "Change requests", tag: "APPROVAL" },
+    { to: "/approvals", label: "Approvals queue", roles: ["admin","approver","operator","auditor"] },
+    { to: "/deployments", label: "Group deployment", roles: ["admin","approver","operator"] },
+    { to: "/vault", label: "Configuration vault", roles: ["admin","auditor","operator"] },
+    { to: "/replace", label: "Restore & replace", roles: ["admin"] },
+    { to: "/certification", label: "Hardware certification", roles: ["admin","approver","auditor"] },
+    { to: "/config", label: "Legacy WLAN settings" }, { to: "/recovery", label: "Recovery journal", roles: ["admin"] }] },
+  { title: "Intelligence & automation", items: [
+    { to: "/optimization", label: "RF optimization", tag: "OPT-IN" },
+    { to: "/recommendations", label: "Recommendations" },
+    { to: "/predictive", label: "Predictive health", tag: "CONCEPT" },
+    { to: "/analytics", label: "Operational analytics" },
+    { to: "/learning", label: "AI learning centre" },
+    { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" },
+    { to: "/assistant", label: "Assistant" }, { to: "/ai-learning", label: "AI rules" }] },
+  { title: "Governance & security", items: [
+    { to: "/compliance", label: "Compliance & drift" },
+    { to: "/accountability", label: "Change attribution", roles: ["admin","auditor","operator"] },
+    { to: "/audit", label: "Audit trail", roles: ["admin","auditor"] }] },
+  { title: "Administration", items: [
+    { to: "/users", label: "Users & roles", roles: ["admin"] },
+    { to: "/credentials", label: "Credential profiles", roles: ["admin"] },
+    { to: "/notifications", label: "Alert notifications" },
+    { to: "/firmware", label: "Firmware lifecycle", tag: "PARTIAL" },
+    { to: "/integrations", label: "Integrations", tag: "CONCEPT" },
+    { to: "/data", label: "Data management", roles: ["admin"] },
+    { to: "/platform", label: "Platform settings" }] },
 ];
+
+const ICON_FOR: Record<string, string> = {
+  "/": "◫", "/executive": "▥", "/system": "♡", "/wifi": "⌁",
+  "/sites": "⌖", "/inventory": "▤", "/aps": "⌁", "/switches": "▧",
+  "/clients": "◉", "/printers": "▣", "/onboarding": "＋", "/discovery": "⌕",
+  "/collection": "▤", "/rf-health": "⌁", "/port-health": "▦",
+  "/client-journeys": "↝", "/device-alerts": "⚑", "/topology": "⤳",
+  "/logs": "≡", "/device-360": "◎", "/config-templates": "◈",
+  "/ssid-policies": "⌁", "/switch-config": "▤", "/changes": "⇄",
+  "/approvals": "✓", "/deployments": "▦", "/vault": "▣",
+  "/replace": "↻", "/certification": "◆", "/optimization": "◎",
+  "/recommendations": "✦", "/predictive": "◇", "/analytics": "▥",
+  "/compliance": "▣", "/accountability": "↔", "/audit": "≡",
+  "/users": "♙", "/credentials": "⚿", "/notifications": "✉",
+  "/firmware": "⬡", "/integrations": "⧉", "/data": "▤", "/platform": "⚙",
+};
 
 const LIVE_LABEL: Record<LiveState, [string, string]> = {
   live: ["bg-emerald-400", "Live"], connecting: ["bg-amber-400 animate-pulse", "Connecting…"],
@@ -98,7 +156,7 @@ export default function Layout() {
                 {!collapsed[g.title] && items.map((i) => (
                   <NavLink key={i.to} to={i.to} end={i.to === "/"} onClick={() => setOpen(false)}
                     className={({ isActive }) => `inm-navitem ${isActive ? "active" : ""}`}>
-                    <span className="inm-navicon" aria-hidden="true">▤</span><span style={{flex:1}}>{i.label}</span>
+                    <span className="inm-navicon" aria-hidden="true">{ICON_FOR[i.to] ?? "▤"}</span><span style={{flex:1}}>{i.label}</span>
                     {i.tag && <span className="inm-navtag">{i.tag}</span>}
                   </NavLink>
                 ))}
