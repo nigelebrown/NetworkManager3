@@ -335,7 +335,7 @@ class InstantEmulator:
         self.model, self.firmware = model, firmware
         self.text = INSTANT_BASE
         self.log_records = {
-            "system": "Nov 13 13:00:00 cli: System started\\nNov 13 13:00:02 auth: password=example-secret",
+            "system": "Nov 13 13:00:00 cli: System started\nNov 13 13:00:02 auth: password=example-secret",
             "security": "Nov 13 13:01:00 auth: Administrator logged in",
             "user": "Nov 13 13:02:00 station: Wireless user associated",
         }
