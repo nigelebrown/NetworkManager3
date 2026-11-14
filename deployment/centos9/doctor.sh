@@ -29,7 +29,16 @@ preflight() {
   else bad "CPU/RAM: ${cpu} vCPU, ${mem_gb} GB — at least 4 vCPU and 8 GB are needed even for DEMO"; fi
   if (( disk_gb >= 300 )); then ok "Docker data disk free: ${disk_gb} GB"
   elif (( disk_gb >= 40 )); then note "Docker data disk free: ${disk_gb} GB (pilot sizing calls for 300-500 GB SSD)"
-  else bad "Docker data disk free: ${disk_gb} GB — need at least 40 GB"; fi
+  elif (( disk_gb >= 30 )) && [[ "${INM_EXISTING_TEST_UPDATE:-0}" == 1 && -f "$ENV_FILE" ]] &&
+       docker ps --filter "label=com.docker.compose.project=inm" \
+                 --filter "label=com.docker.compose.service=web" \
+                 --format '{{.ID}}' 2>/dev/null | grep -q .; then
+    # A running INM installation already has its base Docker images and data.
+    # Permit an explicitly requested SOFTWARE TEST update in the 30-39 GB
+    # band, not a clean install or production promotion. No Docker cache/volume
+    # pruning is needed. Fail below 30 GB even for this restricted exception.
+    note "Docker data disk free: ${disk_gb} GB (<40 GB fresh-install floor); existing TEST update allowed only. Storage is BELOW pilot/production sizing; expand disk before hardware-scale testing"
+  else bad "Docker data disk free: ${disk_gb} GB — need at least 40 GB for installation (or 30 GB for an explicitly gated update of a running TEST installation)"; fi
 
   if command -v chronyc >/dev/null && chronyc tracking 2>/dev/null | grep -q 'Leap status *: Normal'; then ok "time sync: chrony synchronised"
   else note "time sync: chrony not confirmed synchronised (audit and log correlation depend on accurate UTC)"; fi
