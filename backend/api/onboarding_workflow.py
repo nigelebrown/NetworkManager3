@@ -133,7 +133,7 @@ def devices_assigned_to_credential(profile_id: str, db: Session = Depends(get_db
                 {"id": device.id, "name": device.hostname or device.serial_number,
                  "address": (device.mgmt_addresses or [None])[0]}
                 for device in devices
-            ], "device_writes": "LOCKED"}
+            ], **read_only()}
 
 
 class CredentialInput(BaseModel):
