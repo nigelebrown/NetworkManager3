@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from .adapters import INSTANT_TYPED_OPS, CX_TYPED_OPS
 
 PHASES = tuple(str(i) for i in range(1, 12))
 MODELS = ("AP-505", "AP-535", "CX 6100", "CX 6200")
@@ -125,7 +126,7 @@ def _signatures(manifest: dict, keyring: Any, errors: list[str]) -> None:
             if len(pk) != 32 or len(sig) != 64:
                 raise ValueError("invalid Ed25519 key/signature length")
             Ed25519PublicKey.from_public_bytes(pk).verify(sig, payload)
-        except (ValueError, KeyError, TypeError, Exception) as exc:
+        except Exception as exc:  # untrusted signature/key format; never leak key material
             errors.append(f"signoff:{name}: invalid signature ({type(exc).__name__})")
             continue
         roles.add(role)
@@ -182,10 +183,10 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
             errors.append("hardware: malformed model record")
             continue
         model = device.get("model")
-        counts[model] = counts.get(model, 0) + 1
-        if model not in MODELS:
-            errors.append(f"hardware: unsupported model {model}")
+        if not isinstance(model, str) or model not in MODELS:
+            errors.append(f"hardware: invalid or unsupported model {str(model)[:60]}")
             continue
+        counts[model] = counts.get(model, 0) + 1
         if (device.get("environment") != "PHYSICAL" or
             not isinstance(device.get("firmware"), str) or not device["firmware"].strip() or
             device["firmware"].strip().casefold() in ("unknown", "emulated", "demo") or
@@ -197,11 +198,15 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
             _check_references(f"hardware:{model}:{check}",
                               checks.get(check) if isinstance(checks, dict) else None, artifacts, errors)
         ops = device.get("certified_operations")
+        expected_ops = INSTANT_TYPED_OPS if model.startswith("AP-") else CX_TYPED_OPS
         if not isinstance(ops, dict) or not ops:
             errors.append(f"hardware:{model}: no per-operation certification evidence")
         else:
+            for name in expected_ops:
+                _check_references(f"hardware:{model}:{name}", ops.get(name), artifacts, errors)
             for name, item in ops.items():
-                _check_references(f"hardware:{model}:{name}", item, artifacts, errors)
+                if name not in expected_ops:
+                    errors.append(f"hardware:{model}: unrecognized certification operation {name}")
     for model in MODELS:
         if counts.get(model, 0) != 1:
             errors.append(f"hardware:{model}: exactly one physical model/firmware record required")
