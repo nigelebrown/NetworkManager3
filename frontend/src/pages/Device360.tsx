@@ -133,16 +133,16 @@ export default function Device360() {
           <label className="text-xs" htmlFor="device-diagnostic-kind">Diagnostic</label>
           <select id="device-diagnostic-kind" className="inm-form-control"
             value={(d?.family === "switch"
-              ? ["port_auth", "vsf", "poe", "qos", "lacp"] : ["rf", "clients", "system", "wireless"]).includes(diagnosticKind)
+              ? ["port_auth", "vsf", "poe", "qos", "lacp", "transceivers", "optical_dom"] : ["rf", "clients", "system", "wireless"]).includes(diagnosticKind)
               ? diagnosticKind : d?.family === "switch" ? "port_auth" : "rf"}
             onChange={e => { setDiagnosticKind(e.target.value); setDiagnostic(null); }}>
             {(d?.family === "switch"
-              ? ["port_auth", "vsf", "poe", "qos", "lacp"] : ["rf", "clients", "system", "wireless"]).map(key =>
+              ? ["port_auth", "vsf", "poe", "qos", "lacp", "transceivers", "optical_dom"] : ["rf", "clients", "system", "wireless"]).map(key =>
                 <option key={key} value={key}>{key.replace(/_/g, " ")}</option>)}
           </select>
           {mayReadHardware && <button className={btn2} disabled={!d || act.busy}
             onClick={() => act.run(async () => {
-              const allowed = d?.family === "switch" ? ["port_auth", "vsf", "poe", "qos", "lacp"] :
+              const allowed = d?.family === "switch" ? ["port_auth", "vsf", "poe", "qos", "lacp", "transceivers", "optical_dom"] :
                 ["rf", "clients", "system", "wireless"];
               const response = await rw.diagnostics(id, allowed.includes(diagnosticKind)
                 ? diagnosticKind : allowed[0]);
