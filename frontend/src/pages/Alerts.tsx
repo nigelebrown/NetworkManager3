@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Badge, Card, ErrorNote, SimBadge, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
@@ -11,7 +12,7 @@ export default function Alerts() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Alerts</h1>
+        <PageHeader eyebrow="Monitoring & diagnostics" title="Wi-Fi alerts" subtitle="Review, acknowledge and resolve observed network alerts." />
         <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" aria-label="Status">
           <option value="">All</option><option>active</option><option>acknowledged</option><option>resolved</option>
         </select>
