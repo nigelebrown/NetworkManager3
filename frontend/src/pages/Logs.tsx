@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { useState } from "react";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { DemoBadge, Table, btn, input } from "../components/inm";
@@ -13,7 +14,7 @@ export default function Logs() {
   const events = useLoad(() => v1.events(50), [], 30000, ["events", "devices", "dashboard", "system"]);
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Events &amp; logs</h1>
+      <PageHeader eyebrow="Monitoring & diagnostics" title="Logs & events" subtitle="Search platform events, device logs and correlation evidence." />
       <Card title="Log search (Loki, read-only)" right={
         <div className="flex flex-wrap items-center gap-2">
           <select className={input} value={stream} onChange={(e) => setStream(e.target.value as "events" | "syslog")} aria-label="Stream">
