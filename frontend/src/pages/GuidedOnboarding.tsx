@@ -50,7 +50,8 @@ export default function GuidedOnboarding() {
         <td className="text-xs text-slate-500">{x.devices} device(s) · {ago(x.updated_at)}</td></tr>)}</tbody></table>
       {!list.data?.length && <p className="text-sm text-slate-500">No workflows yet.</p>}
     </Card>
-    <p className="text-xs text-slate-500">Single-device manual entry and CSV import remain under <Link className="underline" to="/onboarding/manual">Manual / CSV import</Link>.</p>
+    <div className="flex flex-wrap gap-3"><Link className={btn2} to="/onboarding/manual">Add a device manually</Link>
+      {me?.role === "admin" && <Link className={btn} to="/onboarding/import">Import Aruba inventory CSV</Link>}</div>
   </div>;
 
   const cur = w.step === "DONE" ? w.steps.length - 1 : w.steps.findIndex(s => s.status === "current");
