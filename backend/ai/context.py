@@ -121,7 +121,46 @@ def t_ssid_breakdown(db, ids, a, alias):
     return {"ssids": sorted(out, key=lambda r: -r["clients"])}
 
 
+def t_rf_placement(db, ids, a, alias):
+    """Return current radio and client observations for a placement investigation."""
+    cutoff = utcnow() - timedelta(hours=1)
+    aps = db.scalars(select(AccessPoint).where(
+        AccessPoint.site_id.in_(ids), AccessPoint.status == "up", AccessPoint.last_seen >= cutoff,
+    ).order_by(AccessPoint.site_id, AccessPoint.name, AccessPoint.id).limit(a.limit + 1)).all()
+    selected = aps[:a.limit]
+    clients_by_ap = {}
+    for client in db.scalars(select(ClientRecord).where(
+        ClientRecord.site_id.in_({ap.site_id for ap in selected}),
+        ClientRecord.is_connected.is_(True), ClientRecord.last_seen >= cutoff,
+    )):
+        clients_by_ap.setdefault((client.site_id, client.ap_name), []).append(client)
+
+    observations = []
+    for ap in selected:
+        clients = clients_by_ap.get((ap.site_id, ap.name), [])
+        rssi = sorted(c.rssi_dbm for c in clients if c.rssi_dbm is not None)
+        snr = sorted(c.snr_db for c in clients if c.snr_db is not None)
+        observations.append({
+            "ap": ap.name,
+            "site_id": ap.site_id,
+            "simulated": ap.simulated,
+            "radios": [{key: radio.get(key) for key in ("band", "channel", "tx_power_dbm", "util_percent")}
+                       for radio in (ap.radios or [])],
+            "clients_sampled": len(clients),
+            "client_rssi_dbm": {"samples": len(rssi), "lowest": rssi[0] if rssi else None},
+            "client_snr_db": {"samples": len(snr), "lowest": snr[0] if snr else None},
+        })
+    return {
+        "aps": observations,
+        "window_minutes": 60,
+        "truncated": len(aps) > a.limit,
+        "not_measured": ["physical AP spacing", "AP-to-AP neighbor signal strength", "location-based coverage"],
+        "interpretation": "Same-channel use flags a possible interference check. Weak client readings flag a possible coverage check. Neither establishes AP spacing.",
+    }
+
+
 TOOLS: dict[str, tuple[str, type[BaseModel], Callable]] = {
+    "rf_placement": ("AP spacing, co-channel overlap, weak coverage, RF or Wi-Fi optimization. args: limit (1-10).", LimitArgs, t_rf_placement),
     "ap_overview": ("Every AP with status, client count and experience score.", NoArgs, t_ap_overview),
     "worst_clients": ("Clients with the lowest experience scores. args: limit (1-10).", LimitArgs, t_worst_clients),
     "disconnects": ("Disconnect counts by AP and by client over a window. args: hours (1-168), limit (1-10).", HoursArgs, t_disconnects),
@@ -148,6 +187,7 @@ def site_facts(db: Session, ids: list[int], hours: int, alias: Pseudonyms) -> di
     return {
         "sites": sites, "window_hours": hours,
         "clients_connected": len(clients), "experience": summarize([c.exp_score for c in clients], cfg),
+        "rf_placement": t_rf_placement(db, ids, LimitArgs(), alias),
         "aps": t_ap_overview(db, ids, NoArgs(), alias)["aps"],
         "worst_clients": t_worst_clients(db, ids, LimitArgs(limit=5), alias)["worst_clients"],
         "active_alerts": t_active_alerts(db, ids, NoArgs(), alias)["alerts"],
