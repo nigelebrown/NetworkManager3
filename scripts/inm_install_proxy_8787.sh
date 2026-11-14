@@ -138,9 +138,11 @@ fi
 if systemctl is-active -q firewalld; then
   ZONE="$(firewall-cmd --get-zone-of-interface="$IFACE" 2>/dev/null | head -1 || true)"
   [[ -n "$ZONE" && "$ZONE" != "no zone" ]] || ZONE="$(firewall-cmd --get-default-zone)"
-  firewall-cmd --permanent --zone="$ZONE" --add-port="$PORT/tcp" || die 'Firewall rule failed.'
-  firewall-cmd --reload || die 'Firewall reload failed.'
-  log "Opened TCP $PORT on firewall zone $ZONE (upstream ACLs also need to allow it)."
+  # Apply runtime and permanent rules separately, without a global firewalld
+  # reload that can disrupt Docker's dynamic DOCKER-USER / NAT chains.
+  firewall-cmd --permanent --zone="$ZONE" --add-port="$PORT/tcp" || die 'Permanent firewall rule failed.'
+  firewall-cmd --zone="$ZONE" --add-port="$PORT/tcp" || die 'Runtime firewall rule failed.'
+  log "Opened TCP $PORT on firewall zone $ZONE without reloading Docker firewall chains."
 fi
 # firewalld reloads can remove runtime Docker forwarding filter entries.
 # Reinstate the fail-closed worker policy and rerun full on-host acceptance.
