@@ -138,7 +138,7 @@ export default function Device360() {
             onChange={e => { setDiagnosticKind(e.target.value); setDiagnostic(null); }}>
             {(d?.family === "switch"
               ? ["port_auth", "vsf", "poe", "qos", "lacp"] : ["rf", "clients", "system", "wireless"]).map(key =>
-                <option key={key} value={key}>{key.replaceAll("_", " ")}</option>)}
+                <option key={key} value={key}>{key.replace(/_/g, " ")}</option>)}
           </select>
           {mayReadHardware && <button className={btn2} disabled={!d || act.busy}
             onClick={() => act.run(async () => {
