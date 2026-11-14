@@ -33,9 +33,22 @@ export default function DeviceInventory() {
   }[] } | null>(null);
   const [checks, setChecks] = useState<Record<string, {status: string; message: string}>>({});
   const [testing, setTesting] = useState<string | null>(null);
+  const [reviewAccess, setReviewAccess] = useState(false);
   const [profile, setProfile] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{error?: string; message?: string}>({});
+  const accessRows = (devices.data ?? []).filter(d => selected.includes(d.id)).map(d => {
+    const address = d.management_addresses?.[0] ?? "";
+    const parts = address.split(".");
+    const [first, second] = parts.map(Number);
+    const privateIp = parts.length === 4 && parts.every(p => /^(0|[1-9]\d{0,2})$/.test(p) && Number(p) <= 255)
+      && (first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168));
+    const duplicate = address && (devices.data ?? []).some(other => other.id !== d.id &&
+      other.source_type === "REAL" && other.management_addresses?.includes(address));
+    return {device: d, address, reason: !address ? "Missing management IP" : !privateIp ? "Private IPv4 required"
+      : duplicate ? "Repeated IP in inventory" : ""};
+  });
+  const approvedAddresses = accessRows.filter(row => !row.reason).map(row => row.address);
   const selectedFamily = devices.data?.find(d => d.id === selected[0])?.family;
   const eligible = rows.filter(d => d.source_type === "REAL" && d.family === (selectedFamily ?? family));
   const allVisibleSelected = eligible.length > 0 && eligible.every(d => selected.includes(d.id));
@@ -45,6 +58,7 @@ export default function DeviceInventory() {
   const matchingProfiles = profiles.data?.filter(p => p.enabled && p.device_family === selectedFamily) ?? [];
   const changeSelection = (ids: string[]) => {
     setSelected(ids);
+    setReviewAccess(false);
     if (!ids.length || !selected.length) setProfile("");
     setFeedback({});
   };
@@ -124,6 +138,8 @@ export default function DeviceInventory() {
         } finally { setBusy(false); }
       }}>
         <p>{selected.length} selected</p>
+        <button type="button" className={btn} disabled={busy || !selected.length}
+          onClick={() => setReviewAccess(!reviewAccess)}>Review management access</button>
         <button type="button" className={btn} disabled={busy || !eligible.length}
           onClick={toggleVisible}>{allVisibleSelected ? "Deselect visible" : "Select visible"}</button>
         <button type="button" className={btn} disabled={busy || !selected.length}
@@ -137,6 +153,18 @@ export default function DeviceInventory() {
         </button>
         <p className="basis-full text-sm text-slate-600">Filter to Access points or CX switches to select all visible devices, or check individual rows. Up to 500 devices of one type can share the selected profile.</p>
       </form>}
+      {admin && reviewAccess && <section className="inm-cardbody space-y-2">
+        <h3 className="font-semibold">Review management access</h3>
+        <p>Export exact addresses for a server administrator to approve. Resolve repeated or missing addresses in inventory first.</p>
+        <ul className="max-h-48 overflow-auto">{accessRows.map(({device, address, reason}) =>
+          <li key={device.id}>{device.hostname || device.serial_number} · {address || "No IP"} · {reason || "Ready for approval"}</li>)}</ul>
+        <button type="button" className={btn} disabled={!approvedAddresses.length} onClick={() => {
+          const url = URL.createObjectURL(new Blob([approvedAddresses.join("\n") + "\n"], {type: "text/plain"}));
+          const link = document.createElement("a");
+          link.href = url; link.download = "inm-management-approvals.txt"; link.click();
+          URL.revokeObjectURL(url);
+        }}>Export {approvedAddresses.length} addresses for approval</button>
+      </section>}
       {admin && selectedFamily && <details className="inm-cardbody">
         <summary className="cursor-pointer font-medium">Create a credential profile for selected devices</summary>
         <form className="mt-3 flex flex-wrap items-end gap-3" onSubmit={async e => {
