@@ -142,7 +142,7 @@ export default function DeviceIntake() {
         </div>
         <p className="mt-2 text-xs text-slate-400">
           {method === "manual" ? "Works immediately without device connectivity. You can copy facts from show commands or device labels. Metrics are labelled MANUAL."
-            : "Requires an approved management IP range, network reachability and valid HTTPS credentials. API requests are read-only and never change a device. If TLS or REST is not configured, use manual entry first."}
+            : "Requires a reachable management IP and valid HTTPS credentials. If TLS or REST is not configured, use manual entry first."}
         </p>
       </Card>}
       {canAdd && <Card title="2. Device identity and location">

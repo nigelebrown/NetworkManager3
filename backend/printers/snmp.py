@@ -2,13 +2,15 @@
 
 Uses only numeric, standards-defined OIDs; never installs print drivers or
 downloads untrusted MIB code. Credentials live only in the request call stack.
-The device must be within an administrator-approved private management /24-/32.
+The device must be within the configured private management scope.
 """
 from __future__ import annotations
 
 import ipaddress
 import os
 from typing import Any
+
+from ..config import get_settings
 
 SYS_NAME = "1.3.6.1.2.1.1.5.0"
 SYS_DESCR = "1.3.6.1.2.1.1.1.0"
@@ -25,6 +27,9 @@ def permitted_target(host: str, ranges: str | None = None) -> bool:
             return False
         if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified:
             return False
+        if ranges is None and os.environ.get("INM_ON_PREMISES_MANAGEMENT") == "true" and get_settings().mode == "live":
+            return any(address in ipaddress.IPv4Network(net) for net in
+                       ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
         raw = os.environ.get("INM_READONLY_DEVICE_CIDRS", "") if ranges is None else ranges
         nets = [ipaddress.ip_network(x.strip(), strict=True) for x in raw.split(",") if x.strip()]
         return bool(nets) and len(nets) <= 20 and all(
