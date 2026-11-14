@@ -193,7 +193,7 @@ export function PrinterDetails() {
   const d = detail.data?.device;
   return <div className="space-y-4">
     <Link className="text-sm text-sky-400" to="/printers">← Printer inventory</Link>
-    <h1 className="text-xl font-semibold">{d ? `${d.manufacturer} ${d.model}` : "Printer details"}</h1>
+    <PageHeader eyebrow="Sites & inventory · Printers" title={d ? `${d.manufacturer} ${d.model}` : "Printer details"} subtitle="Observed printer counters, supply levels, faults and maintenance history." />
     <ErrorNote error={error ?? detail.error} />
     {success && <p role="status" className="rounded border border-emerald-800 p-3 text-sm text-emerald-300">{success}</p>}
     {d && <Card title="Printer identity and observation status">
