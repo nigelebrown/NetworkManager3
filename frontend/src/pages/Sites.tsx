@@ -1,3 +1,4 @@
+import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Card, ErrorNote, SimBadge, fmtTime } from "../components/ui";
@@ -43,7 +44,7 @@ export default function Sites() {
   );
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold">Sites (Aruba Instant clusters)</h1>
+      <PageHeader eyebrow="Sites & inventory" title="Sites & formations" subtitle="Aruba Instant cluster administration and site monitoring. Physical site assignments are also shown in Device Inventory." />
       {restSite && <RestApiDialog site={restSite} onClose={() => { setRestSite(null); reload(); }} />}
       {toRemove && (
         <ConfirmDialog title={`Remove site "${toRemove.name}"?`} confirmLabel="Remove site" onCancel={() => setToRemove(null)}
