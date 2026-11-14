@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 umask 077
 
-ROOT="${INM_ROOT:-/root/NetworkManager3}"
+ROOT="${INM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TARGETS="${INM_HARDWARE_TARGETS:-/etc/inm/hardware-test-targets.tsv}"
 LOG_DIR="${INM_LOG_DIR:-/var/log/inm}"
 MODE=all
