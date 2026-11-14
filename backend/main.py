@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
+from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, management_approvals, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
 from .api import collection, attribution, vault, change_control, replacement, learning, optimization, platform_ops, operations_center, production_ops, workflows, insights, notifications, port_groups
 from .config import ROOT_DIR, get_settings
 from .database.models import User
@@ -227,7 +227,7 @@ def create_app() -> FastAPI:
         resp.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else resp.headers.get("Cache-Control", "no-cache")
         return resp
 
-    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, printers.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
+    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, management_approvals.router, printers.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
               collection.router, attribution.router, vault.router, change_control.router, replacement.router,
               learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router, port_groups.router,
               workflows.router, insights.router, notifications.router):
