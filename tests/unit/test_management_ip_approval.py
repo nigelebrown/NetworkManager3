@@ -89,20 +89,20 @@ def test_host_reconciler_requires_explicit_locked_policy(tmp_path):
     env_path = tmp_path / "inm.env"
     check.__globals__["ENV"] = env_path
 
-    prefix = "INM_MODE=live\\nINM_PROFILE=lab-readonly\\n"
+    prefix = "INM_MODE=live\nINM_PROFILE=lab-readonly\n"
     env_path.write_text(prefix)
     with pytest.raises(ValueError, match="device-write lock"):
         check()
 
-    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=true\\nINM_ALLOW_CONFIG_CHANGES=false\\n")
+    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=true\nINM_ALLOW_CONFIG_CHANGES=false\n")
     original, values = check()
     assert values["INM_DEVICE_WRITE_LOCK"] == "true"
     assert "INM_PROFILE=lab-readonly" in original
 
-    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=false\\nINM_ALLOW_CONFIG_CHANGES=false\\n")
+    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=false\nINM_ALLOW_CONFIG_CHANGES=false\n")
     with pytest.raises(ValueError, match="device-write lock"):
         check()
 
-    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=true\\nINM_ALLOW_CONFIG_CHANGES=true\\n")
+    env_path.write_text(prefix + "INM_DEVICE_WRITE_LOCK=true\nINM_ALLOW_CONFIG_CHANGES=true\n")
     with pytest.raises(ValueError, match="device-write lock"):
         check()
