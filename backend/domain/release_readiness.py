@@ -8,6 +8,7 @@ physical, disaster-recovery and security evidence defined by the release scope.
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import re
@@ -94,6 +95,38 @@ def _check_artifacts(artifacts: Any, root: Path, errors: list[str]) -> dict[str,
     return result
 
 
+def _acceptance_register(manifest: dict, evidence_root: Path,
+                         artifacts: dict[str, str], errors: list[str]) -> dict:
+    """Verify the 220-check acceptance register is complete, not merely a signed summary."""
+    rel = manifest.get("acceptance_register")
+    if not isinstance(rel, str) or rel not in artifacts:
+        errors.append("acceptance: register CSV not present in SHA-256-verified evidence")
+        return {"total": 0, "passed": 0}
+    try:
+        path = (evidence_root.resolve() / rel).resolve()
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            table = csv.DictReader(fh)
+            required = {"test_id", "phase", "status", "actual_result", "artifact_link"}
+            if not table.fieldnames or not required.issubset(set(table.fieldnames)):
+                raise ValueError("missing acceptance register columns")
+            rows = list(table)
+    except (OSError, UnicodeError, ValueError, csv.Error) as exc:
+        errors.append(f"acceptance: unable to read register ({type(exc).__name__})")
+        return {"total": 0, "passed": 0}
+    ids = [str(r.get("test_id") or "").strip() for r in rows]
+    failures = [r for r in rows if str(r.get("status") or "").strip().upper() != "PASS" or
+                not str(r.get("actual_result") or "").strip() or
+                not str(r.get("artifact_link") or "").strip()]
+    if len(rows) < 220:
+        errors.append(f"acceptance: only {len(rows)} rows; minimum 220 required")
+    if len(set(ids)) != len(ids) or any(not x for x in ids):
+        errors.append("acceptance: blank or duplicate test IDs")
+    if failures:
+        examples = ", ".join(str(r.get("test_id") or "?") for r in failures[:8])
+        errors.append(f"acceptance: {len(failures)} rows not independently evidenced PASS ({examples})")
+    return {"total": len(rows), "passed": len(rows) - len(failures)}
+
+
 def _signatures(manifest: dict, keyring: Any, errors: list[str]) -> None:
     if not isinstance(keyring, dict) or not isinstance(keyring.get("reviewers"), dict):
         errors.append("signoff: trusted Ed25519 reviewer keyring not supplied")
@@ -163,6 +196,7 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
         errors.append("CI: successful recent run for exact candidate SHA required")
 
     artifacts = _check_artifacts(manifest.get("artifacts"), Path(evidence_root), errors)
+    register = _acceptance_register(manifest, Path(evidence_root), artifacts, errors)
     phases = manifest.get("phases")
     for key in PHASES:
         _check_references(f"phase-{key}", phases.get(key) if isinstance(phases, dict) else None, artifacts, errors)
@@ -215,4 +249,5 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
     return {"decision": "GO" if not errors else "NO_GO",
             "checked_at": now.isoformat(), "release_commit": sha,
             "phases_required": len(PHASES), "models_required": list(MODELS),
-            "verified_artifacts": len(artifacts), "failures": errors}
+            "verified_artifacts": len(artifacts), "acceptance_register": register,
+            "failures": errors}
