@@ -83,6 +83,13 @@ def services(_: User = Depends(require_any_role("admin", "auditor"))):
     return result
 
 
+@router.get("/system/resources")
+def system_resources(_: User = Depends(require_any_role("admin", "auditor"))):
+    from ..infrastructure.resource_pressure import resource_pressure
+
+    return resource_pressure()
+
+
 class ApPollCapacity(BaseModel):
     concurrency: int = Field(ge=1, le=MAX_POLL_CONCURRENCY, strict=True)
 

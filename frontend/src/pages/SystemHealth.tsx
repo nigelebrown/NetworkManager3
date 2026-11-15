@@ -43,6 +43,7 @@ export default function SystemHealth() {
         <span className="text-xs text-slate-500">Measured {data ? fmtTime(data.checked_at) : "…"} — every status comes from a live probe</span>
       </div>
       <ErrorNote error={error} />
+      <ServerResourcesCard />
       <CollectionCapacityCard isAdmin={isAdmin} />
       <OutboxCard />
       <Card title="Seven service roles">
@@ -76,6 +77,38 @@ export default function SystemHealth() {
       </Card>
     </div>
   );
+}
+
+function ServerResourcesCard() {
+  const { data, error } = useLoad(v1.resources, [], 15000);
+  const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  const vm = data?.vm;
+  const disk = data?.app_disk;
+  const api = data?.api_container;
+  const pressure = [
+    vm?.load_5m != null && vm.logical_cpus && vm.load_5m >= vm.logical_cpus ? "High VM load" : null,
+    vm?.memory_available != null && vm.memory_total && vm.memory_available / vm.memory_total < 0.15 ? "Low VM memory" : null,
+    disk && disk.available / disk.total < 0.2 ? "Low app data disk space" : null,
+    api?.memory_current != null && api.memory_limit && api.memory_current / api.memory_limit >= 0.9
+      ? "API container is near its memory limit" : null,
+  ].filter(Boolean);
+  return <Card title="Server and Docker resources" right={data && <span className="text-xs text-slate-500">{fmtTime(data.checked_at)}</span>}>
+    <ErrorNote error={error} />
+    {data && <>
+      {pressure.length > 0 && <p className="mb-2 font-semibold text-amber-700" role="status">{pressure.join(" · ")}</p>}
+      <Table head={["Resource", "Current reading"]}>
+        <tr><td className="p-2">VM CPU</td><td className="p-2">{vm?.logical_cpus ?? "Unavailable"} vCPUs · 5-minute load {vm?.load_5m?.toFixed(2) ?? "unavailable"}</td></tr>
+        <tr><td className="p-2">VM memory</td><td className="p-2">{vm?.memory_available != null && vm.memory_total != null
+          ? `${gib(vm.memory_available)} available of ${gib(vm.memory_total)}` : "Unavailable"}</td></tr>
+        <tr><td className="p-2">App data disk</td><td className="p-2">{disk ? `${gib(disk.available)} available of ${gib(disk.total)}` : "Unavailable"}</td></tr>
+        <tr><td className="p-2">API container</td><td className="p-2">
+          {api?.memory_current != null ? `${gib(api.memory_current)} memory used` : "Memory usage unavailable"}
+          {api?.memory_limit != null && ` · ${gib(api.memory_limit)} memory limit`}
+          {api?.cpu_limit != null && ` · ${api.cpu_limit} vCPU limit`}
+        </td></tr>
+      </Table>
+    </>}
+  </Card>;
 }
 
 function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {

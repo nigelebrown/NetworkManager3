@@ -42,6 +42,22 @@ def test_controller_worker_polls_sites_concurrently(monkeypatch):
     assert sorted(completed) == [1, 2]
 
 
+def test_resource_readings_distinguish_vm_and_container(tmp_path):
+    from backend.infrastructure.resource_pressure import resource_pressure
+
+    (tmp_path / "stat").write_text("cpu 1\ncpu0 1\ncpu1 1\n", encoding="ascii")
+    (tmp_path / "loadavg").write_text("0.20 0.30 0.40 1/10 12\n", encoding="ascii")
+    (tmp_path / "meminfo").write_text("MemTotal: 1000 kB\nMemAvailable: 200 kB\n", encoding="ascii")
+    (tmp_path / "memory.current").write_text("512", encoding="ascii")
+    (tmp_path / "memory.max").write_text("max", encoding="ascii")
+    (tmp_path / "cpu.max").write_text("150000 100000", encoding="ascii")
+
+    data = resource_pressure(tmp_path, tmp_path, tmp_path)
+    assert data["vm"] == {"logical_cpus": 2, "load_5m": 0.3, "memory_total": 1024000, "memory_available": 204800}
+    assert data["api_container"] == {"memory_current": 512, "memory_limit": None, "cpu_limit": 1.5}
+    assert data["app_disk"]["available"] <= data["app_disk"]["total"]
+
+
 class FakeLogs:
     def __init__(self, fail_times=0):
         self.lines, self.fail_times = [], fail_times
