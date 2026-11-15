@@ -354,10 +354,13 @@ def test_collection_capacity_admin_limits_and_persistence(client, admin):
     path = "/api/v1/system/collection-capacity"
     initial = client.get(path, headers=admin)
     assert initial.status_code == 200
-    assert initial.json()["configured"] == 20
+    assert initial.json()["limits"] == {"ap": 35, "switch": 35, "printer": 35}
     assert client.put(path, json={"concurrency": 8}).status_code == 401
-    assert client.put(path, headers=admin, json={"concurrency": 21}).status_code == 422
+    assert client.put(path, headers=admin, json={"concurrency": 36}).status_code == 422
     assert client.put(path, headers=admin, json={"concurrency": 6}).json() == {"concurrency": 6}
+    assert client.put(path, headers=admin, json={"concurrency": 19, "family": "switch"}).status_code == 200
+    assert client.put(path, headers=admin, json={"concurrency": 21, "family": "printer"}).status_code == 200
     saved = client.get(path, headers=admin).json()
     assert saved["configured"] == 6
     assert saved["effective"] == 1
+    assert saved["limits"] == {"ap": 6, "switch": 19, "printer": 21}

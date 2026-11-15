@@ -6,6 +6,7 @@ import io
 import json
 import re
 import uuid
+from typing import Literal
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -24,7 +25,7 @@ from ..database.models_inm import (
 )
 from ..database.session import get_db, session_scope
 from ..monitoring.collector import (
-    DEFAULT_POLL_CONCURRENCY, MAX_POLL_CONCURRENCY, POLL_CAPACITY_KEY, poll_concurrency, visible_sites,
+    MAX_POLL_CONCURRENCY, POLL_CAPACITY_KEYS, configured_poll_concurrency, poll_concurrency, visible_sites,
 )
 from ..security.context import get_scope
 from ..security.crypto import hash_password
@@ -102,6 +103,7 @@ def system_resources(db: Session = Depends(get_db), _: User = Depends(require_an
 
 class ApPollCapacity(BaseModel):
     concurrency: int = Field(ge=1, le=MAX_POLL_CONCURRENCY, strict=True)
+    family: Literal["ap", "switch", "printer"] = "ap"
 
 
 @router.get("/system/collection-capacity")
@@ -112,9 +114,10 @@ def collection_capacity(db: Session = Depends(get_db),
     now = datetime.now(timezone.utc)
     interval = get_settings().poll_interval_seconds
     sites = [site for site in visible_sites(db) if site.enabled and not site.simulated]
-    row = db.get(AppSetting, POLL_CAPACITY_KEY)
+    limits = {family: configured_poll_concurrency(db, family) for family in POLL_CAPACITY_KEYS}
     return {
-        "configured": row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY,
+        "configured": limits["ap"],
+        "limits": limits,
         "effective": poll_concurrency(db),
         "max_concurrency": MAX_POLL_CONCURRENCY,
         "interval_seconds": interval,
@@ -129,15 +132,16 @@ def collection_capacity(db: Session = Depends(get_db),
 @router.put("/system/collection-capacity")
 def set_collection_capacity(body: ApPollCapacity, request: Request, db: Session = Depends(get_db),
                             user: User = Depends(require_role("admin"))):
-    row = db.get(AppSetting, POLL_CAPACITY_KEY, with_for_update=True)
-    previous = row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY
+    key = POLL_CAPACITY_KEYS[body.family]
+    row = db.get(AppSetting, key, with_for_update=True)
+    previous = configured_poll_concurrency(db, body.family)
     if row is None:
-        row = AppSetting(key=POLL_CAPACITY_KEY)
+        row = AppSetting(key=key)
         db.add(row)
-    row.value = body.model_dump()
+    row.value = {"concurrency": body.concurrency}
     row.updated_at = datetime.now(timezone.utc)
     row.updated_by = user.username
-    audit(db, "ap_poll_capacity_updated", username=user.username, target=POLL_CAPACITY_KEY,
+    audit(db, f"{body.family}_poll_capacity_updated", username=user.username, target=key,
           detail=f"concurrency {previous} -> {body.concurrency}", request=request)
     return {"concurrency": body.concurrency}
 
