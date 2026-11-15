@@ -26,7 +26,8 @@ function AutoOnboard({ onDone }: { onDone: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const s = status.data;
-  useEffect(() => { if (s?.state === "SUCCEEDED") onDone(); }, [s?.state, s?.finished_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (s?.state === "SUCCEEDED" || s?.clusters_saved) onDone(); },
+    [s?.state, s?.finished_at, s?.clusters_saved]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (fn: () => Promise<string>) => { setBusy(true); setMsg(null);
     try { setMsg(await fn()); } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setBusy(false); } };
   const keys = pending.data ?? [];
@@ -55,12 +56,13 @@ function AutoOnboard({ onDone }: { onDone: () => void }) {
           <label className="mt-1 flex items-start gap-2 text-xs"><input className="mt-0.5" type="checkbox" checked={autoRest} onChange={e => setAutoRest(e.target.checked)} />
             <span>Also try to enable REST on clusters where it is off (fixed 4-command <code>allow-rest-api</code> bootstrap; only runs where the write policy and /32 approval permit — otherwise the cluster is read over SSH).</span></label>
           <button className="inm-btn-primary mt-2" disabled={busy || s?.state === "RUNNING"} onClick={() => run(async () => { await wl.autodiscover(autoRest); status.reload(); return "Auto-onboarding started."; })}>
-            {s?.state === "RUNNING" ? `Running… ${s.done ?? 0}/${s.total ?? "?"}` : "Run auto-onboarding"}</button></li>
+            {s?.state === "RUNNING" ? `Checked ${s.done ?? 0}/${s.total ?? "?"} APs` : "Run auto-onboarding"}</button>
+          {s?.state === "RUNNING" && <p className="mt-1 text-xs" role="status">Clusters saved: {s.clusters_saved ?? 0}</p>}</li>
       </ol>
       {msg && <p className="rounded bg-slate-50 p-2" role="status">{msg}</p>}
       {s && s.state !== "NEVER_RUN" && s.state !== "RUNNING" && <details open={s.state === "FAILED"}><summary className="cursor-pointer font-semibold">
         Last run: {s.state} {s.finished_at && `· ${ago(s.finished_at)}`} {s.counts && "· " + Object.entries(s.counts).map(([k, v]) => `${k.replace(/_/g, " ").toLowerCase()} ${v}`).join(" · ")}</summary>
-        {s.error && <p className="text-red-700">{s.error}</p>}
+        {s.error && <p className="text-red-700">{s.error}{s.clusters_saved ? ` Clusters saved: ${s.clusters_saved}.` : ""}</p>}
         {!!s.clusters?.length && <table className="inm-table mt-2"><thead><tr><th>Cluster</th><th>VC</th><th>Members</th><th>Read via</th><th>REST</th><th>First poll</th></tr></thead>
           <tbody>{s.clusters.map(c => <tr key={c.name}><td>{c.name}</td><td>{c.vc_ip}</td><td>{c.members}</td><td>{c.transport}</td><td className="text-xs">{c.rest_state}</td>
             <td>{c.first_poll_ok ? <Pill value="OK" tone="good" /> : <span className="text-xs text-red-700">{c.first_poll_error ?? "failed"}</span>}</td></tr>)}</tbody></table>}

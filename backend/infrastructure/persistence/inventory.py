@@ -75,11 +75,16 @@ def _match_device(db: Session, src: str, serial: str, ap: AccessPoint) -> tuple[
     return keep, keep.vendor != "aruba" or len(rows) > 1
 
 
-def sync_inventory(db: Session) -> dict[str, int]:
+def sync_inventory(db: Session, *, legacy_site_id: int | None = None) -> dict[str, int]:
     """Idempotent projection. Returns counts for the inventory.synchronised event."""
     counts = {"sites": 0, "clusters": 0, "aps": 0, "switches": 0}
     clusters_by_legacy: dict[int, InmCluster] = {c.legacy_site_id: c for c in db.scalars(select(InmCluster)) if c.legacy_site_id}
-    for s in db.scalars(select(Site)):
+    sites = select(Site)
+    aps = select(AccessPoint)
+    if legacy_site_id is not None:
+        sites = sites.where(Site.id == legacy_site_id)
+        aps = aps.where(AccessPoint.site_id == legacy_site_id)
+    for s in db.scalars(sites):
         src = _src(s.simulated)
         site = db.scalar(select(InmSite).where(InmSite.source_type == src, InmSite.name == s.name))
         if site is None:
@@ -98,7 +103,7 @@ def sync_inventory(db: Session) -> dict[str, int]:
 
     site_overrides = {row.key.removeprefix('device-site:'): row.value['site_id'] for row in db.scalars(
         select(AppSetting).where(AppSetting.key.startswith('device-site:')))}
-    for ap in db.scalars(select(AccessPoint)):
+    for ap in db.scalars(aps):
         cl = clusters_by_legacy.get(ap.site_id)
         src = _src(ap.simulated)
         serial = ap.serial or f"MAC:{ap.mac}"
@@ -125,6 +130,9 @@ def sync_inventory(db: Session) -> dict[str, int]:
         db.flush()
         _set_caps(db, dev, AP_CAPS_DEMO if ap.simulated else AP_CAPS_REAL)
         counts["aps"] += 1
+
+    if legacy_site_id is not None:
+        return counts
 
     # DEMO switches attach to the demo sites only (never to REAL sites).
     adapter = DemoSwitchAdapter()

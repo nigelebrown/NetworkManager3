@@ -110,7 +110,7 @@ export const wl = {
   approveKeys: (items: { ip: string; fingerprint: string }[]) => post<{ ip: string; approved: boolean; reason?: string }[]>(
     "/v1/wireless/autodiscover/approve-keys", { items, confirm: "APPROVE HOST KEYS" }),
   autodiscover: (auto_enable_rest: boolean, device_ids?: string[]) => post<{ state: string }>("/v1/wireless/autodiscover", { auto_enable_rest, device_ids }),
-  autodiscoverStatus: () => request<{ state: string; done?: number; total?: number; counts?: Record<string, number>;
+  autodiscoverStatus: () => request<{ state: string; done?: number; total?: number; clusters_saved?: number; counts?: Record<string, number>;
     clusters?: { name: string; vc_ip: string; members: number; transport: string; rest_state: string; first_poll_ok?: boolean; first_poll_error?: string | null }[];
     results?: { device_id: string; hostname: string; ip?: string; result: string; detail?: string | null }[]; error?: string;
     finished_at?: string }>("/v1/wireless/autodiscover/status"),
