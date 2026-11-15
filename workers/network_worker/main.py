@@ -228,7 +228,10 @@ class Worker:
             except Exception as exc:
                 self.stats["last_error"] = f"poll: {type(exc).__name__}: {exc}"
                 log.exception("poll cycle failed")
-            await self._sleep(interval - (time.time() % interval) + 0.5)
+            now = time.time()
+            # An overrun has already reached a new lease slot. Do not wait another full slot.
+            delay = 0.5 if int(now // interval) > slot else interval - (now % interval) + 0.5
+            await self._sleep(delay)
 
     def _poll_slot(self, slot: int, interval: int):
         with session_scope() as db:

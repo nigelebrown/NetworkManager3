@@ -53,6 +53,24 @@ def test_worker_prioritizes_populated_controllers_and_limits_empty_retries():
     assert _worker_poll_order(sites, {1, 5, 6}, now) == [1, 5, 0, 3]
 
 
+def test_poll_loop_does_not_wait_another_interval_after_overrun(monkeypatch):
+    from workers.network_worker import main
+
+    ticks = iter([120, 190])
+    monkeypatch.setattr(main, "time", SimpleNamespace(time=lambda: next(ticks)))
+    stopped = asyncio.Event()
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        stopped.set()
+
+    worker = SimpleNamespace(s=SimpleNamespace(poll_interval_seconds=60), stop=stopped,
+                             _poll_slot=lambda slot, interval: [], _sleep=sleep)
+    asyncio.run(main.Worker.poll_loop(worker))
+    assert delays == [0.5]
+
+
 def test_resource_readings_distinguish_vm_and_container(tmp_path):
     from backend.infrastructure.resource_pressure import resource_pressure
 
