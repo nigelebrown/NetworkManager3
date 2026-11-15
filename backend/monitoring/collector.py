@@ -28,6 +28,8 @@ log = logging.getLogger("sims.collector")
 POLL_CAPACITY_KEY = "ap-poll-capacity"
 DEFAULT_POLL_CONCURRENCY = 4
 MAX_POLL_CONCURRENCY = 8
+UNLINKED_POLL_INTERVAL = timedelta(minutes=15)
+UNLINKED_POLLS_PER_CYCLE = 2
 
 
 # ---- site visibility -------------------------------------------------------------------
@@ -285,14 +287,15 @@ def prune_old(db: Session) -> None:
 
 
 def poll_worker_sites() -> None:
-    """Poll the oldest controllers first using one independent transaction per controller."""
+    """Prioritize controllers with observed APs and bound retries for empty controllers."""
     with session_scope() as db:
         concurrency = poll_concurrency(db)
-        site_ids = [site.id for site in sorted(
-            (site for site in visible_sites(db) if site.enabled),
-            key=lambda site: (site.last_poll_at is not None, site.last_poll_at),
-        )]
-    if concurrency == 1:
+        if get_settings().mode != "live":
+            site_ids = None
+        else:
+            observed_sites = set(db.scalars(select(AccessPoint.site_id).distinct()))
+            site_ids = _worker_poll_order(visible_sites(db), observed_sites, utcnow())
+    if site_ids is None:
         poll_all()
         return
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="instant-poll") as pool:
@@ -300,3 +303,15 @@ def poll_worker_sites() -> None:
             pass
     with session_scope() as db:
         prune_old(db)
+
+
+def _worker_poll_order(sites: list[Site], observed_sites: set[int], now: datetime) -> list[int]:
+    ranked = sorted((site for site in sites if site.enabled),
+                    key=lambda site: (site.last_poll_at is not None, site.last_poll_at))
+    priority, empty_due = [], []
+    for site in ranked:
+        if site.id in observed_sites or site.simulated:
+            priority.append(site.id)
+        elif site.last_poll_at is None or now - _aware(site.last_poll_at) >= UNLINKED_POLL_INTERVAL:
+            empty_due.append(site.id)
+    return priority + empty_due[:UNLINKED_POLLS_PER_CYCLE]

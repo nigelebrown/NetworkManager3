@@ -222,10 +222,11 @@ class Worker:
         with session_scope() as db:
             if not LeaseRepo(db, self.instance).try_acquire_slot("poll_all", slot, ttl_s=interval * 2):
                 return None
+        started_at = datetime.now(timezone.utc)
         poll_worker_sites()
         with session_scope() as db:
             counts = sync_inventory(db)
-            events = self._build_events(db, slot, counts)
+            events = self._build_events(db, slot, counts, started_at)
         store = telemetry_store()
         if slot % 60 == 0 and not store.has_retention_policy():
             store.prune()
@@ -233,13 +234,18 @@ class Worker:
         self.stats["last_poll_at"] = datetime.now(timezone.utc).isoformat()
         return events
 
-    def _build_events(self, db, slot: int, counts: dict) -> list:
+    def _build_events(self, db, slot: int, counts: dict, started_at: datetime) -> list:
         src = "DEMO" if self.s.mode == "demo" else "REAL"
         cid = str(uuid.uuid5(NS, f"poll:{slot}"))
         now = datetime.now(timezone.utc)
         events = []
         devices = list(db.scalars(select(InmDevice).where(InmDevice.source_type == src)))
         aps = {a.id: a for a in db.scalars(select(AccessPoint))}
+        sites = visible_sites(db)
+        if src == "REAL":
+            sites = [s for s in sites if s.last_poll_at and
+                     (s.last_poll_at.replace(tzinfo=timezone.utc) if s.last_poll_at.tzinfo is None else s.last_poll_at) >= started_at]
+        successful_sites = {s.id: s.last_poll_at for s in sites if s.last_poll_ok}
         switch_ports = {serial: ports for _s, _h, _m, serial, ports in DEMO_SWITCHES}
         demo_sw = DemoSwitchAdapter()
         for d in devices:
@@ -247,6 +253,9 @@ class Worker:
             points = []
             if d.family == "access_point" and d.legacy_ap_id in aps:
                 a = aps[d.legacy_ap_id]
+                if src == "REAL" and a.site_id not in successful_sites:
+                    continue
+                observed_at = successful_sites[a.site_id] if src == "REAL" else now
                 radios = a.radios or []
                 util = {"2.4": None, "5": None}
                 for r in radios:
@@ -261,7 +270,7 @@ class Worker:
                                           ("util_5g_percent", util["5"], "%"), ("exp_score", a.exp_score, "score")):
                     if val is not None:  # absent metrics stay absent (unknown), never zero
                         points.append({"metric": metric, "value": float(val), "unit": unit, "collection_method": method,
-                                       "observed_at": now.isoformat(), "sample_period_s": self.s.poll_interval_seconds})
+                                       "observed_at": observed_at.isoformat(), "sample_period_s": self.s.poll_interval_seconds})
             elif d.family == "switch" and d.source_type == "DEMO":
                 from backend.domain.model import Device, DeviceFamily, SourceType
                 dev = Device(id=d.id, source_type=SourceType.DEMO, vendor=d.vendor, family=DeviceFamily.SWITCH,
@@ -277,7 +286,7 @@ class Worker:
                                     site_id=d.site_id, legacy_site_id=d.legacy_site_id, device_id=d.id,
                                     adapter_version=d.adapter, payload={"points": points,
                                     "summary": f"{d.family} {d.hostname}: {len(points)} metrics ({src})"}))
-        for site in visible_sites(db):
+        for site in sites:
             events.append(new_event(
                 "site.poll.completed" if site.last_poll_ok else "site.poll.failed", source_service=SERVICE,
                 source_type="DEMO" if site.simulated else "REAL", actor_id=SERVICE, correlation_id=cid,
