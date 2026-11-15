@@ -17,12 +17,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database.models import AccessPoint, Alert, AuditLog, ClientRecord, ConfigBackup, Site, SiteSample, User
+from ..database.models import AccessPoint, Alert, AppSetting, AuditLog, ClientRecord, ConfigBackup, Site, SiteSample, User
 from ..database.models_inm import (
     DeviceCapability, EventRecord, InmCluster, InmDevice, InmSite, RecommendationRecord, ReleaseEvent, SiteAccessGrant,
 )
 from ..database.session import get_db, session_scope
-from ..monitoring.collector import visible_sites
+from ..monitoring.collector import (
+    DEFAULT_POLL_CONCURRENCY, MAX_POLL_CONCURRENCY, POLL_CAPACITY_KEY, poll_concurrency, visible_sites,
+)
 from ..security.context import get_scope
 from ..security.crypto import hash_password
 from ..security.deps import ROLES, audit, get_current_user, require_any_role, require_role, verify_audit_chain
@@ -79,6 +81,55 @@ def services(_: User = Depends(require_any_role("admin", "auditor"))):
     result = collect(probes.all_probes())
     result["websocket_gateway"] = {"bus_connected": hub.connected_bus, "clients": len(hub.clients), "cursor": hub.cursor}
     return result
+
+
+@router.get("/system/resources")
+def system_resources(_: User = Depends(require_any_role("admin", "auditor"))):
+    from ..infrastructure.resource_pressure import resource_pressure
+
+    return resource_pressure()
+
+
+class ApPollCapacity(BaseModel):
+    concurrency: int = Field(ge=1, le=MAX_POLL_CONCURRENCY, strict=True)
+
+
+@router.get("/system/collection-capacity")
+def collection_capacity(db: Session = Depends(get_db),
+                        _: User = Depends(require_any_role("admin", "auditor"))):
+    from ..domain.collection import freshness
+
+    now = datetime.now(timezone.utc)
+    interval = get_settings().poll_interval_seconds
+    sites = [site for site in visible_sites(db) if site.enabled and not site.simulated]
+    row = db.get(AppSetting, POLL_CAPACITY_KEY)
+    return {
+        "configured": row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY,
+        "effective": poll_concurrency(db),
+        "max_concurrency": MAX_POLL_CONCURRENCY,
+        "interval_seconds": interval,
+        "controllers": len(sites),
+        "overdue": sum(site.last_poll_ok is True and
+                       freshness(site.last_poll_at, interval, now) in ("STALE", "GAP") for site in sites),
+        "failed": sum(site.last_poll_ok is False for site in sites),
+        "never_polled": sum(site.last_poll_at is None for site in sites),
+    }
+
+
+@router.put("/system/collection-capacity")
+def set_collection_capacity(body: ApPollCapacity, request: Request, db: Session = Depends(get_db),
+                            user: User = Depends(require_role("admin"))):
+    row = db.get(AppSetting, POLL_CAPACITY_KEY, with_for_update=True)
+    previous = row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY
+    if row is None:
+        row = AppSetting(key=POLL_CAPACITY_KEY)
+        db.add(row)
+    row.value = body.model_dump()
+    row.updated_at = datetime.now(timezone.utc)
+    row.updated_by = user.username
+    audit(db, "ap_poll_capacity_updated", username=user.username, target=POLL_CAPACITY_KEY,
+          detail=f"concurrency {previous} -> {body.concurrency}", request=request)
+    return {"concurrency": body.concurrency}
 
 
 @router.get("/system/features")

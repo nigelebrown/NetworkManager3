@@ -43,6 +43,8 @@ export default function SystemHealth() {
         <span className="text-xs text-slate-500">Measured {data ? fmtTime(data.checked_at) : "…"} — every status comes from a live probe</span>
       </div>
       <ErrorNote error={error} />
+      <ServerResourcesCard />
+      <CollectionCapacityCard isAdmin={isAdmin} />
       <OutboxCard />
       <Card title="Seven service roles">
         <Table head={["Role", "Status", "Latency", "Version", "Detail"]}>
@@ -75,6 +77,85 @@ export default function SystemHealth() {
       </Card>
     </div>
   );
+}
+
+function ServerResourcesCard() {
+  const { data, error } = useLoad(v1.resources, [], 15000);
+  const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  const vm = data?.vm;
+  const disk = data?.app_disk;
+  const api = data?.api_container;
+  const pressure = [
+    vm?.load_5m != null && vm.logical_cpus && vm.load_5m >= vm.logical_cpus ? "High VM load" : null,
+    vm?.memory_available != null && vm.memory_total && vm.memory_available / vm.memory_total < 0.15 ? "Low VM memory" : null,
+    disk && disk.available / disk.total < 0.2 ? "Low app data disk space" : null,
+    api?.memory_current != null && api.memory_limit && api.memory_current / api.memory_limit >= 0.9
+      ? "API container is near its memory limit" : null,
+  ].filter(Boolean);
+  return <Card title="Server and Docker resources" right={data && <span className="text-xs text-slate-500">{fmtTime(data.checked_at)}</span>}>
+    <ErrorNote error={error} />
+    {data && <>
+      {pressure.length > 0 && <p className="mb-2 font-semibold text-amber-700" role="status">{pressure.join(" · ")}</p>}
+      <Table head={["Resource", "Current reading"]}>
+        <tr><td className="p-2">VM CPU</td><td className="p-2">{vm?.logical_cpus ?? "Unavailable"} vCPUs · 5-minute load {vm?.load_5m?.toFixed(2) ?? "unavailable"}</td></tr>
+        <tr><td className="p-2">VM memory</td><td className="p-2">{vm?.memory_available != null && vm.memory_total != null
+          ? `${gib(vm.memory_available)} available of ${gib(vm.memory_total)}` : "Unavailable"}</td></tr>
+        <tr><td className="p-2">App data disk</td><td className="p-2">{disk ? `${gib(disk.available)} available of ${gib(disk.total)}` : "Unavailable"}</td></tr>
+        <tr><td className="p-2">API container</td><td className="p-2">
+          {api?.memory_current != null ? `${gib(api.memory_current)} memory used` : "Memory usage unavailable"}
+          {api?.memory_limit != null && ` · ${gib(api.memory_limit)} memory limit`}
+          {api?.cpu_limit != null && ` · ${api.cpu_limit} vCPU limit`}
+        </td></tr>
+      </Table>
+    </>}
+  </Card>;
+}
+
+function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
+  const capacity = useLoad(v1.collectionCapacity, [], 15000, ["system"]);
+  const [value, setValue] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const data = capacity.data;
+
+  const save = async (concurrency: number) => {
+    setSaving(true); setError(null); setMessage(null);
+    try {
+      await v1.setCollectionCapacity(concurrency);
+      capacity.reload();
+      setMessage("Saved. Applies at the start of the next worker polling cycle.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Saving collection capacity failed."); }
+    finally { setSaving(false); }
+  };
+
+  return <Card title="Collection capacity">
+    <ErrorNote error={capacity.error ?? error} />
+    {data && <>
+      <p className="text-sm">
+        AP controllers: {data.controllers} · {data.overdue} overdue · {data.failed} last poll failed · {data.never_polled} never polled
+      </p>
+      <p className="mt-1 text-sm">Parallel AP polls: {data.effective} · Target interval: {data.interval_seconds} seconds</p>
+      {isAdmin && <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
+        e.preventDefault();
+        void save(Number(value ?? data.configured));
+      }}>
+        <label className="flex flex-col gap-1 text-sm">Parallel AP polls
+          <input className="rounded border border-slate-300 px-2 py-1" type="number" required
+            min={1} max={data.max_concurrency} value={value ?? data.configured} onChange={e => setValue(e.target.value)} />
+        </label>
+        <button className={btnPrimary} disabled={saving || Number(value ?? data.configured) === data.configured}>
+          {saving ? "Saving…" : "Save limit"}
+        </button>
+      </form>}
+      {message && <p className="mt-2 text-sm" role="status">{message}</p>}
+      <p className="mt-3 text-sm">{data.overdue
+        ? "Successful controller polls are falling behind. Check VM headroom before increasing concurrency."
+        : data.controllers ? "No previously successful controller polls are overdue."
+          : "AP sizing recommendations need observations from enabled live controllers."}</p>
+    </>}
+    <p className="mt-2 text-sm">Syslog sizing needs sustained ingestion rate, dropped messages and delivery lag. Container replica counts are managed on the host.</p>
+  </Card>;
 }
 
 /** Transactional event outbox (collector + change engine -> ingest): nothing is acknowledged until stored. */

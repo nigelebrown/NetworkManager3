@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -14,7 +15,7 @@ from ..aruba.errors import ArubaError
 from ..aruba.monitoring import SiteSnapshot, collect_snapshot
 from ..config import get_settings
 from ..database.models import (
-    AccessPoint, Alert, ApSample, ClientEvent, ClientRecord, Site, SiteSample, utcnow,
+    AccessPoint, Alert, ApSample, AppSetting, ClientEvent, ClientRecord, Site, SiteSample, utcnow,
 )
 from ..database.session import session_scope
 from ..experience.config import load_config
@@ -24,6 +25,9 @@ from .alerts import raise_alert as _raise_alert, resolve_alerts as _resolve_aler
 from .demo import DEMO_SITES, build_demo_snapshot
 
 log = logging.getLogger("sims.collector")
+POLL_CAPACITY_KEY = "ap-poll-capacity"
+DEFAULT_POLL_CONCURRENCY = 4
+MAX_POLL_CONCURRENCY = 8
 
 
 # ---- site visibility -------------------------------------------------------------------
@@ -32,7 +36,6 @@ def visible_sites(db: Session) -> list[Site]:
     if get_settings().mode == "demo":
         cond = Site.simulated.is_(True)
     else:
-        from ..database.models import AppSetting
         row = db.get(AppSetting, "demo_dataset")
         cond = Site.simulated.in_([True, False]) if row and row.value.get("loaded") else Site.simulated.is_(False)
     sites = list(db.scalars(select(Site).where(cond).order_by(Site.name)))
@@ -247,6 +250,23 @@ def poll_site(db: Session, site: Site, transport: httpx.BaseTransport | None = N
         return False
 
 
+def poll_concurrency(db: Session) -> int:
+    if get_settings().mode != "live" or db.get_bind().dialect.name != "postgresql":
+        return 1
+    row = db.get(AppSetting, POLL_CAPACITY_KEY)
+    return row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY
+
+
+def _poll_site_transaction(site_id: int) -> None:
+    try:
+        with session_scope() as db:
+            site = db.get(Site, site_id)
+            if site and site.enabled:
+                poll_site(db, site)
+    except Exception:
+        log.exception("Could not persist controller poll for site %s", site_id)
+
+
 def poll_all() -> None:
     """Scheduler entry point."""
     with session_scope() as db:
@@ -262,3 +282,21 @@ def prune_old(db: Session) -> None:
     db.execute(delete(ApSample).where(ApSample.ts < cutoff))
     db.execute(delete(SiteSample).where(SiteSample.ts < cutoff))
     db.execute(delete(ClientEvent).where(ClientEvent.ts < cutoff))
+
+
+def poll_worker_sites() -> None:
+    """Poll the oldest controllers first using one independent transaction per controller."""
+    with session_scope() as db:
+        concurrency = poll_concurrency(db)
+        site_ids = [site.id for site in sorted(
+            (site for site in visible_sites(db) if site.enabled),
+            key=lambda site: (site.last_poll_at is not None, site.last_poll_at),
+        )]
+    if concurrency == 1:
+        poll_all()
+        return
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="instant-poll") as pool:
+        for _ in pool.map(_poll_site_transaction, site_ids):
+            pass
+    with session_scope() as db:
+        prune_old(db)

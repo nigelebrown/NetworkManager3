@@ -350,3 +350,14 @@ def test_websocket_requires_valid_token(client, admin):
         ws.send_json({"type": "auth", "token": admin["Authorization"][7:], "since": None})
         hello = ws.receive_json()
         assert hello["type"] == "hello"
+def test_collection_capacity_admin_limits_and_persistence(client, admin):
+    path = "/api/v1/system/collection-capacity"
+    initial = client.get(path, headers=admin)
+    assert initial.status_code == 200
+    assert initial.json()["configured"] == 4
+    assert client.put(path, json={"concurrency": 8}).status_code == 401
+    assert client.put(path, headers=admin, json={"concurrency": 9}).status_code == 422
+    assert client.put(path, headers=admin, json={"concurrency": 6}).json() == {"concurrency": 6}
+    saved = client.get(path, headers=admin).json()
+    assert saved["configured"] == 6
+    assert saved["effective"] == 1

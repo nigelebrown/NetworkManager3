@@ -3,6 +3,16 @@ import { request } from "./api";
 
 export interface ServiceCheck { name: string; role: string; status: "UP" | "DEGRADED" | "DOWN" | "UNKNOWN"; latency_ms: number | null; version: string | null; detail: string; checked_at: string }
 export interface Services { overall: "UP" | "DEGRADED" | "DOWN"; checked_at: string; services: ServiceCheck[]; websocket_gateway: { bus_connected: boolean; clients: number; cursor: number } }
+export interface CollectionCapacity {
+  configured: number; effective: number; max_concurrency: number; interval_seconds: number;
+  controllers: number; overdue: number; failed: number; never_polled: number;
+}
+export interface SystemResources {
+  checked_at: string;
+  vm: { logical_cpus: number | null; load_5m: number | null; memory_total: number | null; memory_available: number | null };
+  app_disk: { total: number; available: number } | null;
+  api_container: { memory_current: number | null; memory_limit: number | null; cpu_limit: number | null };
+}
 export interface Trace {
   correlation_id: string; complete: boolean;
   management_db: { event_id: string; event_type: string; ingested_at: string; delivery_count: number; source_type: string }[];
@@ -34,6 +44,10 @@ export interface Features { device_writes: string; modules: { key: string; statu
 const j = (body: unknown) => ({ body: JSON.stringify(body) });
 export const v1 = {
   services: () => request<Services>("/v1/system/services"),
+  resources: () => request<SystemResources>("/v1/system/resources"),
+  collectionCapacity: () => request<CollectionCapacity>("/v1/system/collection-capacity"),
+  setCollectionCapacity: (concurrency: number) =>
+    request<{ concurrency: number }>("/v1/system/collection-capacity", { method: "PUT", ...j({ concurrency }) }),
   features: () => request<Features>("/v1/system/features"),
   synthetic: () => request<{ correlation_id: string; event_id: string }>("/v1/system/synthetic-event", { method: "POST", ...j({}) }),
   trace: (cid: string) => request<Trace>(`/v1/system/synthetic-event/${cid}`),
