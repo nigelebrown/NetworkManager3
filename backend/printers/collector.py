@@ -227,6 +227,7 @@ class PollResult:
     operational_state: str = "UNKNOWN"
     device_status: str | None = None
     faults: list[dict] = field(default_factory=list)
+    faults_observed: bool = False
     trays: list[dict] = field(default_factory=list)
     capabilities: dict[str, dict] = field(default_factory=dict)
     unsupported_oids: list[str] = field(default_factory=list)
@@ -295,7 +296,7 @@ def select_profile(profiles: list[dict], sys_object_id: str | None, sys_descr: s
 
 
 async def poll(reader: SnmpReader, profiles: list[dict], *, now: datetime | None = None,
-               metric_filter: set[str] | None = None) -> PollResult:
+               metric_filter: set[str] | None = None, metric_budget_seconds: float = 45) -> PollResult:
     """One read-only poll. ``profiles`` are dicts (see mib.BUILTIN_PROFILES) with ``metrics`` lists."""
     now = now or datetime.now(timezone.utc)
     res = PollResult(observed_at=now, source=reader.source, reachable=False, snmp_ok=False)
@@ -322,21 +323,29 @@ async def poll(reader: SnmpReader, profiles: list[dict], *, now: datetime | None
             metric_filter |= COMPANIONS.get(key, set())
     values: dict[str, list[tuple[str, Any]]] = {}
     verification: dict[str, str] = {}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + metric_budget_seconds
+    completed = set()
     for d in profile["metrics"]:
         if metric_filter is not None and d["metric_key"] not in metric_filter and d["category"] != "identity":
             continue
         verification[d["metric_key"]] = d.get("verification", "STANDARD")
         try:
-            if d["access"] == "table":
-                rows = await reader.walk(d["oid"])
-            else:
-                v = await reader.get(d["oid"])
-                rows = [(d["oid"], v)] if v is not None else []
+            async with asyncio.timeout_at(deadline):
+                if d["access"] == "table":
+                    rows = await reader.walk(d["oid"])
+                else:
+                    v = await reader.get(d["oid"])
+                    rows = [(d["oid"], v)] if v is not None else []
+        except TimeoutError:
+            res.error = "poll time budget reached; saved available metrics"
+            break
         except SnmpUnreachable:
             res.error = "device stopped responding during poll"
             res.samples.append(Sample(d["metric_key"], d["oid"], value_state="MISSING",
                                       interpretation="no response"))
             continue
+        completed.add(d["metric_key"])
         if not rows:
             res.unsupported_oids.append(d["oid"])
             res.samples.append(Sample(d["metric_key"], d["oid"], value_state="UNSUPPORTED",
@@ -451,6 +460,9 @@ async def poll(reader: SnmpReader, profiles: list[dict], *, now: datetime | None
             seen.add(key)
             merged.append(f)
     res.faults = merged
+    fault_metrics = {d["metric_key"] for d in profile["metrics"]
+                     if d["metric_key"] in {"error_state", "alert_code"}}
+    res.faults_observed = bool(fault_metrics) and fault_metrics <= completed
     if res.device_status == "DOWN" or any(f["severity"] == "critical" for f in merged):
         res.operational_state = "ERROR" if res.operational_state in ("UNKNOWN", "OTHER", "IDLE") else res.operational_state
     ilev, imax, iname = (table("input_level", mib.PRT_INPUT_LEVEL), table("input_max", mib.PRT_INPUT_MAX),
