@@ -44,6 +44,7 @@ export default function SystemHealth() {
       </div>
       <ErrorNote error={error} />
       <ServerResourcesCard />
+      <DatabaseHealthCard />
       <CollectionCapacityCard isAdmin={isAdmin} />
       <OutboxCard />
       <Card title="Seven service roles">
@@ -77,6 +78,28 @@ export default function SystemHealth() {
       </Card>
     </div>
   );
+}
+
+function DatabaseHealthCard() {
+  const { data, error } = useLoad(v1.databaseHealth, [], 30000);
+  return <Card title="Database health" right={data && <span className="text-xs text-slate-500">{fmtTime(data.checked_at)}</span>}>
+    <ErrorNote error={error} />
+    {data && <Table head={["Database", "Pressure", "Connections", "Active", "Lock waits", "Oldest transaction", "Data size"]}>
+      {([["Management · PostgreSQL", data.management], ["Telemetry · TimescaleDB", data.timeseries]] as const)
+        .map(([label, row]) => <tr key={label}>
+          <td className="p-2">{label}</td>
+          <td className="p-2"><StatusBadge status={row.status} /></td>
+          {row.status === "UNAVAILABLE" ? <td className="p-2" colSpan={5}>Database measurements unavailable</td> : <>
+            <td className="p-2">{row.connections} / {row.connection_limit}</td>
+            <td className="p-2">{row.active}</td>
+            <td className="p-2">{row.lock_waits}</td>
+            <td className="p-2">{row.oldest_transaction_seconds == null ? "—" : `${row.oldest_transaction_seconds} s`}</td>
+            <td className="p-2">{(row.size_bytes / 1024 ** 2).toFixed(1)} MiB</td>
+          </>}
+        </tr>)}
+    </Table>}
+    <p className="mt-2 text-xs text-slate-500">Pressure is flagged at 80% connection usage or when sessions are waiting on locks.</p>
+  </Card>;
 }
 
 function ServerResourcesCard() {

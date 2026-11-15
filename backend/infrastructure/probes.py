@@ -5,6 +5,7 @@ Each returns (status, version, detail) or raises. Used by GET /api/v1/system/ser
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 import httpx
@@ -12,6 +13,35 @@ from sqlalchemy import text
 
 from ..database.session import get_engine
 from .runtime import inm_settings, log_store, nats_settings, telemetry_store
+
+log = logging.getLogger("inm.probes")
+
+
+def database_pressure(engine) -> dict:
+    if engine is None or engine.dialect.name != "postgresql":
+        return {"status": "UNAVAILABLE"}
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT count(*) AS connections,
+                       current_setting('max_connections')::int AS connection_limit,
+                       count(*) FILTER (WHERE state = 'active' AND pid <> pg_backend_pid()) AS active,
+                       count(*) FILTER (WHERE wait_event_type = 'Lock') AS lock_waits,
+                       max(extract(epoch FROM now() - xact_start))
+                           FILTER (WHERE pid <> pg_backend_pid()) AS oldest_transaction_seconds,
+                       pg_database_size(current_database()) AS size_bytes
+                FROM pg_stat_activity
+                WHERE backend_type = 'client backend'
+            """)).mappings().one()
+        snapshot = dict(row)
+        age = snapshot["oldest_transaction_seconds"]
+        snapshot["oldest_transaction_seconds"] = round(float(age), 1) if age is not None else None
+        snapshot["status"] = ("DEGRADED" if snapshot["lock_waits"] or
+                              snapshot["connections"] >= 0.8 * snapshot["connection_limit"] else "UP")
+        return snapshot
+    except Exception as exc:
+        log.warning("Database resource probe failed: %s", type(exc).__name__)
+        return {"status": "UNAVAILABLE"}
 
 
 def management_db():

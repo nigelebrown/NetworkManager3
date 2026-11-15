@@ -23,7 +23,7 @@ from ..database.models_inm import (
     DeviceCapability, EventRecord, InmCluster, InmDevice, InmSite, RecommendationRecord, ReleaseEvent, ServiceHeartbeat,
     SiteAccessGrant,
 )
-from ..database.session import get_db, session_scope
+from ..database.session import get_db, get_engine, session_scope
 from ..monitoring.collector import (
     MAX_POLL_CONCURRENCY, POLL_CAPACITY_KEYS, configured_poll_concurrency, poll_concurrency, visible_sites,
 )
@@ -99,6 +99,16 @@ def system_resources(db: Session = Depends(get_db), _: User = Depends(require_an
         "printer_poll_limit": detail.get("printer_poll_limit"),
     }
     return snapshot
+
+
+@router.get("/system/database-health")
+def database_health(_: User = Depends(require_any_role("admin", "auditor"))):
+    store = telemetry_store()
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "management": probes.database_pressure(get_engine()),
+        "timeseries": probes.database_pressure(store.engine if store is not None else None),
+    }
 
 
 class ApPollCapacity(BaseModel):
