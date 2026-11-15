@@ -28,7 +28,7 @@ from .demo import DEMO_SITES, build_demo_snapshot
 log = logging.getLogger("sims.collector")
 POLL_CAPACITY_KEY = "ap-poll-capacity"
 DEFAULT_POLL_CONCURRENCY = 35
-MAX_POLL_CONCURRENCY = 35
+MAX_POLL_CONCURRENCY = 50
 POLL_CAPACITY_KEYS = {"ap": POLL_CAPACITY_KEY, "switch": "switch-poll-capacity", "printer": "printer-poll-capacity"}
 UNLINKED_POLL_INTERVAL = timedelta(minutes=15)
 UNLINKED_POLLS_PER_CYCLE = 2
@@ -297,7 +297,7 @@ def prune_old(db: Session) -> None:
     db.execute(delete(ClientEvent).where(ClientEvent.ts < cutoff))
 
 
-def poll_worker_sites() -> None:
+def poll_worker_sites() -> int | None:
     """Prioritize controllers with observed APs and bound retries for empty controllers."""
     with session_scope() as db:
         concurrency = poll_concurrency(db)
@@ -308,12 +308,13 @@ def poll_worker_sites() -> None:
             site_ids = _worker_poll_order(visible_sites(db), observed_sites, utcnow())
     if site_ids is None:
         poll_all()
-        return
+        return None
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="instant-poll") as pool:
         for _ in pool.map(_poll_site_transaction, site_ids):
             pass
     with session_scope() as db:
         prune_old(db)
+    return len(site_ids)
 
 
 def _worker_poll_order(sites: list[Site], observed_sites: set[int], now: datetime) -> list[int]:

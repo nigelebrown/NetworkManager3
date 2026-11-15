@@ -7,6 +7,10 @@ export type PollFamily = "ap" | "switch" | "printer";
 export interface CollectionCapacity {
   configured: number; effective: number; max_concurrency: number; interval_seconds: number;
   limits: Record<PollFamily, number>;
+  performance: Record<PollFamily, {
+    monitored: number; fresh: number; failures: number;
+    batch: { count: number; seconds: number; finished_at: string } | null;
+  }>;
   controllers: number; overdue: number; failed: number; never_polled: number;
 }
 export interface SystemResources {
@@ -17,6 +21,7 @@ export interface SystemResources {
   worker: {
     checked_at: string | null;
     container: SystemResources["api_container"] | null;
+    ap_poll_limit: number | null;
     switch_poll_limit: number | null;
     printer_poll_limit: number | null;
   };
