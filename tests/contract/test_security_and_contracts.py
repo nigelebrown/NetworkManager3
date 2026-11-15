@@ -364,3 +364,12 @@ def test_collection_capacity_admin_limits_and_persistence(client, admin):
     assert saved["configured"] == 6
     assert saved["effective"] == 1
     assert saved["limits"] == {"ap": 6, "switch": 19, "printer": 21}
+
+
+def test_database_health_is_protected_and_reports_missing_measurements(client, admin):
+    path = "/api/v1/system/database-health"
+    assert client.get(path).status_code == 401
+    response = client.get(path, headers=admin)
+    assert response.status_code == 200
+    assert response.json()["management"] == {"status": "UNAVAILABLE"}
+    assert response.json()["timeseries"] == {"status": "UNAVAILABLE"}

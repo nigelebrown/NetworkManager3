@@ -21,6 +21,10 @@ export interface SystemResources {
     printer_poll_limit: number | null;
   };
 }
+export type DatabaseHealthRow = { status: "UNAVAILABLE" } | {
+  status: "UP" | "DEGRADED"; connections: number; connection_limit: number; active: number;
+  lock_waits: number; oldest_transaction_seconds: number | null; size_bytes: number;
+};
 export interface Trace {
   correlation_id: string; complete: boolean;
   management_db: { event_id: string; event_type: string; ingested_at: string; delivery_count: number; source_type: string }[];
@@ -53,6 +57,7 @@ const j = (body: unknown) => ({ body: JSON.stringify(body) });
 export const v1 = {
   services: () => request<Services>("/v1/system/services"),
   resources: () => request<SystemResources>("/v1/system/resources"),
+  databaseHealth: () => request<{ checked_at: string; management: DatabaseHealthRow; timeseries: DatabaseHealthRow }>("/v1/system/database-health"),
   collectionCapacity: () => request<CollectionCapacity>("/v1/system/collection-capacity"),
   setCollectionCapacity: (concurrency: number, family: PollFamily = "ap") =>
     request<{ concurrency: number }>("/v1/system/collection-capacity", { method: "PUT", ...j({ concurrency, family }) }),
