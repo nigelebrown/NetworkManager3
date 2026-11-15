@@ -372,7 +372,15 @@ def start_job(actor: str, *, device_ids: list[str] | None, auto_enable_rest: boo
 
 
 def job_status(db: Session) -> dict:
-    return _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
+    status = _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
+    # The worker thread belongs to this API process. Its lock cannot survive a restart.
+    if status["state"] == "RUNNING" and not _LOCK.locked():
+        return {
+            **status,
+            "state": "FAILED",
+            "error": "The API stopped before this run completed. Start a new run from AP Fleet.",
+        }
+    return status
 
 
 def wanted_ips(db: Session, device_ids: list[str] | None = None) -> list[str]:

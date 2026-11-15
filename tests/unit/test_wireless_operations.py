@@ -213,6 +213,25 @@ def test_cluster_poll_adopts_imported_ap_instead_of_duplicating(client, admin):
 
 
 # ------------------------------------------------------------------ auto-onboarding (mocked device I/O)
+def test_autodiscovery_status_recovers_abandoned_run(app_env):
+    from backend.database.session import create_schema, session_scope
+    from backend.infrastructure import ap_autodiscovery as AD
+
+    create_schema()
+    saved = {"state": "RUNNING", "done": 15, "total": 247}
+    with session_scope() as db:
+        assert AD.job_status(db) == {"state": "NEVER_RUN"}
+        AD._put(db, AD.JOB_KEY, saved, "operator")
+
+    with session_scope() as db:
+        with AD._LOCK:
+            assert AD.job_status(db) == saved
+        recovered = AD.job_status(db)
+        assert recovered["state"] == "FAILED"
+        assert (recovered["done"], recovered["total"]) == (15, 247)
+        assert "Start a new run" in recovered["error"]
+
+
 def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
     app_env.setenv("SIMS_MODE", "live")
     app_env.setenv("INM_READONLY_DEVICE_CIDRS", "10.9.9.0/24")
