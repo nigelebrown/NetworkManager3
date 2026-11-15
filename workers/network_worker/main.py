@@ -111,6 +111,9 @@ class Worker:
             await self._sleep(10)
 
     def _beat(self, detail: dict) -> None:
+        from backend.infrastructure.resource_pressure import resource_pressure
+
+        detail["container_resources"] = resource_pressure()["api_container"]
         with session_scope() as db:
             HeartbeatRepo(db).beat("network_worker", self.instance, self.inm.version, detail)
 
@@ -127,16 +130,23 @@ class Worker:
         from sqlalchemy import or_, select
         from datetime import datetime, timezone
 
+        switch_limit = 20 if self.s.mode == "live" else 8
+        self.stats["switch_poll_limit"] = switch_limit
+
         def due_plans():
             now = datetime.now(timezone.utc)
             with session_scope() as db:
                 rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
-                                         CollectionPlan.window_end_hour).where(
+                                         CollectionPlan.window_end_hour, InmDevice.family)
+                    .join(InmDevice, InmDevice.id == CollectionPlan.device_id).where(
                     CollectionPlan.state == "ACTIVE",
                     or_(CollectionPlan.next_due_at.is_(None),
                         CollectionPlan.next_due_at <= now),
                 ).order_by(CollectionPlan.next_due_at.asc().nullsfirst(), CollectionPlan.id))
-                return [row.id for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)][:8]
+                eligible = [row for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)]
+                switches = [row.id for row in eligible if row.family == "switch"][:switch_limit]
+                other = [row.id for row in eligible if row.family != "switch"][:1]
+                return switches + other
 
         def poll(plan_id):
             with session_scope() as db:
@@ -184,12 +194,14 @@ class Worker:
         """Printer Intelligence: leased read-only SNMP polling (60 s), job recovery (30 s), daily retention/recs."""
         from backend.infrastructure import scheduled_jobs as J
         from backend.printers import service as PS
+        printer_limit = min(20, max(1, int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "20"))))
+        self.stats["printer_poll_limit"] = printer_limit
         tick = 0
         while not self.stop.is_set():
             try:
                 await PS.run_due(session_scope, f"worker-{self.instance}",
                                  limit=int(os.environ.get("INM_PRINTER_POLL_BATCH", "200")),
-                                 concurrency=int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "32")))
+                                 concurrency=printer_limit)
                 with session_scope() as db:
                     PS.schedule_reports(db)
                 await PS.tick_jobs(session_scope, f"worker-{self.instance}")
@@ -222,10 +234,11 @@ class Worker:
         with session_scope() as db:
             if not LeaseRepo(db, self.instance).try_acquire_slot("poll_all", slot, ttl_s=interval * 2):
                 return None
+        started_at = datetime.now(timezone.utc)
         poll_worker_sites()
         with session_scope() as db:
             counts = sync_inventory(db)
-            events = self._build_events(db, slot, counts)
+            events = self._build_events(db, slot, counts, started_at)
         store = telemetry_store()
         if slot % 60 == 0 and not store.has_retention_policy():
             store.prune()
@@ -233,13 +246,18 @@ class Worker:
         self.stats["last_poll_at"] = datetime.now(timezone.utc).isoformat()
         return events
 
-    def _build_events(self, db, slot: int, counts: dict) -> list:
+    def _build_events(self, db, slot: int, counts: dict, started_at: datetime) -> list:
         src = "DEMO" if self.s.mode == "demo" else "REAL"
         cid = str(uuid.uuid5(NS, f"poll:{slot}"))
         now = datetime.now(timezone.utc)
         events = []
         devices = list(db.scalars(select(InmDevice).where(InmDevice.source_type == src)))
         aps = {a.id: a for a in db.scalars(select(AccessPoint))}
+        sites = visible_sites(db)
+        if src == "REAL":
+            sites = [s for s in sites if s.last_poll_at and
+                     (s.last_poll_at.replace(tzinfo=timezone.utc) if s.last_poll_at.tzinfo is None else s.last_poll_at) >= started_at]
+        successful_sites = {s.id: s.last_poll_at for s in sites if s.last_poll_ok}
         switch_ports = {serial: ports for _s, _h, _m, serial, ports in DEMO_SWITCHES}
         demo_sw = DemoSwitchAdapter()
         for d in devices:
@@ -247,6 +265,9 @@ class Worker:
             points = []
             if d.family == "access_point" and d.legacy_ap_id in aps:
                 a = aps[d.legacy_ap_id]
+                if src == "REAL" and a.site_id not in successful_sites:
+                    continue
+                observed_at = successful_sites[a.site_id] if src == "REAL" else now
                 radios = a.radios or []
                 util = {"2.4": None, "5": None}
                 for r in radios:
@@ -261,7 +282,7 @@ class Worker:
                                           ("util_5g_percent", util["5"], "%"), ("exp_score", a.exp_score, "score")):
                     if val is not None:  # absent metrics stay absent (unknown), never zero
                         points.append({"metric": metric, "value": float(val), "unit": unit, "collection_method": method,
-                                       "observed_at": now.isoformat(), "sample_period_s": self.s.poll_interval_seconds})
+                                       "observed_at": observed_at.isoformat(), "sample_period_s": self.s.poll_interval_seconds})
             elif d.family == "switch" and d.source_type == "DEMO":
                 from backend.domain.model import Device, DeviceFamily, SourceType
                 dev = Device(id=d.id, source_type=SourceType.DEMO, vendor=d.vendor, family=DeviceFamily.SWITCH,
@@ -277,7 +298,7 @@ class Worker:
                                     site_id=d.site_id, legacy_site_id=d.legacy_site_id, device_id=d.id,
                                     adapter_version=d.adapter, payload={"points": points,
                                     "summary": f"{d.family} {d.hostname}: {len(points)} metrics ({src})"}))
-        for site in visible_sites(db):
+        for site in sites:
             events.append(new_event(
                 "site.poll.completed" if site.last_poll_ok else "site.poll.failed", source_service=SERVICE,
                 source_type="DEMO" if site.simulated else "REAL", actor_id=SERVICE, correlation_id=cid,
@@ -459,8 +480,11 @@ class Worker:
             pass
 
     async def run(self) -> None:
-        await asyncio.to_thread(self.check_startup)
+        from concurrent.futures import ThreadPoolExecutor
+
         loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=28, thread_name_prefix="inm-worker"))
+        await asyncio.to_thread(self.check_startup)
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.stop.set)
         hb = asyncio.create_task(self.heartbeat_loop())

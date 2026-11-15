@@ -12,6 +12,12 @@ export interface SystemResources {
   vm: { logical_cpus: number | null; load_5m: number | null; memory_total: number | null; memory_available: number | null };
   app_disk: { total: number; available: number } | null;
   api_container: { memory_current: number | null; memory_limit: number | null; cpu_limit: number | null };
+  worker: {
+    checked_at: string | null;
+    container: SystemResources["api_container"] | null;
+    switch_poll_limit: number | null;
+    printer_poll_limit: number | null;
+  };
 }
 export interface Trace {
   correlation_id: string; complete: boolean;

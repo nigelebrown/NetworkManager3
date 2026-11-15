@@ -85,12 +85,16 @@ function ServerResourcesCard() {
   const vm = data?.vm;
   const disk = data?.app_disk;
   const api = data?.api_container;
+  const worker = data?.worker;
   const pressure = [
     vm?.load_5m != null && vm.logical_cpus && vm.load_5m >= vm.logical_cpus ? "High VM load" : null,
     vm?.memory_available != null && vm.memory_total && vm.memory_available / vm.memory_total < 0.15 ? "Low VM memory" : null,
     disk && disk.available / disk.total < 0.2 ? "Low app data disk space" : null,
     api?.memory_current != null && api.memory_limit && api.memory_current / api.memory_limit >= 0.9
       ? "API container is near its memory limit" : null,
+    worker?.container?.memory_current != null && worker.container.memory_limit &&
+      worker.container.memory_current / worker.container.memory_limit >= 0.9
+      ? "Network worker is near its memory limit" : null,
   ].filter(Boolean);
   return <Card title="Server and Docker resources" right={data && <span className="text-xs text-slate-500">{fmtTime(data.checked_at)}</span>}>
     <ErrorNote error={error} />
@@ -105,6 +109,15 @@ function ServerResourcesCard() {
           {api?.memory_current != null ? `${gib(api.memory_current)} memory used` : "Memory usage unavailable"}
           {api?.memory_limit != null && ` · ${gib(api.memory_limit)} memory limit`}
           {api?.cpu_limit != null && ` · ${api.cpu_limit} vCPU limit`}
+        </td></tr>
+        <tr><td className="p-2">Network worker container</td><td className="p-2">
+          {worker?.container?.memory_current != null ? `${gib(worker.container.memory_current)} memory used` : "Memory usage unavailable"}
+          {worker?.container?.memory_limit != null && ` · ${gib(worker.container.memory_limit)} memory limit`}
+          {worker?.container?.cpu_limit != null && ` · ${worker.container.cpu_limit} vCPU limit`}
+          {worker?.checked_at && ` · reported ${fmtTime(worker.checked_at)}`}
+        </td></tr>
+        <tr><td className="p-2">Worker poll limits</td><td className="p-2">
+          Switches {worker?.switch_poll_limit ?? "unavailable"} · Printers {worker?.printer_poll_limit ?? "unavailable"}
         </td></tr>
       </Table>
     </>}

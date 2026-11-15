@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database.models import AccessPoint, Alert, AppSetting, AuditLog, ClientRecord, ConfigBackup, Site, SiteSample, User
 from ..database.models_inm import (
-    DeviceCapability, EventRecord, InmCluster, InmDevice, InmSite, RecommendationRecord, ReleaseEvent, SiteAccessGrant,
+    DeviceCapability, EventRecord, InmCluster, InmDevice, InmSite, RecommendationRecord, ReleaseEvent, ServiceHeartbeat,
+    SiteAccessGrant,
 )
 from ..database.session import get_db, session_scope
 from ..monitoring.collector import (
@@ -84,10 +85,19 @@ def services(_: User = Depends(require_any_role("admin", "auditor"))):
 
 
 @router.get("/system/resources")
-def system_resources(_: User = Depends(require_any_role("admin", "auditor"))):
+def system_resources(db: Session = Depends(get_db), _: User = Depends(require_any_role("admin", "auditor"))):
     from ..infrastructure.resource_pressure import resource_pressure
 
-    return resource_pressure()
+    snapshot = resource_pressure()
+    worker = db.get(ServiceHeartbeat, "network_worker")
+    detail = (worker.detail or {}) if worker else {}
+    snapshot["worker"] = {
+        "checked_at": _iso(worker.beat_at) if worker else None,
+        "container": detail.get("container_resources"),
+        "switch_poll_limit": detail.get("switch_poll_limit"),
+        "printer_poll_limit": detail.get("printer_poll_limit"),
+    }
+    return snapshot
 
 
 class ApPollCapacity(BaseModel):

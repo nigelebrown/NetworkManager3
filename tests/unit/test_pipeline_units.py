@@ -24,7 +24,7 @@ def test_controller_worker_polls_sites_concurrently(monkeypatch):
     from contextlib import nullcontext
     from backend.monitoring import collector
 
-    sites = [SimpleNamespace(id=i, enabled=True, last_poll_at=None) for i in (1, 2)]
+    sites = [SimpleNamespace(id=i, enabled=True, simulated=False, last_poll_at=None) for i in (1, 2)]
     both_started = Barrier(2, timeout=5)
     completed = []
 
@@ -32,7 +32,8 @@ def test_controller_worker_polls_sites_concurrently(monkeypatch):
         both_started.wait()
         completed.append(site_id)
 
-    monkeypatch.setattr(collector, "session_scope", nullcontext)
+    monkeypatch.setattr(collector, "session_scope", lambda: nullcontext(SimpleNamespace(scalars=lambda _: [1, 2])))
+    monkeypatch.setattr(collector, "get_settings", lambda: SimpleNamespace(mode="live"))
     monkeypatch.setattr(collector, "poll_concurrency", lambda db: 2)
     monkeypatch.setattr(collector, "visible_sites", lambda db: sites)
     monkeypatch.setattr(collector, "_poll_site_transaction", poll)
@@ -40,6 +41,16 @@ def test_controller_worker_polls_sites_concurrently(monkeypatch):
 
     collector.poll_worker_sites()
     assert sorted(completed) == [1, 2]
+
+
+def test_worker_prioritizes_populated_controllers_and_limits_empty_retries():
+    from backend.monitoring.collector import _worker_poll_order
+
+    now = datetime.now(timezone.utc)
+    sites = [SimpleNamespace(id=i, enabled=i != 6, simulated=False,
+                            last_poll_at=now - timedelta(minutes=age))
+             for i, age in enumerate([45, 20, 1, 30, 25, 2, 80])]
+    assert _worker_poll_order(sites, {1, 5, 6}, now) == [1, 5, 0, 3]
 
 
 def test_resource_readings_distinguish_vm_and_container(tmp_path):
