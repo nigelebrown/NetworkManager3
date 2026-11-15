@@ -33,6 +33,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 export interface Summary {
   mode: "demo" | "live"; simulated: boolean; sites_total: number;
   aps_total: number; aps_up: number; aps_down: number; clients_total: number;
+  ap_states: Record<string, number>;
   avg_snr_db: number | null; client_quality: Record<string, number>;
   avg_channel_utilization_percent: number | null; health_score: number | null;
   user_experience_score: number | null; user_experience: ExpSummary; alerts_active: number;

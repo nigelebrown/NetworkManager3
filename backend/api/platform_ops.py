@@ -14,11 +14,10 @@ from sqlalchemy.orm import Session
 
 from ..database.models import AuditLog, User
 from ..database.models_inm import InmDevice, InmSite, RecommendationRecord
-from ..database.models_phases import ChangeAttribution, CollectionPlan, ConfigArtifact, ReportExport
+from ..database.models_phases import ChangeAttribution, ConfigArtifact, ReportExport
 from ..database.models_printer import PrinterDevice, PrinterSupplyReading
 from ..database.session import get_db
 from ..domain import adapters as AD
-from ..domain import collection as C
 from ..domain import printer_intelligence as PI
 from ..domain import reporting as R
 from ..infrastructure.phase_services import report_signing_key
@@ -115,16 +114,19 @@ def adapter_operation(key: str, op: str, user: User = Depends(require_role("view
 
 # ---- WP-11 executive reporting -------------------------------------------------------------
 def _summary(db: Session) -> dict:
+    from ..infrastructure.device_state import plans_by_device, state_of, visible_inventory
+    from ..monitoring.collector import visible_sites
+
     t = now()
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
-    plans = {p.device_id: p for p in db.scalars(select(CollectionPlan))}
+    controllers = {s.id: s for s in visible_sites(db)}
+    plans = plans_by_device(db)
     devices, fresh = [], {}
-    for d in db.scalars(select(InmDevice)):
+    for d in visible_inventory(db, set(controllers)):
         devices.append({"id": d.id, "source_type": d.source_type, "site": sites.get(d.site_id), "model": d.model})
-        p = plans.get(d.id)
-        fresh[d.id] = C.freshness(p.last_success_at, p.interval_seconds, t) if p else "NEVER"
-    from ..infrastructure.demo_dataset import status as demo_status
-    sources = ("REAL", "DEMO") if demo_status(db)["loaded"] else ("REAL",)
+        state = state_of(d, plans.get(d.id), now=t, controller=controllers.get(d.legacy_site_id))
+        fresh[d.id] = "GAP" if state["last_failure"] else state["freshness"]
+    sources = ("REAL", "DEMO") if any(s.simulated for s in controllers.values()) else ("REAL",)
     recs = [{"approval_state": r.approval_state} for r in db.scalars(
         select(RecommendationRecord).where(RecommendationRecord.source_type.in_(sources)))]
     attrs = [{"level": a.level} for a in db.scalars(select(ChangeAttribution).where(ChangeAttribution.supersedes_id.is_(None)))]

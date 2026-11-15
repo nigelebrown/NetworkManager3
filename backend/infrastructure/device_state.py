@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..database.models import Site
+from ..database.models import ClientRecord, Site
 from ..database.models_inm import InmDevice
 from ..config import get_settings
 from ..database.models_phases import CollectionPlan
@@ -49,6 +49,36 @@ def canonical_inventory(devices):
     devices = [d for d in devices if getattr(d, "lifecycle", None) != "merged"]
     projected = {inventory_identity(d) for d in devices if d.legacy_ap_id is not None}
     return [d for d in devices if d.legacy_ap_id is not None or inventory_identity(d) not in projected]
+
+
+def visible_inventory(db: Session, controller_ids: set[int], *, family: str | None = None,
+                      include_unlinked: bool = True) -> list[InmDevice]:
+    from sqlalchemy import or_
+    from ..security.context import get_scope
+
+    visible = InmDevice.legacy_site_id.in_(controller_ids)
+    if include_unlinked and get_scope() is None:
+        visible = or_(visible, (InmDevice.source_type == "REAL") & InmDevice.legacy_site_id.is_(None))
+    query = select(InmDevice).where(visible).order_by(InmDevice.family, InmDevice.hostname)
+    if family:
+        query = query.where(InmDevice.family == family)
+    return canonical_inventory(db.scalars(query))
+
+
+def fresh_wireless_clients(db: Session, controllers, now: datetime) -> list[ClientRecord]:
+    interval = get_settings().poll_interval_seconds
+    ids = [s.id for s in controllers if s.enabled and s.last_poll_ok
+           and C.freshness(s.last_poll_at, interval, now) == "FRESH"]
+    if not ids:
+        return []
+    query = select(ClientRecord).where(
+        ClientRecord.site_id.in_(ids), ClientRecord.is_connected.is_(True),
+    ).order_by(ClientRecord.last_seen.desc(), ClientRecord.id.desc())
+    latest = {}
+    for client in db.scalars(query):
+        if C.freshness(client.last_seen, interval, now) == "FRESH":
+            latest.setdefault((client.simulated, client.mac.casefold()), client)
+    return list(latest.values())
 
 
 def plans_by_device(db: Session) -> dict[str, CollectionPlan]:

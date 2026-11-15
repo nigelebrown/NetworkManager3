@@ -12,7 +12,7 @@ const QCOL: Record<string, string> = { good: "#34d399", fair: "#fbbf24", poor: "
 export default function Dashboard() {
   const [site, setSite] = useState<number | undefined>();
   const [hours, setHours] = useState(6);
-  const sum = useLoad(() => api.summary(site), [site]);
+  const sum = useLoad(() => api.summary(site), [site], 15000, ["devices", "telemetry", "sites", "clients"]);
   const hist = useLoad(() => api.history(hours, site), [site, hours]);
   const s = sum.data;
 
@@ -31,13 +31,15 @@ export default function Dashboard() {
       {s && (
         <>
           {s.coverage && s.coverage.unmonitored_aps > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            <b>Only {s.coverage.monitored_aps} of {s.coverage.inventory_aps} registered APs ({s.coverage.percent}%) are in a polled cluster.</b> Every figure below describes those APs only;
-            the other {s.coverage.unmonitored_aps} are not observed at all. <Link className="underline" to="/aps#autodiscover">Auto-onboard the rest</Link> · <Link className="underline" to="/ap-health">AP health report</Link></div>}
+            <b>{s.coverage.monitored_aps} of {s.coverage.inventory_aps} registered APs ({s.coverage.percent}%) are linked to a controller.</b>{" "}
+            <Link className="underline" to="/aps#autodiscover">Auto-onboard the rest</Link> · <Link className="underline" to="/ap-health">AP health report</Link></div>}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="Monitoring coverage" value={s.coverage ? `${s.coverage.monitored_aps} / ${s.coverage.inventory_aps}` : `${s.aps_total}`}
               tone={s.coverage && s.coverage.unmonitored_aps ? "warn" : "ok"} sub={`APs observed · ${s.sites_total} cluster(s) polled${s.clusters_failing ? `, ${s.clusters_failing} failing` : ""}`} />
-            <Stat label="APs online (observed)" value={`${s.aps_up} / ${s.aps_total}`} tone={s.aps_down ? "bad" : "ok"} sub={s.aps_down ? `${s.aps_down} offline` : "all observed APs online"} />
-            <Stat label="Wireless clients" value={s.clients_total} sub={Object.entries(s.clients_by_band ?? {}).map(([k, v]) => `${k} ${v}`).join(" · ") || undefined} />
+            <Stat label="APs online" value={`${s.ap_states.ONLINE ?? 0} / ${s.coverage?.inventory_aps ?? s.aps_total}`}
+              tone={s.ap_states.OFFLINE ? "bad" : undefined}
+              sub={`${s.ap_states.OFFLINE ?? 0} offline · ${s.ap_states.STALE ?? 0} stale · ${s.ap_states.UNKNOWN ?? 0} unknown`} />
+            <Stat label="Connected wireless clients" value={s.clients_total} sub={Object.entries(s.clients_by_band ?? {}).map(([k, v]) => `${k} ${v}`).join(" · ") || undefined} />
             <Stat label="Active alerts" value={s.alerts_active} tone={s.alerts_by_severity.critical ? "bad" : s.alerts_active ? "warn" : "ok"}
               sub={`${s.alerts_by_severity.critical} critical · ${s.alerts_by_severity.warning} warning`} />
             <Stat label="Avg client SNR" value={s.avg_snr_db != null ? `${s.avg_snr_db} dB` : NA} sub="AP-reported" />

@@ -114,7 +114,7 @@ export default function ApFleet({ mode = "aps" }: { mode?: "aps" | "rf" }) {
       <Kpi label="Online" value={s.states.ONLINE ?? 0} sub="fresh cluster observation" />
       <Kpi label="Attention needed" value={s.attention} sub={Object.entries(s.states).filter(([k]) => k !== "ONLINE").map(([k, v]) => `${v} ${k.toLowerCase()}`).join(" · ") || "none"} tone={s.attention ? "text-amber-600" : ""} />
       <Kpi label="Health tiers" value={`${s.tiers.GOLD ?? 0} / ${s.tiers.SILVER ?? 0} / ${s.tiers.BRONZE ?? 0}`} sub={`Gold / Silver / Bronze · ${s.tiers.UNRATED ?? 0} unrated`} />
-      <Kpi label="Clients" value={s.clients} sub={`${s.clusters_polled_ok} cluster(s) polling OK · ${s.clusters_failing} failing`} />
+      <Kpi label="Connected wireless clients" value={s.clients} sub={`${s.clusters_polled_ok} cluster(s) polling OK · ${s.clusters_failing} failing`} />
     </section>}
     {mode === "aps" && s && s.unlinked > 0 && <GuidePanel guide="monitoring" defaultOpen={false} />}
     {mode === "aps" && admin && <AutoOnboard onDone={fleet.reload} />}
