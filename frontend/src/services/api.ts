@@ -173,7 +173,10 @@ export const expApi = {
 
 // ---- local AI assistant (Ollama) ----
 export interface AiStatus { enabled: boolean; url: string; model: string | null; reachable: boolean | null; models: string[]; model_installed: boolean | null; error: string | null }
-export interface AiAnswer { kind: string; text: string; ai_generated: boolean; model: string; facts: Record<string, unknown>; simulated: boolean; tool?: string | null }
+export interface AiAnswer { kind: string; text: string; ai_generated: boolean; model: string | null; facts: Record<string, unknown>; simulated: boolean; tool?: string | null;
+  engine?: "LLM" | "RULES_FALLBACK"; fallback_reason?: string; read_only?: boolean;
+  citations?: { source: string; scope?: string[]; as_of?: string | null; freshness?: string; href?: string }[];
+  freshness?: { last_observation: string | null; age_minutes: number | null; state: string } }
 export const aiApi = {
   status: () => request<AiStatus>("/ai/status"),
   setModel: (model: string) => request<{ model: string }>("/ai/model", { method: "PUT", body: JSON.stringify({ model }) }),

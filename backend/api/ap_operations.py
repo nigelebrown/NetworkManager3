@@ -682,6 +682,7 @@ def device_insight(device_id: str, db: Session = Depends(get_db), user: User = D
                                        "quality": c.quality, "exp_score": c.exp_score})
             # client counts per band from this AP's connected clients
             out["client_bands"] = dict(Counter(c["band"] or "unknown" for c in out["clients"]))
+        out["ap_extras"] = ap_extras(db, d, controller)
     phys = {s.id: s.name for s in db.scalars(select(InmSite))}
     for a in db.scalars(select(InmAlert).where(InmAlert.device_id == d.id).order_by(InmAlert.opened_at.desc()).limit(25)):
         out["incidents"].append(incident_public(a, _work(db, a.id), d, phys))
@@ -689,6 +690,38 @@ def device_insight(device_id: str, db: Session = Depends(get_db), user: User = D
                     .order_by(ConfigArtifact.created_at.desc()).limit(1))
     out["config"] = {"captured": art is not None, "captured_at": _iso(art.created_at) if art else None}
     return out
+
+
+RSSI_BUCKETS = ((-60, "excellent (≥ -60 dBm)"), (-67, "good (-60 to -67)"), (-75, "fair (-67 to -75)"),
+                (-200, "poor (< -75)"))
+
+
+def ap_extras(db: Session, d, controller) -> dict:
+    """0013 AP dashboard: free memory (MiB), uplink rx/tx rates from verified counter deltas, observed radio
+    neighbours/stations by band, and the per-band signal distribution of connected stations. Gaps are explicit."""
+    from ..database.models import AccessPoint
+    ap = db.get(AccessPoint, d.legacy_ap_id) if d.legacy_ap_id is not None else None
+    obs = (ap.observations if ap is not None else None) or {}
+    mem = obs.get("memory") or {}
+    rates = obs.get("uplink_rates") or {"quality": "NO_COUNTERS"}
+    dist: dict[str, dict[str, int]] = {}
+    if controller is not None and d.hostname:
+        for c in db.scalars(select(ClientRecord).where(ClientRecord.site_id == controller.id, ClientRecord.ap_name == d.hostname,
+                                                       ClientRecord.is_connected.is_(True)).limit(2000)):
+            band = c.band or "unknown"
+            label = "unknown" if c.rssi_dbm is None else next(lbl for lim, lbl in RSSI_BUCKETS if c.rssi_dbm >= lim)
+            dist.setdefault(band, {})[label] = dist.setdefault(band, {}).get(label, 0) + 1
+    return {"observed_at": obs.get("observed_at"),
+            "memory_free_mib": mem.get("memory_free_mib"), "memory_basis": mem.get("basis") or mem.get("reason"),
+            "uplink": {"interface": (obs.get("uplink_counters") or {}).get("interface"), "rx_bps": rates.get("rx_bps"),
+                       "tx_bps": rates.get("tx_bps"), "quality": rates.get("quality"), "interval_s": rates.get("interval_s")},
+            "neighbors": {"aps": obs.get("monitor_aps") or {"total": None, "reason": "not collected yet"},
+                          "stations": obs.get("monitor_clients") or {"total": None, "reason": "not collected yet"},
+                          "source": "over-the-air monitor tables (never inferred from our own same-channel inventory)"},
+            "signal_distribution": {"by_band": dist, "source": "connected stations (show clients, RSSI)"},
+            "client_match": obs.get("client_match") or {"state": "NOT_COLLECTED", "reason": "not collected yet"},
+            "gaps": obs.get("gaps", []) if obs else ["no AP observations collected yet"],
+            "format_verification": "PARSED_FORMAT_UNVERIFIED until a hardware fixture for this model/firmware is captured"}
 
 
 # ---------------------------------------------------------------------------------------- diagnosis + AI

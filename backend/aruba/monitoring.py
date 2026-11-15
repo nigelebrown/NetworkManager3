@@ -97,15 +97,35 @@ def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
                 d["radio_stats"] = radio_stats
         except ArubaCommandError as exc:
             log.info("radio-stats unavailable for %s: %s", ip, exc)
+        obs: dict = {"gaps": [], "uplink_counters": None,
+                     "memory": {"memory_free_mib": None, "reason": "system-status not collected"}}
         try:
-            st = telemetry.parse_system_status(parsers.output_text(client.show("show ap debug system-status", iap_ip=ip)))
+            raw = parsers.output_text(client.show("show ap debug system-status", iap_ip=ip))
+            st = telemetry.parse_system_status(raw)
             if st:
                 got_any = True
                 for k, v in st.items():
                     if v is not None:
                         d[k] = v
+            mem = telemetry.parse_memory_free_mib(raw)
+            up = telemetry.parse_uplink_counters(raw)
+            obs["memory"] = mem or {"memory_free_mib": None, "reason": "no MemAvailable/MemFree line in system-status"}
+            obs["uplink_counters"] = up
+            if not up:
+                obs["gaps"].append("uplink byte counters not present in system-status output")
         except ArubaCommandError as exc:
             log.info("system-status unavailable for %s: %s", ip, exc)
+            obs["gaps"].append(f"system-status unavailable ({type(exc).__name__})")
+        for cmd, kind in (("show ap monitor ap-list", "ap"), ("show ap monitor client-list", "client")):
+            try:
+                res = telemetry.parse_monitor_list(parsers.output_text(client.show(cmd, iap_ip=ip)), kind)
+                obs[f"monitor_{kind}s"] = res or {"total": None, "reason": f"'{cmd}' returned no recognisable table"}
+            except ArubaCommandError as exc:
+                obs[f"monitor_{kind}s"] = {"total": None, "reason": f"'{cmd}' rejected ({type(exc).__name__})"}
+        obs["client_match"] = {"state": "NOT_COLLECTED",
+                               "reason": "The Client Match status command was rejected on pilot firmware; the per-band "
+                                         "signal distribution of connected stations is shown instead."}
+        d["observations"] = obs
         if got_any:
             streak = 0
         else:

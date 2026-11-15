@@ -6,6 +6,7 @@ import GuidePanel from "../components/GuidePanel";
 import { Notice, PageHeader, Pill, ago, btn, btn2, statusTone, useAction } from "../components/viz";
 import { getSession } from "../services/api";
 import { ops, type LearningItem } from "../services/ops";
+import { intel } from "../services/intel";
 
 function Row({ r, reload }: { r: LearningItem; reload: () => void }) {
   const act = useAction();
@@ -57,6 +58,7 @@ export default function LearningCentre() {
           {!models.data?.length && <li className="text-slate-500">No models. Training requires at least 20 measured, labelled outcomes.</li>}</ul>
         <Notice error={act.error} message={act.message} />
       </Card>
+      <ModelComparison reload={() => { models.reload(); hist.reload(); }} />
       <Card title="Shadow simulation — what a policy would do (no writes)">
         <p className="text-xs text-slate-400">Simulates 8 proposals 10 minutes apart with a 30-minute cooldown and a degradation after the 3rd action, to show cooldown and stop behaviour.</p>
         <button className={`${btn} mt-2`} onClick={() => act.run(async () => {
@@ -68,4 +70,25 @@ export default function LearningCentre() {
       </Card>
     </div>
   </div>;
+}
+
+
+function ModelComparison({ reload }: { reload: () => void }) {
+  const cmp = useLoad(intel.modelsCompare, [], 60000);
+  const act = useAction();
+  const me = getSession();
+  return <Card title="Model comparison & rollback">
+    <p className="text-xs text-slate-400">Holdout Brier score against the constant-prior baseline (lower is better). {cmp.data?.baseline}.</p>
+    <table className="mt-2 w-full text-xs"><thead><tr className="text-left uppercase text-slate-500"><th>Model</th><th>Status</th><th>Holdout Brier</th><th>Baseline</th><th>Improvement</th><th>Limitations</th><th></th></tr></thead>
+      <tbody>{(cmp.data?.models ?? []).map(m => <tr key={m.id} className="border-t border-slate-800 align-top">
+        <td>{m.name}<div className="font-mono text-[10px] text-slate-500">{String(m.dataset_sha256).slice(0, 12)} · split {JSON.stringify(m.split)}</div></td>
+        <td><Pill value={m.status} tone={m.status === "PROMOTED" ? "good" : m.status === "REJECTED" || m.status === "ROLLED_BACK" ? "poor" : "fair"} /></td>
+        <td>{m.holdout?.brier ?? "—"}</td><td>{m.baseline_brier ?? "—"}</td><td>{m.brier_improvement ?? "—"}</td>
+        <td>{(m.limitations ?? []).join("; ")}</td>
+        <td>{m.status === "PROMOTED" && me && ["admin", "approver"].includes(me.role) &&
+          <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { const r = await intel.rollback(m.id); cmp.reload(); reload();
+            return r.mode === "RULES_ONLY" ? "Rolled back to rules only." : `Rolled back; model ${r.active?.slice(0, 8)} active again.`; })}>Roll back</button>}</td>
+      </tr>)}{!cmp.data?.models.length && <tr><td colSpan={7} className="py-3 text-center text-slate-500">No models trained yet.</td></tr>}</tbody></table>
+    <Notice error={act.error} message={act.message} />
+  </Card>;
 }

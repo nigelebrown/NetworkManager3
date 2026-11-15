@@ -118,6 +118,8 @@ def test_monitoring_uses_verified_commands_and_preserves_partial_snapshot(monkey
                 return {"Command output": RADIO_STATS}
             if command == "show ap debug system-status":
                 raise ArubaCommandError("unsupported on test fixture")
+            if command in ("show ap monitor ap-list", "show ap monitor client-list"):
+                raise ArubaCommandError("rejected on test fixture")
             raise AssertionError(f"Unexpected command: {command}")
 
     snap = SiteSnapshot(aps=[{"name": "test-ap", "ip": "10.0.0.10", "status": "up"}])
@@ -130,5 +132,9 @@ def test_monitoring_uses_verified_commands_and_preserves_partial_snapshot(monkey
     assert len(ap["rf_channels"]) == 2
     assert not snap.warnings
     assert [c[0] for c in calls] == [
-        "show ap arm rf-summary", "show ap debug radio-stats", "show ap debug system-status"
+        "show ap arm rf-summary", "show ap debug radio-stats", "show ap debug system-status",
+        "show ap monitor ap-list", "show ap monitor client-list",
     ]
+    # Rejected optional commands never break the snapshot; the gap is recorded instead of a value.
+    assert ap["observations"]["monitor_aps"]["total"] is None and "rejected" in ap["observations"]["monitor_aps"]["reason"]
+    assert ap["observations"]["uplink_counters"] is None

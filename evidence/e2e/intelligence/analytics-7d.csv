@@ -1,0 +1,15 @@
+﻿# window,7d
+# source,REAL
+# generated,2026-11-15T02:19:56.300114+00:00
+# reconciled,True
+# devices,8
+# no_data,1
+site,hostname,family,model,source_type,freshness,samples,expected_samples,coverage,cpu_avg,cpu_p95,memory_avg,memory_p95,util_5g_p95,clients_avg,alerts_opened,changes_requested,last_observed
+Lab HQ,lab-ap-busy-1,access_point,AP-535,REAL,FRESH,170,,,45.86,96.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.536157+00:00
+Lab HQ,lab-ap-busy-2,access_point,AP-535,REAL,FRESH,170,,,45.86,96.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.538730+00:00
+Lab Annex,lab-ap-busy-3,access_point,AP-535,REAL,FRESH,170,,,45.86,96.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.541243+00:00
+Lab HQ,lab-ap-calm-1,access_point,AP-535,REAL,FRESH,170,,,34.01,35.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.543781+00:00
+Lab Annex,lab-ap-calm-2,access_point,AP-535,REAL,FRESH,170,,,34.01,35.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.546397+00:00
+Lab Annex,lab-ap-calm-3,access_point,AP-535,REAL,FRESH,170,,,34.01,35.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.549130+00:00
+Lab HQ,lab-ap-new,access_point,AP-535,REAL,FRESH,51,,,44.71,96.0,55.0,55.0,,,0,0,2026-11-15T02:16:09.551580+00:00
+Lab Annex,lab-sw-silent,switch,CX 6200,REAL,NO_DATA,0,,,,,,,,,0,0,

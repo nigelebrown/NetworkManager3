@@ -91,3 +91,55 @@ def notifications() -> dict | None:
     from .notifications import sweep
     with session_scope() as db:
         return sweep(db)
+
+
+# ---- Printer Intelligence (read-only SNMP) -------------------------------------------------------
+def _owner(prefix: str) -> str:
+    import socket
+    return f"{prefix}-{socket.gethostname()}-{os.getpid()}"
+
+
+def printer_polls() -> dict | None:
+    """Leased, fair, failure-isolated polling of due printers (scales horizontally across workers)."""
+    if not _on("INM_PRINTER_POLLING"):
+        return None
+    import asyncio
+    from ..printers import service as PS
+    limit = int(os.environ.get("INM_PRINTER_POLL_BATCH", "200"))
+    conc = int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "32"))
+    return asyncio.run(PS.run_due(session_scope, _owner("printer-poller"), limit=limit, concurrency=conc))
+
+
+def printer_jobs() -> dict:
+    """Queue scheduled report jobs, then run queued/orphaned printer jobs (restart recovery)."""
+    import asyncio
+    from ..printers import service as PS
+    with session_scope() as db:
+        scheduled = PS.schedule_reports(db)
+    ran = asyncio.run(PS.tick_jobs(session_scope, _owner("printer-jobs")))
+    return {"scheduled_reports": len(scheduled), "jobs_run": ran}
+
+
+def printer_daily() -> dict:
+    """Retention (raw → daily aggregates) and recommendation refresh, once a day."""
+    from ..printers import service as PS
+    from ..database.models_printer import PrinterDevice
+    from sqlalchemy import select
+    with session_scope() as db:
+        retention = PS.apply_retention(db)
+        recs = PS.sync_recommendations(db, list(db.scalars(select(PrinterDevice))), "printer-scheduler")
+    return {"retention": retention, "recommendations": recs}
+
+
+def predictive() -> dict | None:
+    """Score finished prediction windows, then issue a new run (needs the telemetry store)."""
+    if not _on("INM_SCHEDULED_PREDICTIVE"):
+        return None
+    from .runtime import telemetry_store
+    if telemetry_store() is None:
+        return None
+    from ..api.intelligence import run_predictions, score_predictions
+    with session_scope() as db:
+        scored = score_predictions(db)
+        run = run_predictions(db, actor="predictive-scheduler")
+        return {"scored": scored["scored"], "run": run.id, "validation": run.validation_state}

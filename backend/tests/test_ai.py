@@ -64,10 +64,14 @@ def _operator(client):
 
 
 # ---- gating / settings -----------------------------------------------------------------------------------
-def test_disabled_by_default(client, admin_headers):
+def test_disabled_by_default_answers_from_rules(client, admin_headers):
+    """Model off → deterministic rules answer, clearly labelled, with the reason and citations."""
     assert client.get("/api/ai/status", headers=admin_headers).json()["enabled"] is False
     r = client.post("/api/ai/summary", json={}, headers=admin_headers)
-    assert r.status_code == 409 and "SIMS_OLLAMA_ENABLED" in r.json()["detail"]
+    assert r.status_code == 200
+    body = r.json()
+    assert body["engine"] == "RULES_FALLBACK" and body["ai_generated"] is False and body["read_only"] is True
+    assert "SIMS_OLLAMA_ENABLED" in body["fallback_reason"] and body["citations"]
 
 
 def test_remote_ollama_refused_unless_explicitly_allowed():
@@ -96,16 +100,19 @@ def test_unreachable_ollama_gives_friendly_error_and_releases_lock(client, admin
     _poll_demo()
     ai_on.down = True
     r = client.post("/api/ai/summary", json={}, headers=admin_headers)
-    assert r.status_code == 503 and "Is it running" in r.json()["detail"]
+    assert r.status_code == 200 and r.json()["engine"] == "RULES_FALLBACK"
+    assert "Is it running" in r.json()["fallback_reason"]
     ai_on.down = False
-    assert client.post("/api/ai/summary", json={}, headers=admin_headers).status_code == 200  # lock was released
+    again = client.post("/api/ai/summary", json={}, headers=admin_headers)
+    assert again.status_code == 200 and again.json()["engine"] == "LLM"  # lock was released
 
 
-def test_busy_assistant_returns_429(client, admin_headers, ai_on):
+def test_busy_assistant_falls_back_to_rules(client, admin_headers, ai_on):
     _poll_demo()
     assert ai_api._busy.acquire(blocking=False)
     try:
-        assert client.post("/api/ai/summary", json={}, headers=admin_headers).status_code == 429
+        r = client.post("/api/ai/summary", json={}, headers=admin_headers)
+        assert r.status_code == 200 and r.json()["engine"] == "RULES_FALLBACK" and "busy" in r.json()["fallback_reason"]
     finally:
         ai_api._busy.release()
 

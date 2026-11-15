@@ -42,17 +42,22 @@ def _rows(db: Session) -> list:
     ).order_by(InmDevice.last_observed_at.desc()).limit(100)))
 
 def _overview(db: Session) -> dict:
+    from ..database.models_phases import CollectionPlan
+    from ..infrastructure import rule_store as rule_catalog
     store = _store()
     now = datetime.now(timezone.utc)
+    rules = rule_catalog.effective(db, "DEVICE_INSIGHTS")
+    lookback = max(24, int(rules.get("PHASE4_NOT_MONITORED", {}).get("params", {}).get("lookback_hours", 24)))
+    plans = {p.device_id: p for p in db.scalars(select(CollectionPlan))}
     devices = []
     for device in _rows(db):
         try:
             readings = store.query(device_id=device.id, metric_name=None,
-                                   since=now-timedelta(hours=24), limit=250)
+                                   since=now-timedelta(hours=lookback), limit=1000)
         except Exception:
             # Never present unavailable telemetry storage as a healthy device.
             raise HTTPException(503, "Telemetry query unavailable; no status can be inferred.")
-        devices.append(summarize(device, readings, now=now))
+        devices.append(summarize(device, readings, now=now, rules=rules, plan=plans.get(device.id)))
     return {
         "device_count": len(devices), "limit": 100,
         "engine": "RULE", "ml_trained": False,
@@ -81,37 +86,33 @@ def analyze_now(request: Request, db: Session = Depends(get_db),
 
 def analyze_recorded(db: Session, *, actor: str, request: Request | None = None) -> dict:
     """Analyze Now and the hourly scheduled analysis share this function."""
+    from ..infrastructure import rule_store as rule_catalog
+    from ..infrastructure import recommendation_store as RS
     result = _overview(db)
     now = datetime.now(timezone.utc)
-    created = 0
+    rules = rule_catalog.effective(db, "DEVICE_INSIGHTS")
+    devs = {d.id: d for d in _rows(db)}
+    counts = {"CREATED": 0, "UPDATED": 0, "SUPPRESSED": 0}
     for device in result["devices"]:
         for finding in device["findings"]:
-            old = db.scalar(select(RecommendationRecord).where(
-                RecommendationRecord.device_id == device["device_id"],
-                RecommendationRecord.rule_id == finding["rule_id"],
-                RecommendationRecord.source_type == "REAL",
-                RecommendationRecord.created_at >= now-timedelta(minutes=30)
-            ).order_by(RecommendationRecord.created_at.desc()).limit(1))
-            if old:
-                continue
-            rec = RecommendationRecord(
-                device_id=device["device_id"], legacy_site_id=None,
-                engine="RULE", rule_id=finding["rule_id"], rule_version="1.0",
-                source_type="REAL", risk=finding["risk"],
-                title=finding["title"], explanation=finding["explanation"],
-                evidence={"metric": finding["metric"],
-                          "samples": finding["samples"],
-                          "threshold": finding["threshold"],
-                          "collection_method": finding["collection_method"]},
-                input_window="30m", approval_state="ADVISORY",
-                requested_by=actor, correlation_id=str(uuid.uuid4()))
-            db.add(rec)
-            created += 1
+            rule = rules.get(finding["rule_id"], {})
+            _, outcome = RS.upsert(
+                db, rule_id=finding["rule_id"], rule_version=finding.get("rule_version", "1"), engine="RULE",
+                title=f"{device['hostname'] or device['device_id'][:8]}: {finding['title']}",
+                explanation=finding["explanation"],
+                evidence={"metric": finding["metric"], "samples": finding["samples"], "threshold": finding["threshold"],
+                          "collection_method": finding["collection_method"],
+                          "last_observation": finding.get("last_observation")},
+                risk=finding["risk"], source_type="REAL", actor=actor, device_id=device["device_id"],
+                legacy_site_id=getattr(devs.get(device["device_id"]), "legacy_site_id", None),
+                reason_codes=[finding["rule_id"]], input_window="recorded telemetry",
+                suppression_minutes=int(rule.get("suppression_minutes", 30)), now=now)
+            counts[outcome] += 1
     audit(db, "phase4_recorded_data_analysis", username=actor,
-          detail=f"evaluated={len(result['devices'])} created={created}; RULE, NO writes",
-          request=request)
-    return {"created": created, "evaluated_devices": len(result["devices"]),
-            "engine": "RULE", "ml_trained": False, **read_only()}
+          detail=f"evaluated={len(result['devices'])} created={counts['CREATED']} updated={counts['UPDATED']} "
+                 f"suppressed={counts['SUPPRESSED']}; RULE, NO writes", request=request)
+    return {"created": counts["CREATED"], "updated": counts["UPDATED"], "suppressed": counts["SUPPRESSED"],
+            "evaluated_devices": len(result["devices"]), "engine": "RULE", "ml_trained": False, **read_only()}
 
 
 def _public(rec: RecommendationRecord) -> dict:

@@ -129,12 +129,18 @@ def test_maintenance_service_history_and_rule_analysis(client, admin):
     assert len(client.get(f"/api/printers/{did}", headers=admin).json()["maintenance"]) == 1
 
 
-def test_role_and_site_safety_only_admin_can_view_or_modify_printer_records(client, admin):
-    register(client, admin)
+def test_role_and_site_safety_platform_rbac_and_site_scope(client, admin):
+    """SRS: printers reuse platform RBAC. Viewers/operators read within their site scope; only admins
+    change records. A site-scoped user never sees printers outside granted sites (or unassigned ones)."""
+    did = register(client, admin).json()["id"]
     operator = make_user(client, admin, "printer.operator", "operator")
-    assert client.get("/api/printers", headers=operator).status_code == 403
-    assert register(client, operator, serial="NEW") .status_code == 403
+    assert [p["id"] for p in client.get("/api/printers", headers=operator).json()] == [did]
+    assert register(client, operator, serial="NEW").status_code == 403
+    assert client.put(f"/api/printers/{did}/monitoring", headers=operator, json={"enabled": False}).status_code == 403
     assert client.get("/api/printers").status_code == 401
+    scoped = make_user(client, admin, "printer.scoped", "viewer", scope="granted", grants=[])
+    assert client.get("/api/printers", headers=scoped).json() == []
+    assert client.get(f"/api/printers/{did}", headers=scoped).status_code == 404
 
 
 def test_snmp_probe_default_off_does_not_expose_credentials(client, admin, monkeypatch):

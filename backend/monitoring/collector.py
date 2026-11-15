@@ -52,6 +52,17 @@ def ensure_demo_sites(db: Session) -> None:
 
 
 # ---- persistence -----------------------------------------------------------------------
+def merge_observations(prev: dict | None, new: dict, at: str) -> dict:
+    """Keep the newest raw counters and derive uplink rates only from two timed samples (0013)."""
+    from ..aruba.telemetry import uplink_rates
+    prev = prev or {}
+    out = {**new, "observed_at": at}
+    cur = new.get("uplink_counters")
+    out["uplink_rates"] = uplink_rates(prev.get("uplink_counters"), cur, prev.get("observed_at"), at) if cur else \
+        {"rx_bps": None, "tx_bps": None, "quality": "NO_COUNTERS"}
+    return out
+
+
 def _ap_key(ap: dict) -> str:
     return ap.get("mac") or "na:" + hashlib.sha1(str(ap.get("name")).encode()).hexdigest()[:12]
 
@@ -105,6 +116,8 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
             ap.memory_percent = d.get("memory_percent")
             ap.client_count = d.get("client_count")
             ap.radios = d.get("radios")
+            if d.get("observations") is not None:
+                ap.observations = merge_observations(ap.observations, d["observations"], now.isoformat())
             _resolve_alerts(db, site_id=site.id, ap_id=ap.id, kind="ap_offline")
         else:
             ap.client_count = 0

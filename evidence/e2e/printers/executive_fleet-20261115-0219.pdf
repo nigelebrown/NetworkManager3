@@ -1,0 +1,32 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+4 0 obj
+<< /Length 1128 >>
+stream
+BT /F1 8 Tf 30 560 Td 10 TL (Executive fleet summary) ' (Generated 2026-11-15 02:19 UTC) ' (report: Executive fleet summary) ' (period: 2025-11-15 to 2026-11-15) ' (filters: {}) ' (printers_in_scope: 8) ' (basis: Validated counter intervals; missing coverage is reported, never filled with zeros) ' () ' (metric                       value                        basis                       ) ' (---------------------------------------------------------------------------------------) ' (Printers in scope            8                            inventory                   ) ' (Monitored \(read-only SNMP\)   7                            monitoring enabled          ) ' (Median health score          100.0                        6 printers with evidence    ) ' (Measured volume in period    389772.0                     validated counter intervals ) ' (Mean measurement coverage    0.275                        share of period covered     ) ' (Open printer faults          0                            device-reported, not yet cle) ' (Recommendations awaiting rev 10                           rules printer-rules-2.0.0   ) ' ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000183 00000 n 
+0000001363 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1489
+%%EOF

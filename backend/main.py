@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, management_approvals, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
 from .api import collection, attribution, vault, change_control, replacement, learning, optimization, platform_ops, operations_center, production_ops, workflows, insights, notifications, port_groups
-from .api import ap_operations, incidents, guides, discovery_rules
+from .api import ap_operations, incidents, guides, discovery_rules, printers_srs, intelligence
 from .config import ROOT_DIR, get_settings
 from .database.models import User
 from .database.session import assert_schema_current, create_schema, init_engine, session_scope
@@ -110,6 +110,10 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(J.safe(J.notifications), "interval", seconds=20, max_instances=1, coalesce=True, id="notify")
         scheduler.add_job(J.safe(J.scheduled_analysis), "interval", hours=1, max_instances=1, coalesce=True, id="analysis")
         scheduler.add_job(J.safe(J.optimizer), "interval", minutes=5, max_instances=1, coalesce=True, id="optimizer")
+        scheduler.add_job(J.safe(J.printer_polls), "interval", seconds=60, max_instances=1, coalesce=True, id="printer_polls")
+        scheduler.add_job(J.safe(J.printer_jobs), "interval", seconds=30, max_instances=1, coalesce=True, id="printer_jobs")
+        scheduler.add_job(J.safe(J.printer_daily), "interval", hours=24, max_instances=1, coalesce=True, id="printer_daily")
+        scheduler.add_job(J.safe(J.predictive), "interval", hours=6, max_instances=1, coalesce=True, id="predictive")
         scheduler.start()
 
     stop = asyncio.Event()
@@ -229,7 +233,7 @@ def create_app() -> FastAPI:
         resp.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else resp.headers.get("Cache-Control", "no-cache")
         return resp
 
-    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, management_approvals.router, printers.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
+    for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, management_approvals.router, printers.router, printers_srs.router, intelligence.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
               collection.router, attribution.router, vault.router, change_control.router, replacement.router,
               learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router, port_groups.router,
               workflows.router, insights.router, notifications.router, ap_operations.router, incidents.router, guides.router, discovery_rules.router):

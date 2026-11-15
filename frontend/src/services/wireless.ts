@@ -91,7 +91,7 @@ export interface Insight {
   series_available: string[]; ap: FleetAp | null;
   clients: { id: number; mac: string; hostname: string | null; ssid: string | null; band: string | null; channel: string | null;
     snr_db: number | null; speed_mbps: number | null; quality: string | null; exp_score: number | null }[];
-  client_bands?: Record<string, number>; incidents: Incident[]; config: { captured: boolean; captured_at: string | null };
+  client_bands?: Record<string, number>; ap_extras?: ApExtras; incidents: Incident[]; config: { captured: boolean; captured_at: string | null };
 }
 export interface ClusterOpt {
   cluster: FleetCluster; platform_blockers: string[];
@@ -152,3 +152,10 @@ export const TIER_TONE: Record<string, "good" | "fair" | "poor" | "none"> = { GO
 export const STATE_TONE = (s: string): "good" | "fair" | "poor" | "none" =>
   s === "ONLINE" ? "good" : s === "OFFLINE" ? "poor" : s === "DEGRADED" || s === "STALE" ? "fair" : "none";
 export const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v)}%`;
+
+export type ApExtras = { observed_at: string | null; memory_free_mib: number | null; memory_basis: string | null;
+  uplink: { interface: string | null; rx_bps: number | null; tx_bps: number | null; quality: string; interval_s?: number };
+  neighbors: { aps: { total: number | null; by_band?: Record<string, number>; by_type?: Record<string, number>; reason?: string };
+    stations: { total: number | null; by_band?: Record<string, number>; reason?: string }; source: string };
+  signal_distribution: { by_band: Record<string, Record<string, number>>; source: string };
+  client_match: { state: string; reason: string }; gaps: string[]; format_verification: string };

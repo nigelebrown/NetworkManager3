@@ -42,7 +42,26 @@ loki.source.syslog "inm" {
     labels        = { source = "syslog", format = "rfc3164" }
   }
   relabel_rules = loki.relabel.syslog.rules
-  forward_to    = [loki.write.local.receiver]
+  forward_to    = [loki.process.syslog_fixups.receiver]
+}
+
+// Aruba Instant puts the year in the BSD header ("Nov 14 2026 19:31:02 <host> ..."): the RFC 3164 parser then
+// labels host="2026" and the real host is the first token after the time in the message. Correct only that shape
+// and mark it, so inventory mapping never relies on guesswork. Mirrors backend/domain/syslog_host.py.
+loki.process "syslog_fixups" {
+  forward_to = [loki.write.local.receiver]
+  stage.match {
+    selector = "{host=~\"(19|20)[0-9]{2}\"}"
+    stage.regex {
+      expression = "^\\s*\\d{1,2}:\\d{2}:\\d{2}(\\.\\d+)?\\s+(?P<real_host>[A-Za-z0-9][A-Za-z0-9._:-]*)"
+    }
+    stage.labels {
+      values = { host = "real_host" }
+    }
+    stage.static_labels {
+      values = { host_correction = "YEAR_AS_HOST_CORRECTED" }
+    }
+  }
 }
 
 loki.write "local" {

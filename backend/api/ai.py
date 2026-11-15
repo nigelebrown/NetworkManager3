@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..ai import context, prompts
+from ..ai import context, fallback, prompts
 from ..ai.ollama import OllamaClient, OllamaError, build_client
 from ..config import get_settings
 from ..database.models import AppSetting, ClientRecord, User, utcnow
@@ -66,7 +66,30 @@ def _chat(sess: _Session, user_prompt: str, **kw: Any) -> str:
 
 
 def _reply(kind: str, text: str, model: str, facts: dict[str, Any], simulated: bool, **extra: Any) -> dict[str, Any]:
-    return {"kind": kind, "text": text, "ai_generated": True, "model": model, "facts": facts, "simulated": simulated, **extra}
+    return {"kind": kind, "text": text, "ai_generated": True, "engine": "LLM", "model": model, "facts": facts,
+            "simulated": simulated, "read_only": True, **extra}
+
+
+def _try_session(db: Session) -> tuple["_Session | None", str | None]:
+    """The on-prem model is optional: disabled, unreachable or busy → deterministic rules fallback."""
+    try:
+        return _Session(db), None
+    except HTTPException as exc:
+        if exc.status_code in (409, 429, 503):
+            return None, str(exc.detail)
+        raise
+
+
+def _chat_or_none(sess: "_Session", prompt: str, **kw: Any) -> tuple[str | None, str | None]:
+    try:
+        return sess.client.chat([{"role": "system", "content": prompts.SYSTEM}, {"role": "user", "content": prompt}], **kw), None
+    except OllamaError as exc:     # timeout / model error mid-request
+        return None, f"model call failed ({str(exc)[:120]})"
+
+
+def _fallback_reply(kind: str, text: str, facts: dict[str, Any], simulated: bool, reason: str, **extra: Any) -> dict[str, Any]:
+    return {"kind": kind, "text": text, "ai_generated": False, "engine": "RULES_FALLBACK", "model": None,
+            "fallback_reason": reason, "facts": facts, "simulated": simulated, "read_only": True, **extra}
 
 
 def _audit(db: Session, request: Request, user: User, what: str, model: str) -> None:
@@ -131,10 +154,21 @@ def explain_client(client_id: int, request: Request, db: Session = Depends(get_d
     facts = {"client": alias(c.mac), "ap": c.ap_name, "ssid": c.ssid, "score": result["score"], "band": result["band"],
              "inputs": result["inputs"], "unavailable": result["unavailable"], "partial": result["partial"],
              "not_measured": context.NOT_MEASURED}
-    with _Session(db) as s:
-        text = _chat(s, prompts.EXPLAIN.format(data=prompts.data_block(facts)))
-        _audit(db, request, user, "explain_client", s.client.model or "")
-        return _reply("explain", text, s.client.model or "", facts, c.simulated)
+    ids = [c.site_id]
+    extra = {"citations": fallback.citations(db, ids, None), "freshness": fallback.freshness(db, ids)}
+    sess, why = _try_session(db)
+    if sess is not None:
+        with sess as s:
+            text, err = _chat_or_none(s, prompts.EXPLAIN.format(data=prompts.data_block(facts)))
+            if text is not None:
+                _audit(db, request, user, "explain_client", s.client.model or "")
+                return _reply("explain", text, s.client.model or "", facts, c.simulated, **extra)
+            why = err
+    inputs = ", ".join(f"{k} {v.get('value') if isinstance(v, dict) else v}" for k, v in (result["inputs"] or {}).items())
+    text = (f"Score {result['score']} ({result['band']}) for {facts['client']} on {c.ap_name or 'unknown AP'}. "
+            f"Measured inputs: {inputs or 'none'}. Unavailable: {', '.join(result['unavailable'] or {}) or 'none'}.")
+    _audit(db, request, user, "explain_client:fallback", "rules")
+    return _fallback_reply("explain", text, facts, c.simulated, why or "model unavailable", **extra)
 
 
 class SummaryBody(BaseModel):
@@ -146,10 +180,17 @@ class SummaryBody(BaseModel):
 def summary(body: SummaryBody, request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("operator"))):
     ids = _site_ids(db, body.site_id)
     facts = context.site_facts(db, ids, body.hours, context.Pseudonyms())
-    with _Session(db) as s:
-        text = _chat(s, prompts.SUMMARY.format(hours=body.hours, data=prompts.data_block(facts)), max_tokens=900)
-        _audit(db, request, user, "summary", s.client.model or "")
-        return _reply("summary", text, s.client.model or "", facts, facts["simulated"])
+    extra = {"citations": fallback.citations(db, ids, None), "freshness": fallback.freshness(db, ids)}
+    sess, why = _try_session(db)
+    if sess is not None:
+        with sess as s:
+            text, err = _chat_or_none(s, prompts.SUMMARY.format(hours=body.hours, data=prompts.data_block(facts)), max_tokens=900)
+            if text is not None:
+                _audit(db, request, user, "summary", s.client.model or "")
+                return _reply("summary", text, s.client.model or "", facts, facts["simulated"], **extra)
+            why = err
+    _audit(db, request, user, "summary:fallback", "rules")
+    return _fallback_reply("summary", fallback.summary_text(facts), facts, facts["simulated"], why or "model unavailable", **extra)
 
 
 class RecommendBody(BaseModel):
@@ -160,10 +201,17 @@ class RecommendBody(BaseModel):
 def recommend(body: RecommendBody, request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("operator"))):
     ids = _site_ids(db, body.site_id)
     facts = context.site_facts(db, ids, 24, context.Pseudonyms())
-    with _Session(db) as s:
-        text = _chat(s, prompts.RECOMMEND.format(data=prompts.data_block(facts)), max_tokens=900)
-        _audit(db, request, user, "recommend", s.client.model or "")
-        return _reply("recommend", text, s.client.model or "", facts, facts["simulated"])
+    extra = {"citations": fallback.citations(db, ids, None), "freshness": fallback.freshness(db, ids)}
+    sess, why = _try_session(db)
+    if sess is not None:
+        with sess as s:
+            text, err = _chat_or_none(s, prompts.RECOMMEND.format(data=prompts.data_block(facts)), max_tokens=900)
+            if text is not None:
+                _audit(db, request, user, "recommend", s.client.model or "")
+                return _reply("recommend", text, s.client.model or "", facts, facts["simulated"], **extra)
+            why = err
+    _audit(db, request, user, "recommend:fallback", "rules")
+    return _fallback_reply("recommend", fallback.recommend_text(facts), facts, facts["simulated"], why or "model unavailable", **extra)
 
 
 class AskBody(BaseModel):
@@ -193,20 +241,39 @@ def ask(body: AskBody, request: Request, db: Session = Depends(get_db), user: Us
     question = re.sub(r"[\x00-\x1f\x7f]+", " ", body.question).strip()
     alias = context.Pseudonyms()
     tools = "\n".join(f"- {n}: {d}" for n, (d, _, _) in context.TOOLS.items())
-    with _Session(db) as s:
-        raw = _chat(s, prompts.ROUTER.format(tools=tools, question=question), json_mode=True, max_tokens=120)
-        choice = _parse_tool_choice(raw)
-        if choice is None:
-            _audit(db, request, user, "ask:no-tool", s.client.model or "")
-            return _reply("ask", "I can't answer that from the data SIMS collects. I can answer questions about: "
-                          + "; ".join(d.rstrip('.') for d, _, _ in context.TOOLS.values()) + ".",
-                          s.client.model or "", {}, False, tool=None)
-        name, args = choice
-        try:
-            facts = context.run_tool(db, ids, name, args, alias)
-        except ValueError:  # the model produced out-of-range arguments: fall back to defaults, never to free-form access
-            facts = context.run_tool(db, ids, name, {}, alias)
-        facts["not_measured"] = context.NOT_MEASURED
-        text = _chat(s, prompts.ANSWER.format(question=question, data=prompts.data_block(facts)))
-        _audit(db, request, user, f"ask:{name}", s.client.model or "")
-        return _reply("ask", text, s.client.model or "", facts, get_settings().mode == "demo", tool=name)
+    capabilities = "; ".join(d.rstrip('.') for d, _, _ in context.TOOLS.values())
+    sess, why = _try_session(db)
+    if sess is not None:
+        with sess as s:
+            raw, err = _chat_or_none(s, prompts.ROUTER.format(tools=tools, question=question), json_mode=True, max_tokens=120)
+            if raw is not None:
+                choice = _parse_tool_choice(raw)
+                if choice is None:
+                    _audit(db, request, user, "ask:no-tool", s.client.model or "")
+                    return _reply("ask", "I can't answer that from the data SIMS collects. I can answer questions about: "
+                                  + capabilities + ".", s.client.model or "", {}, False, tool=None,
+                                  citations=[], freshness=fallback.freshness(db, ids))
+                name, args = choice
+                try:
+                    facts = context.run_tool(db, ids, name, args, alias)
+                except ValueError:  # out-of-range arguments: fall back to defaults, never to free-form access
+                    facts = context.run_tool(db, ids, name, {}, alias)
+                facts["not_measured"] = context.NOT_MEASURED
+                text, err = _chat_or_none(s, prompts.ANSWER.format(question=question, data=prompts.data_block(facts)))
+                if text is not None:
+                    _audit(db, request, user, f"ask:{name}", s.client.model or "")
+                    return _reply("ask", text, s.client.model or "", facts, get_settings().mode == "demo", tool=name,
+                                  citations=fallback.citations(db, ids, name), freshness=fallback.freshness(db, ids))
+            why = err
+    name = fallback.route(question)
+    if name is None:
+        _audit(db, request, user, "ask:fallback:no-tool", "rules")
+        return _fallback_reply("ask", "I can't answer that from the collected data. I can answer questions about: "
+                               + capabilities + ".", {}, False, why or "model unavailable", tool=None, citations=[],
+                               freshness=fallback.freshness(db, ids))
+    facts = context.run_tool(db, ids, name, {}, alias)
+    facts["not_measured"] = context.NOT_MEASURED
+    _audit(db, request, user, f"ask:fallback:{name}", "rules")
+    return _fallback_reply("ask", fallback.answer(name, facts, question), facts, get_settings().mode == "demo",
+                           why or "model unavailable", tool=name, citations=fallback.citations(db, ids, name),
+                           freshness=fallback.freshness(db, ids))

@@ -56,13 +56,16 @@ export default function Assistant() {
             {!st.model && <span className="text-amber-300">{st.models.length ? "No model selected yet." : "No models installed. Run: ollama pull <model>"}</span>}
           </div>
         )}
+        {st && !ready && <p className="mt-2 rounded border border-amber-700 p-2 text-xs text-amber-200">
+          The on-prem model is not available, so answers come from the deterministic rules fallback: the question is matched to
+          one read-only data tool and answered from a template, with sources and data freshness.</p>}
         <p className="mt-3 text-xs text-slate-500">Runs on your own machine. The model sees scores and metrics only: client MACs, IPs and hostnames are replaced with “client-1”-style labels, and it has no way to change any setting.</p>
       </Card>
 
       <Card title="Ask a question">
         <form className="flex flex-col gap-2 md:flex-row" onSubmit={(e) => { e.preventDefault(); if (question.trim().length >= 3) run("ask", () => aiApi.ask(question.trim(), siteId)); }}>
           <input value={question} maxLength={500} onChange={(e) => setQuestion(e.target.value)} placeholder="e.g. Which APs had the most disconnects today?" className="flex-1 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm" />
-          <button disabled={!ready || !!busy || question.trim().length < 3} className="rounded bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "ask" ? "Thinking…" : "Ask"}</button>
+          <button disabled={!!busy || question.trim().length < 3} className="rounded bg-violet-600 px-4 py-2 text-sm font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "ask" ? "Thinking…" : "Ask"}</button>
         </form>
         <div className="mt-2 flex flex-wrap gap-2">{EXAMPLES.map((x) => <button key={x} onClick={() => setQuestion(x)} className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800">{x}</button>)}</div>
       </Card>
@@ -71,11 +74,11 @@ export default function Assistant() {
         <Card title="Summarize">
           <div className="flex items-center gap-2 text-sm">
             <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1.5" value={hours} onChange={(e) => setHours(Number(e.target.value))}>{[6, 24, 72, 168].map((h) => <option key={h} value={h}>Last {h} h</option>)}</select>
-            <button disabled={!ready || !!busy} onClick={() => run("summary", () => aiApi.summary(siteId, hours))} className="rounded bg-violet-600 px-4 py-1.5 font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "summary" ? "Writing…" : "Summarize alerts & trends"}</button>
+            <button disabled={!!busy} onClick={() => run("summary", () => aiApi.summary(siteId, hours))} className="rounded bg-violet-600 px-4 py-1.5 font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "summary" ? "Writing…" : "Summarize alerts & trends"}</button>
           </div>
         </Card>
         <Card title="Recommendations">
-          <button disabled={!ready || !!busy} onClick={() => run("recommend", () => aiApi.recommend(siteId))} className="rounded bg-violet-600 px-4 py-1.5 text-sm font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "recommend" ? "Thinking…" : "What should I look at?"}</button>
+          <button disabled={!!busy} onClick={() => run("recommend", () => aiApi.recommend(siteId))} className="rounded bg-violet-600 px-4 py-1.5 text-sm font-medium hover:bg-violet-500 disabled:opacity-40">{busy === "recommend" ? "Thinking…" : "What should I look at?"}</button>
           <p className="mt-2 text-xs text-slate-500">Suggestions to investigate, based only on what SIMS has measured. Nothing is changed automatically.</p>
         </Card>
       </div>

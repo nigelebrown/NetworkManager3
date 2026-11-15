@@ -175,8 +175,31 @@ class Worker:
             await asyncio.to_thread(J.safe(J.discovery_rules))
             if tick % 12 == 0:
                 await asyncio.to_thread(J.safe(J.scheduled_analysis))
+            if tick % 72 == 0:
+                await asyncio.to_thread(J.safe(J.predictive))
             tick += 1
             await self._sleep(300)
+
+    async def printer_loop(self) -> None:
+        """Printer Intelligence: leased read-only SNMP polling (60 s), job recovery (30 s), daily retention/recs."""
+        from backend.infrastructure import scheduled_jobs as J
+        from backend.printers import service as PS
+        tick = 0
+        while not self.stop.is_set():
+            try:
+                await PS.run_due(session_scope, f"worker-{self.instance}",
+                                 limit=int(os.environ.get("INM_PRINTER_POLL_BATCH", "200")),
+                                 concurrency=int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "32")))
+                with session_scope() as db:
+                    PS.schedule_reports(db)
+                await PS.tick_jobs(session_scope, f"worker-{self.instance}")
+                if tick % 1440 == 0:
+                    await asyncio.to_thread(J.safe(J.printer_daily))
+            except Exception as exc:  # never crash the worker on one bad printer or job
+                log.warning("printer cycle failed: %s", type(exc).__name__)
+                self.stats["last_error"] = f"printers: {type(exc).__name__}"
+            tick += 1
+            await self._sleep(60)
 
     # ------------------------------------------------------------------ polling + publishing
     async def poll_loop(self) -> None:
@@ -446,7 +469,7 @@ class Worker:
         tasks = [hb, asyncio.create_task(self.poll_loop()), asyncio.create_task(self.ingest_loop()),
                  asyncio.create_task(self.collection_loop()), asyncio.create_task(self.jobs_loop()),
                  asyncio.create_task(self.outbox_loop()), asyncio.create_task(self.discovery_loop()),
-                 asyncio.create_task(self.notifications_loop())]
+                 asyncio.create_task(self.notifications_loop()), asyncio.create_task(self.printer_loop())]
         await self.stop.wait()
         log.info("shutting down")
         # Threads running blocking DB calls cannot be cancelled; never let shutdown hang past the grace period.
