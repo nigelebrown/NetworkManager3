@@ -160,9 +160,13 @@ class Worker:
                 self.stats["switch_poll_limit"] = switch_limit
                 if switches or other:
                     loop = asyncio.get_running_loop()
-                    work = [loop.run_in_executor(self.switch_pool, poll, i) for i in switches]
-                    work.extend(asyncio.to_thread(poll, i) for i in other)
-                    results = await asyncio.gather(*work, return_exceptions=True)
+                    started = time.monotonic()
+                    other_work = [asyncio.create_task(asyncio.to_thread(poll, i)) for i in other]
+                    results = await asyncio.gather(
+                        *(loop.run_in_executor(self.switch_pool, poll, i) for i in switches), return_exceptions=True)
+                    if switches:
+                        self.stats["switch_poll_batch"] = self._poll_batch(len(switches), started)
+                    results.extend(await asyncio.gather(*other_work, return_exceptions=True))
                     summary = {}
                     for result in results:
                         if isinstance(result, BaseException):
@@ -205,9 +209,12 @@ class Worker:
                 with session_scope() as db:
                     printer_limit = configured_poll_concurrency(db, "printer")
                 self.stats["printer_poll_limit"] = printer_limit
-                await PS.run_due(session_scope, f"worker-{self.instance}",
+                started = time.monotonic()
+                summary = await PS.run_due(session_scope, f"worker-{self.instance}",
                                  limit=int(os.environ.get("INM_PRINTER_POLL_BATCH", "200")),
                                  concurrency=printer_limit)
+                if summary["claimed"]:
+                    self.stats["printer_poll_batch"] = self._poll_batch(summary["claimed"], started)
                 with session_scope() as db:
                     PS.schedule_reports(db)
                 await PS.tick_jobs(session_scope, f"worker-{self.instance}")
@@ -244,7 +251,10 @@ class Worker:
             if not LeaseRepo(db, self.instance).try_acquire_slot("poll_all", slot, ttl_s=interval * 2):
                 return None
         started_at = datetime.now(timezone.utc)
-        poll_worker_sites()
+        started = time.monotonic()
+        polled = poll_worker_sites()
+        if polled:
+            self.stats["ap_poll_batch"] = self._poll_batch(polled, started)
         with session_scope() as db:
             counts = sync_inventory(db)
             events = self._build_events(db, slot, counts, started_at)
@@ -254,6 +264,11 @@ class Worker:
         self.stats["polls"] += 1
         self.stats["last_poll_at"] = datetime.now(timezone.utc).isoformat()
         return events
+
+    @staticmethod
+    def _poll_batch(count: int, started: float) -> dict:
+        return {"count": count, "seconds": round(time.monotonic() - started, 2),
+                "finished_at": datetime.now(timezone.utc).isoformat()}
 
     def _build_events(self, db, slot: int, counts: dict, started_at: datetime) -> list:
         src = "DEMO" if self.s.mode == "demo" else "REAL"

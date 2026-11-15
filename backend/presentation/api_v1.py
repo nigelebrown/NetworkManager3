@@ -95,6 +95,7 @@ def system_resources(db: Session = Depends(get_db), _: User = Depends(require_an
     snapshot["worker"] = {
         "checked_at": _iso(worker.beat_at) if worker else None,
         "container": detail.get("container_resources"),
+        "ap_poll_limit": poll_concurrency(db),
         "switch_poll_limit": detail.get("switch_poll_limit"),
         "printer_poll_limit": detail.get("printer_poll_limit"),
     }
@@ -120,14 +121,47 @@ class ApPollCapacity(BaseModel):
 def collection_capacity(db: Session = Depends(get_db),
                         _: User = Depends(require_any_role("admin", "auditor"))):
     from ..domain.collection import freshness
+    from ..database.models_phases import CollectionPlan
+    from ..database.models_printer_srs import PrinterMonitoring
 
     now = datetime.now(timezone.utc)
     interval = get_settings().poll_interval_seconds
     sites = [site for site in visible_sites(db) if site.enabled and not site.simulated]
     limits = {family: configured_poll_concurrency(db, family) for family in POLL_CAPACITY_KEYS}
+    heartbeat = db.get(ServiceHeartbeat, "network_worker")
+    detail = (heartbeat.detail or {}) if heartbeat else {}
+    observed = set(db.scalars(select(AccessPoint.site_id).distinct()))
+    switches = db.scalars(select(CollectionPlan).join(InmDevice, InmDevice.id == CollectionPlan.device_id)
+                          .where(CollectionPlan.state == "ACTIVE", InmDevice.family == "switch",
+                                 InmDevice.source_type == "REAL")
+                          .order_by(CollectionPlan.last_success_at.desc().nulls_last()))
+    switch_by_device = {}
+    for plan in switches:
+        switch_by_device.setdefault(plan.device_id, plan)
+    printers = db.scalars(select(PrinterMonitoring).where(PrinterMonitoring.enabled.is_(True)))
+
+    def coverage(family, entries, age_limit: int = 2):
+        fresh = failures = monitored = 0
+        for last_success, seconds, failed in entries:
+            monitored += 1
+            failures += bool(failed)
+            if last_success and not failed:
+                at = last_success if last_success.tzinfo else last_success.replace(tzinfo=timezone.utc)
+                fresh += (now - at).total_seconds() <= age_limit * seconds
+        return {"monitored": monitored, "fresh": fresh, "failures": failures,
+                "batch": detail.get(f"{family}_poll_batch")}
+
+    performance = {
+        "ap": coverage("ap", ((s.last_poll_at, interval, s.last_poll_ok is False) for s in sites if s.id in observed)),
+        "switch": coverage("switch", ((p.last_success_at, p.interval_seconds, p.consecutive_failures)
+                                      for p in switch_by_device.values())),
+        "printer": coverage("printer", ((p.last_success_at, p.interval_seconds, p.consecutive_failures)
+                                        for p in printers), age_limit=3),
+    }
     return {
         "configured": limits["ap"],
         "limits": limits,
+        "performance": performance,
         "effective": poll_concurrency(db),
         "max_concurrency": MAX_POLL_CONCURRENCY,
         "interval_seconds": interval,

@@ -140,7 +140,7 @@ function ServerResourcesCard() {
           {worker?.checked_at && ` · reported ${fmtTime(worker.checked_at)}`}
         </td></tr>
         <tr><td className="p-2">Worker poll limits</td><td className="p-2">
-          Switches {worker?.switch_poll_limit ?? "unavailable"} · Printers {worker?.printer_poll_limit ?? "unavailable"}
+          AP controllers {worker?.ap_poll_limit ?? "unavailable"} · Switches {worker?.switch_poll_limit ?? "unavailable"} · Printers {worker?.printer_poll_limit ?? "unavailable"}
         </td></tr>
       </Table>
     </>}
@@ -191,6 +191,22 @@ function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
             </button>}
           </form>;
         })}
+      </div>
+      <div className="mt-4">
+        <Table head={["Poller", "Fresh coverage", "Latest failures", "Last batch", "Attempts per minute"]}>
+          {(["ap", "switch", "printer"] as const).map(family => {
+            const p = data.performance[family];
+            const label = { ap: "AP controllers", switch: "Switches", printer: "Printers (SNMP)" }[family];
+            return <tr key={family}>
+              <td className="p-2">{label}</td>
+              <td className="p-2">{p.monitored ? `${p.fresh}/${p.monitored} (${Math.round(100 * p.fresh / p.monitored)}%)` : "—"}</td>
+              <td className="p-2">{p.failures}</td>
+              <td className="p-2">{p.batch ? `${p.batch.count} in ${p.batch.seconds.toFixed(1)} s · ${fmtTime(p.batch.finished_at)}` : "Awaiting a completed batch"}</td>
+              <td className="p-2">{p.batch && p.batch.seconds > 0 ? Math.round(60 * p.batch.count / p.batch.seconds) : "—"}</td>
+            </tr>;
+          })}
+        </Table>
+        <p className="mt-1 text-xs text-slate-500">Fresh coverage uses two configured intervals for AP controllers and switches, and three for printers.</p>
       </div>
       {message && <p className="mt-2 text-sm" role="status">{message}</p>}
       <p className="mt-3 text-sm">{data.overdue

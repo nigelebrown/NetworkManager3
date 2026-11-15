@@ -63,6 +63,7 @@ services:
   # ---------------------------------------------------------------- 03 management database
   management-db:
     image: ${INM_IMAGE_POSTGRES:-postgres:17-alpine}
+    command: ["postgres", "-c", "max_connections=150"]
     environment:
       POSTGRES_USER: inm_app
       POSTGRES_PASSWORD: ${MGMT_DB_PASSWORD:?}

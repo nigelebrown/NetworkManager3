@@ -40,7 +40,7 @@ def init_engine(url: str | None = None):
         kwargs["connect_args"] = {"check_same_thread": False}
     elif url.startswith("postgresql") and get_settings().role == "worker":
         # Controller polls and scheduled device plans each hold a connection during I/O.
-        kwargs.update(pool_size=8, max_overflow=68)
+        kwargs.update(pool_size=8, max_overflow=102)
     _engine = create_engine(url, pool_pre_ping=True, **kwargs)
     if url.startswith("sqlite"):
         @event.listens_for(_engine, "connect")
