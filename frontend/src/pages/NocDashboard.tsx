@@ -101,7 +101,7 @@ export default function NocDashboard() {
         <Kpi label="Network experience" value={score == null ? "—" : Math.round(score)+"%"} sub={scores.length+" measured devices"} href="/experience"/>
         <Kpi label="Access points" value={online(ap)+" / "+ap.length} sub={(ap.length-online(ap))+" not online — see why"} href="/aps"/>
         <Kpi label="CX switches" value={online(switches)+" / "+switches.length} sub={(switches.length-online(switches))+" not online"} href="/switches"/>
-        <Kpi label="Connected clients" value={d.summary.clients} sub="Last persisted observation" href="/clients"/>
+        <Kpi label="Connected wireless clients" value={d.summary.clients} sub="Fresh controller observations" href="/clients"/>
         <Kpi label="Active incidents" value={d.summary.active_alerts} sub="Open monitoring alerts" href="/device-alerts"/>
         <Kpi label="Pending changes" value={pending.length} sub={openChanges.length+" open plans"} href="/changes"/>
       </div>

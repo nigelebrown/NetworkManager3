@@ -160,10 +160,12 @@ def list_clients(
     db: Session = Depends(get_db), user: User = Depends(require_role("viewer")),
 ):
     ids = _site_ids(db, site_id)
-    names = {s.id: s.name for s in db.scalars(select(Site).where(Site.id.in_(ids)))}
+    controllers = list(db.scalars(select(Site).where(Site.id.in_(ids))))
+    names = {s.id: s.name for s in controllers}
     stmt = select(ClientRecord).where(ClientRecord.site_id.in_(ids))
     if connected:
-        stmt = stmt.where(ClientRecord.is_connected.is_(True))
+        from ..infrastructure.device_state import fresh_wireless_clients
+        stmt = stmt.where(ClientRecord.id.in_([c.id for c in fresh_wireless_clients(db, controllers, utcnow())]))
     if quality:
         stmt = stmt.where(ClientRecord.quality == quality)
     if q:
@@ -202,12 +204,16 @@ def list_clients(
 @router.get("/dashboard/summary")
 def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
                       _: User = Depends(require_role("viewer"))):
+    from types import SimpleNamespace
+    from ..infrastructure.device_state import fresh_wireless_clients, plans_by_device, state_of, visible_inventory
+
+    now = utcnow()
     sites = visible_sites(db)
     ids = _site_ids(db, site_id)
+    controllers = {s.id: s for s in sites if s.id in ids}
     aps = list(db.scalars(select(AccessPoint).where(AccessPoint.site_id.in_(ids))))
     up = sum(1 for a in aps if a.status == "up")
-    clients = list(db.scalars(select(ClientRecord).where(
-        ClientRecord.site_id.in_(ids), ClientRecord.is_connected.is_(True))))
+    clients = fresh_wireless_clients(db, controllers.values(), now)
     snrs = [c.snr_db for c in clients if c.snr_db is not None]
     quality = Counter(c.quality or "unavailable" for c in clients)
 
@@ -241,23 +247,22 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     bands = Counter(c.band or "unknown" for c in clients)
     # Coverage: the inventory is the denominator, not just the APs that happen to be in a polled cluster. Without it
     # "28 / 28 online" and "health 100" read as the whole estate when most APs are not monitored at all.
-    coverage = None
-    from ..security.context import get_scope
-    if site_id is None and get_scope() is None:
-        from ..database.models_inm import InmDevice
-        from ..infrastructure.device_state import canonical_inventory
-        inv = canonical_inventory(list(db.scalars(select(InmDevice).where(
-            InmDevice.family == "access_point",
-            InmDevice.source_type == ("DEMO" if get_settings().mode == "demo" else "REAL")))))
-        # observed = APs the polled clusters report; unobserved = registered APs no visible cluster reports.
-        observed = len(aps)
-        observed_ids = {a.id for a in aps}
-        unobserved = sum(1 for d in inv if d.legacy_ap_id not in observed_ids)
-        total = observed + unobserved
-        coverage = {"inventory_aps": total, "monitored_aps": observed, "unmonitored_aps": unobserved,
-                    "percent": round(100 * observed / total, 1) if total else None}
+    inv = visible_inventory(db, set(ids), family="access_point", include_unlinked=site_id is None)
+    plans = plans_by_device(db)
+    states = Counter(state_of(d, plans.get(d.id), now=now, controller=controllers.get(d.legacy_site_id))["state"]
+                     for d in inv)
+    observed = sum(d.legacy_ap_id is not None for d in inv)
+    total = len(inv)
+    if not inv:
+        # Standalone installations may have legacy polls without the worker's inventory projection.
+        observed = total = len(aps)
+        states = Counter(state_of(SimpleNamespace(legacy_ap_id=a.id, status=a.status), None, now=now,
+                                  controller=controllers.get(a.site_id))["state"] for a in aps)
+    coverage = {"inventory_aps": total, "monitored_aps": observed, "unmonitored_aps": total - observed,
+                "percent": round(100 * observed / total, 1) if total else None}
     return {
         "coverage": coverage,
+        "ap_states": dict(states),
         "clusters_failing": sum(1 for s in polled if s.last_poll_ok is False),
         "avg_util_2g_percent": round(sum(u2) / len(u2), 1) if u2 else None,
         "avg_util_5g_percent": round(sum(u5) / len(u5), 1) if u5 else None,

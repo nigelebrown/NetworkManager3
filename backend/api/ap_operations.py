@@ -93,7 +93,7 @@ def _latest_tiers(db: Session) -> dict[str, dict]:
 
 def build_fleet(db: Session) -> dict[str, Any]:
     from ..database.models_onboarding import OnboardingDeviceCredential
-    from ..infrastructure.device_state import canonical_inventory, plans_by_device, state_of
+    from ..infrastructure.device_state import fresh_wireless_clients, plans_by_device, state_of, visible_inventory
     now = _now()
     sites = {s.id: s for s in visible_sites(db)}
     clusters_by_legacy = {c.legacy_site_id: c for c in db.scalars(select(InmCluster)) if c.legacy_site_id}
@@ -102,10 +102,7 @@ def build_fleet(db: Session) -> dict[str, Any]:
     creds = {b.device_id for b in db.scalars(select(OnboardingDeviceCredential))}
     plans = plans_by_device(db)
     tiers = _latest_tiers(db)
-    show_demo = any(s.simulated for s in sites.values())
-    devices = canonical_inventory(list(db.scalars(select(InmDevice).where(
-        InmDevice.family == "access_point",
-        InmDevice.source_type.in_(["REAL", "DEMO"] if show_demo else ["REAL"])))))
+    devices = visible_inventory(db, set(sites), family="access_point")
     # Radio utilisation is stored per poll in ap_samples (the radio dicts only carry it on some firmware paths).
     latest_util: dict[int, ApSample] = {}
     for smp in db.scalars(select(ApSample).where(ApSample.ts >= now - timedelta(minutes=30),
@@ -114,8 +111,6 @@ def build_fleet(db: Session) -> dict[str, Any]:
     aps = []
     for d in devices:
         controller = sites.get(d.legacy_site_id) if d.legacy_site_id is not None else None
-        if d.legacy_site_id is not None and controller is None:
-            continue  # cluster not visible to this user
         a = legacy_aps.get(d.legacy_ap_id) if d.legacy_ap_id is not None else None
         st = state_of(d, plans.get(d.id), now=now, controller=controller)
         cond = {"state": st["state"]}
@@ -165,13 +160,15 @@ def build_fleet(db: Session) -> dict[str, Any]:
     groups[UNLINKED] = {"key": UNLINKED, "name": "Not linked to a polled cluster", "vc_host": None, "simulated": False,
                         "enabled": None, "last_poll_at": None, "last_poll_ok": None, "last_poll_error": None,
                         "transport": None, "rest_state": None}
+    connected = fresh_wireless_clients(db, sites.values(), now)
+    clients_by_site = Counter(str(c.site_id) for c in connected)
     for g in groups.values():
         rows = [x for x in aps if x["cluster_key"] == g["key"]]
         u2 = [x["radio_2g"]["util_percent"] for x in rows if x["radio_2g"]["util_percent"] is not None]
         u5 = [x["radio_5g"]["util_percent"] for x in rows if x["radio_5g"]["util_percent"] is not None]
         g.update(aps_total=len(rows), aps_online=sum(1 for x in rows if x["state"] == "ONLINE"),
                  states=dict(Counter(x["state"] for x in rows)), tiers=dict(Counter(x["tier"] for x in rows)),
-                 clients=sum(x["clients"] or 0 for x in rows),
+                 clients=clients_by_site[g["key"]],
                  util_2g_avg=round(sum(u2) / len(u2), 1) if u2 else None,
                  util_5g_avg=round(sum(u5) / len(u5), 1) if u5 else None)
     cluster_list = sorted([g for g in groups.values() if g["aps_total"] or g["key"] != UNLINKED],
@@ -182,7 +179,7 @@ def build_fleet(db: Session) -> dict[str, Any]:
                         "monitored": sum(1 for x in aps if x["cluster_key"] != UNLINKED),
                         "unlinked": sum(1 for x in aps if x["cluster_key"] == UNLINKED),
                         "attention": sum(v for k, v in states.items() if k != "ONLINE"),
-                        "clients": sum(x["clients"] or 0 for x in aps),
+                        "clients": len(connected),
                         "clusters_polled_ok": sum(1 for g in cluster_list if g["last_poll_ok"]),
                         "clusters_failing": sum(1 for g in cluster_list if g["last_poll_ok"] is False),
                         "health_report_at": (tiers.get("_generated_at") or {}).get("at")}}

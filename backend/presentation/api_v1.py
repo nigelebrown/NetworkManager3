@@ -322,24 +322,16 @@ def v1_sites(db: Session = Depends(get_db), _: User = Depends(require_role("view
 @router.get("/devices")
 def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$"), db: Session = Depends(get_db),
                _: User = Depends(require_role("viewer"))):
+    from ..infrastructure.device_state import plans_by_device, visible_inventory
     ids = _visible_legacy_ids(db)
-    q = select(InmDevice).order_by(InmDevice.family, InmDevice.hostname)
-    if family:
-        q = q.where(InmDevice.family == family)
-    # Manual/REST-read REAL inventory belongs to a physical INM site, not a
-    # legacy Instant cluster. Show it to administrators and global-scope viewers,
-    # but never bypass an explicitly granted legacy site scope.
-    global_scope = get_scope() is None
-    devs = [d for d in db.scalars(q) if d.legacy_site_id in ids or
-            (global_scope and d.source_type == "REAL" and d.legacy_site_id is None)]
+    devs = visible_inventory(db, ids, family=family)
     caps: dict[str, list] = {}
     for c in db.scalars(select(DeviceCapability).where(DeviceCapability.device_id.in_([d.id for d in devs]))):
         caps.setdefault(c.device_id, []).append(c)
-    from ..infrastructure.device_state import canonical_inventory, plans_by_device
     plans = plans_by_device(db)
     controllers = {s.id: s for s in db.scalars(select(Site).where(Site.id.in_(ids)))}
     return [_device_out(d, caps.get(d.id, []), plans.get(d.id), controllers.get(d.legacy_site_id))
-            for d in canonical_inventory(devs)]
+            for d in devs]
 
 
 def _visible_device(db: Session, device_id: str) -> InmDevice:

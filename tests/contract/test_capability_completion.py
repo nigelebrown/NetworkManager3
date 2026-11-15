@@ -93,6 +93,34 @@ def test_viewer_cannot_toggle_demo(live, adm):
     assert live.get("/api/v1/noc/overview", headers=v).status_code == 200
 
 
+def test_dashboard_counts_agree_and_exclude_stale_or_duplicate_clients(live, adm):
+    from collections import Counter
+    from backend.database.models import AccessPoint, ClientRecord, Site
+    from backend.infrastructure.persistence.inventory import sync_inventory
+
+    now = datetime.now(timezone.utc)
+    with session_scope() as db:
+        for i in range(3):
+            last = now - timedelta(minutes=20 if i == 2 else 0)
+            site = Site(name=f"Cluster {i}", last_poll_ok=True, last_poll_at=last, simulated=False)
+            db.add(site)
+            db.flush()
+            db.add(AccessPoint(site_id=site.id, name=f"AP {i}", mac=f"00:00:00:00:00:0{i}",
+                               serial=f"AP-SERIAL-{i}", status="up", last_seen=last))
+            db.add(ClientRecord(site_id=site.id, mac="00:00:00:00:01:00" if i < 2 else "00:00:00:00:01:01",
+                                last_seen=last, is_connected=True))
+        sync_inventory(db)
+
+    noc = live.get("/api/v1/noc/overview", headers=adm).json()
+    fleet = live.get("/api/v1/wireless/fleet", headers=adm).json()["summary"]
+    wifi = live.get("/api/dashboard/summary", headers=adm).json()
+    states = dict(Counter(d["state"] for d in noc["devices"] if d["family"] == "access_point"))
+    assert states == fleet["states"] == wifi["ap_states"] == {"ONLINE": 2, "UNKNOWN": 1}
+    assert fleet["aps_total"] == wifi["coverage"]["inventory_aps"] == 3
+    assert noc["summary"]["clients"] == fleet["clients"] == wifi["clients_total"] == 1
+    assert len(live.get("/api/clients", headers=adm).json()) == 1
+
+
 def test_collection_plan_success_failure_dedupe_and_experience(live, adm, monkeypatch):
     did = dev(live, adm, "LIVE-AP-1", "access_point", ip="10.20.0.5")
     prev = live.post("/api/v1/collection/plans/preview", headers=adm, json={
