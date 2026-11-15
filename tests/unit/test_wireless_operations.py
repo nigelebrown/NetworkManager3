@@ -213,6 +213,25 @@ def test_cluster_poll_adopts_imported_ap_instead_of_duplicating(client, admin):
 
 
 # ------------------------------------------------------------------ auto-onboarding (mocked device I/O)
+def test_autodiscovery_status_recovers_abandoned_run(app_env):
+    from backend.database.session import create_schema, session_scope
+    from backend.infrastructure import ap_autodiscovery as AD
+
+    create_schema()
+    saved = {"state": "RUNNING", "done": 15, "total": 247}
+    with session_scope() as db:
+        assert AD.job_status(db) == {"state": "NEVER_RUN"}
+        AD._put(db, AD.JOB_KEY, saved, "operator")
+
+    with session_scope() as db:
+        with AD._LOCK:
+            assert AD.job_status(db) == saved
+        recovered = AD.job_status(db)
+        assert recovered["state"] == "FAILED"
+        assert (recovered["done"], recovered["total"]) == (15, 247)
+        assert "Start a new run" in recovered["error"]
+
+
 def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
     app_env.setenv("SIMS_MODE", "live")
     app_env.setenv("INM_READONLY_DEVICE_CIDRS", "10.9.9.0/24")
@@ -220,8 +239,8 @@ def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
     get_settings.cache_clear()
     from backend.database.session import create_schema, session_scope
     create_schema()
-    from backend.database.models import Site
-    from backend.database.models_inm import InmDevice
+    from backend.database.models import AccessPoint, Site
+    from backend.database.models_inm import InmCluster, InmDevice
     from backend.database.models_onboarding import OnboardingCredential
     from backend.infrastructure import ap_autodiscovery as AD
     from backend.security.crypto import encrypt_secret
@@ -242,7 +261,18 @@ def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
     def poll(db, site):
         calls["poll"] += 1
         site.last_poll_ok = True
+        for member in members:
+            db.add(AccessPoint(site_id=site.id, name=member["name"], mac=member["mac"],
+                               ip=member["ip"], serial=member["serial"]))
         return True
+
+    saved = []
+
+    def progress(update):
+        if update.get("clusters_saved"):
+            with session_scope() as reader:
+                saved.append((reader.query(InmCluster).count(), reader.query(InmDevice)
+                              .filter(InmDevice.cluster_id.is_not(None)).count()))
 
     with session_scope() as db:
         db.add(OnboardingCredential(name="ap-admin", device_family="access_point", protocol="aruba_instant_rest",
@@ -253,13 +283,14 @@ def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
                              mgmt_addresses=[ip], created_at=datetime.now(timezone.utc) + timedelta(seconds=i)))
         db.flush()
         AD._put(db, "ssh-hostkey:10.9.9.11", {"fingerprint": "SHA256:x"}, "t")
-        out = AD.discover(db, "tester", rest_members=rest, ssh_members=ssh, poll=poll)
+        out = AD.discover(db, "tester", rest_members=rest, ssh_members=ssh, poll=poll, progress=progress)
         assert out["counts"].get("CLUSTER_REGISTERED") == 1
         assert out["counts"].get("LINKED") == 2
         assert calls["ssh"] == 1 and calls["poll"] == 1 and calls["rest"] <= 2
         site = db.query(Site).one()
         assert site.vc_host == "10.9.9.10"
         assert AD.site_transport(db, site.id)["transport"] == "ssh_cli"
+        assert saved == [(1, 3)]
 
 
 def test_autodiscovery_requires_hostkey_approval_before_sending_credentials(app_env):

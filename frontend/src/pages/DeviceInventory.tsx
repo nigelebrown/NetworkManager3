@@ -257,6 +257,8 @@ export default function DeviceInventory() {
             }}));
             complete++;
           }
+          devices.reload();
+          collectionPlans.reload();
         } catch (error) {
           needsAttention++;
           setOnboardResults(previous => ({...previous, [device.id]: {
@@ -463,6 +465,7 @@ export default function DeviceInventory() {
               </td>
               <td aria-live="polite">{onboardResults[d.id]
                 ? onboardResults[d.id].status + " · " + onboardResults[d.id].message
+                : plan?.state === "ACTIVE" ? "Monitoring scheduled"
                 : check?.restState === "ENABLED" ? "Ready for onboarding" : "Awaiting REST verification"}
                 {plan?.state === "ACTIVE" && <div>{plan.last_failure_at &&
                   (!plan.last_success_at || Date.parse(plan.last_failure_at) > Date.parse(plan.last_success_at))

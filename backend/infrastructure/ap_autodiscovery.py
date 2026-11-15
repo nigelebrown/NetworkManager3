@@ -211,6 +211,9 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
     from ..api.quick_devices import _permit_probe
     from ..security.crypto import decrypt_secret
     from .persistence.inventory import sync_inventory
+    if poll is None:
+        from ..monitoring.collector import poll_site
+        poll = poll_site
 
     q = select(InmDevice).where(InmDevice.source_type == "REAL", InmDevice.family == "access_point",
                                 InmDevice.lifecycle != "merged")
@@ -221,7 +224,8 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
     polled = {s.id for s in db.scalars(select(Site).where(Site.simulated.is_(False), Site.last_poll_ok.is_(True)))}
     covered: dict[str, int] = {}  # serial/mac (casefold) -> site id
     results: list[dict] = []
-    sites_touched: dict[int, dict] = {}
+    sites_touched: dict[str, dict] = {}
+    sync = {"sites": 0, "clusters": 0, "aps": 0, "switches": 0}
     for i, d in enumerate(devices):
         if progress:
             progress({"done": i, "total": len(devices)})
@@ -281,6 +285,11 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
         _bind(db, d, used, actor)
         master = next((m for m in members if m.get("is_master")), None)
         vc_ip = (master or {}).get("ip") or ip
+        if vc_ip in sites_touched:
+            results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip, "result": "LINKED",
+                            "site_id": sites_touched[vc_ip]["site_id"], "via": "verified cluster controller"})
+            db.commit()
+            continue
         if transport["transport"] == "ssh_cli" and vc_ip != ip and pinned_fingerprint(db, vc_ip):
             transport = {**transport, "ssh_host": vc_ip, "fingerprint": pinned_fingerprint(db, vc_ip)}
         site = _ensure_site(db, vc_ip, used, (master or {}).get("name"))
@@ -297,7 +306,7 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
             except Exception as exc:
                 rest_state = f"BOOTSTRAP_NOT_PERMITTED: {str(exc)[:140]}"
         set_site_transport(db, site.id, {**transport, "rest_state": rest_state}, actor)
-        sites_touched[site.id] = {"site_id": site.id, "name": site.name, "vc_ip": vc_ip, "members": len(members),
+        sites_touched[vc_ip] = {"site_id": site.id, "name": site.name, "vc_ip": vc_ip, "members": len(members),
                                   "transport": transport["transport"], "rest_state": rest_state}
         for m in members:
             for k in (m.get("serial"), m.get("name"), m.get("mac")):
@@ -306,6 +315,16 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
         results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip, "result": "CLUSTER_REGISTERED",
                         "site_id": site.id, "vc_ip": vc_ip, "transport": transport["transport"],
                         "rest_state": rest_state, "members": len(members)})
+        sid = site.id
+        ok = poll(db, site)
+        sites_touched[vc_ip]["first_poll_ok"] = bool(ok)
+        sites_touched[vc_ip]["first_poll_error"] = site.last_poll_error if not ok else None
+        db.flush()
+        for key, count in sync_inventory(db, legacy_site_id=sid).items():
+            sync[key] += count
+        db.commit()
+        if progress:
+            progress({"done": i + 1, "total": len(devices), "clusters_saved": len(sites_touched)})
     # Second pass: an AP that could not be probed itself is still linked when a later AP's cluster lists it.
     by_id = {d.id: d for d in devices}
     for r in results:
@@ -315,22 +334,13 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
         sid = covered.get((d.serial_number or "").casefold()) or covered.get((d.hostname or "").casefold())
         if sid:
             r.update(result="LINKED", site_id=sid, via="cluster member list", detail=None)
-    db.flush()
-    if poll is None:
-        from ..monitoring.collector import poll_site
-        poll = poll_site
-    for sid in sites_touched:
-        site = db.get(Site, sid)
-        ok = poll(db, site)
-        sites_touched[sid]["first_poll_ok"] = bool(ok)
-        sites_touched[sid]["first_poll_error"] = site.last_poll_error if not ok else None
-    sync = sync_inventory(db)
     counts: dict[str, int] = {}
     for r in results:
         counts[r["result"]] = counts.get(r["result"], 0) + 1
     if progress:
         progress({"done": len(devices), "total": len(devices)})
     return {"finished_at": _now().isoformat(), "devices": len(devices), "counts": counts,
+            "done": len(devices), "total": len(devices), "clusters_saved": len(sites_touched),
             "clusters": list(sites_touched.values()), "results": results, "inventory_sync": sync}
 
 
@@ -362,7 +372,8 @@ def start_job(actor: str, *, device_ids: list[str] | None, auto_enable_rest: boo
         except Exception as exc:
             log.exception("AP auto-onboarding failed")
             with session_scope() as db:
-                _put(db, JOB_KEY, {"state": "FAILED", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                cur = _get(db, JOB_KEY) or {}
+                _put(db, JOB_KEY, {**cur, "state": "FAILED", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
                                    "finished_at": _now().isoformat()}, actor)
         finally:
             _LOCK.release()
@@ -372,7 +383,15 @@ def start_job(actor: str, *, device_ids: list[str] | None, auto_enable_rest: boo
 
 
 def job_status(db: Session) -> dict:
-    return _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
+    status = _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
+    # The worker thread belongs to this API process. Its lock cannot survive a restart.
+    if status["state"] == "RUNNING" and not _LOCK.locked():
+        return {
+            **status,
+            "state": "FAILED",
+            "error": "The API stopped before this run completed. Start a new run from AP Fleet.",
+        }
+    return status
 
 
 def wanted_ips(db: Session, device_ids: list[str] | None = None) -> list[str]:
