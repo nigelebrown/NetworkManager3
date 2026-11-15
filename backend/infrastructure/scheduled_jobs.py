@@ -105,8 +105,10 @@ def printer_polls() -> dict | None:
         return None
     import asyncio
     from ..printers import service as PS
+    from ..monitoring.collector import configured_poll_concurrency
     limit = int(os.environ.get("INM_PRINTER_POLL_BATCH", "200"))
-    conc = int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "32"))
+    with session_scope() as db:
+        conc = configured_poll_concurrency(db, "printer")
     return asyncio.run(PS.run_due(session_scope, _owner("printer-poller"), limit=limit, concurrency=conc))
 
 

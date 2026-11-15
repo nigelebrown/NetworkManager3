@@ -4,7 +4,7 @@ import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { StatusBadge, Table, btnPrimary } from "../components/inm";
 import { useLoad } from "../components/useLoad";
 import { getSession } from "../services/api";
-import { v1, type Trace } from "../services/inm";
+import { v1, type PollFamily, type Trace } from "../services/inm";
 import { rem } from "../services/remediation";
 
 const STAGES: { key: keyof Trace; label: string }[] = [
@@ -126,20 +126,20 @@ function ServerResourcesCard() {
 
 function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
   const capacity = useLoad(v1.collectionCapacity, [], 15000, ["system"]);
-  const [value, setValue] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [values, setValues] = useState<Partial<Record<PollFamily, string>>>({});
+  const [saving, setSaving] = useState<PollFamily | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const data = capacity.data;
 
-  const save = async (concurrency: number) => {
-    setSaving(true); setError(null); setMessage(null);
+  const save = async (family: PollFamily, concurrency: number) => {
+    setSaving(family); setError(null); setMessage(null);
     try {
-      await v1.setCollectionCapacity(concurrency);
+      await v1.setCollectionCapacity(concurrency, family);
       capacity.reload();
       setMessage("Saved. Applies at the start of the next worker polling cycle.");
     } catch (e) { setError(e instanceof Error ? e.message : "Saving collection capacity failed."); }
-    finally { setSaving(false); }
+    finally { setSaving(null); }
   };
 
   return <Card title="Collection capacity">
@@ -149,18 +149,26 @@ function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
         AP controllers: {data.controllers} · {data.overdue} overdue · {data.failed} last poll failed · {data.never_polled} never polled
       </p>
       <p className="mt-1 text-sm">Parallel AP polls: {data.effective} · Target interval: {data.interval_seconds} seconds</p>
-      {isAdmin && <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
-        e.preventDefault();
-        void save(Number(value ?? data.configured));
-      }}>
-        <label className="flex flex-col gap-1 text-sm">Parallel AP polls
-          <input className="rounded border border-slate-300 px-2 py-1" type="number" required
-            min={1} max={data.max_concurrency} value={value ?? data.configured} onChange={e => setValue(e.target.value)} />
-        </label>
-        <button className={btnPrimary} disabled={saving || Number(value ?? data.configured) === data.configured}>
-          {saving ? "Saving…" : "Save limit"}
-        </button>
-      </form>}
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        {(["ap", "switch", "printer"] as const).map(family => {
+          const label = { ap: "AP controllers", switch: "Switches", printer: "Printers" }[family];
+          const value = values[family] ?? data.limits[family];
+          return <form key={family} className="rounded border p-3" onSubmit={e => {
+            e.preventDefault();
+            void save(family, Number(value));
+          }}>
+            <label className="flex flex-col gap-1 text-sm">{label} · parallel polls
+              {isAdmin ? <input className="rounded border border-slate-300 px-2 py-1" type="number" required
+                min={1} max={data.max_concurrency} value={value}
+                onChange={e => setValues(current => ({ ...current, [family]: e.target.value }))} />
+                : <strong>{value}</strong>}
+            </label>
+            {isAdmin && <button className={`${btnPrimary} mt-2`} disabled={saving !== null || Number(value) === data.limits[family]}>
+              {saving === family ? "Saving…" : "Save limit"}
+            </button>}
+          </form>;
+        })}
+      </div>
       {message && <p className="mt-2 text-sm" role="status">{message}</p>}
       <p className="mt-3 text-sm">{data.overdue
         ? "Successful controller polls are falling behind. Check VM headroom before increasing concurrency."

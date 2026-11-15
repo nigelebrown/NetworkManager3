@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -26,8 +27,9 @@ from .demo import DEMO_SITES, build_demo_snapshot
 
 log = logging.getLogger("sims.collector")
 POLL_CAPACITY_KEY = "ap-poll-capacity"
-DEFAULT_POLL_CONCURRENCY = 20
-MAX_POLL_CONCURRENCY = 20
+DEFAULT_POLL_CONCURRENCY = 35
+MAX_POLL_CONCURRENCY = 35
+POLL_CAPACITY_KEYS = {"ap": POLL_CAPACITY_KEY, "switch": "switch-poll-capacity", "printer": "printer-poll-capacity"}
 UNLINKED_POLL_INTERVAL = timedelta(minutes=15)
 UNLINKED_POLLS_PER_CYCLE = 2
 
@@ -255,8 +257,17 @@ def poll_site(db: Session, site: Site, transport: httpx.BaseTransport | None = N
 def poll_concurrency(db: Session) -> int:
     if get_settings().mode != "live" or db.get_bind().dialect.name != "postgresql":
         return 1
-    row = db.get(AppSetting, POLL_CAPACITY_KEY)
-    return row.value["concurrency"] if row else DEFAULT_POLL_CONCURRENCY
+    return configured_poll_concurrency(db, "ap")
+
+
+def configured_poll_concurrency(db: Session, family: str) -> int:
+    row = db.get(AppSetting, POLL_CAPACITY_KEYS[family])
+    if row:
+        return row.value["concurrency"]
+    if family == "printer":
+        return min(MAX_POLL_CONCURRENCY, max(1, int(os.environ.get(
+            "INM_PRINTER_POLL_CONCURRENCY", str(DEFAULT_POLL_CONCURRENCY)))))
+    return DEFAULT_POLL_CONCURRENCY
 
 
 def _poll_site_transaction(site_id: int) -> None:

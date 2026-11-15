@@ -24,6 +24,7 @@ import signal
 import socket
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -42,7 +43,9 @@ from backend.infrastructure.bus.nats_bus import (
 from backend.infrastructure.persistence.inventory import sync_inventory
 from backend.infrastructure.persistence.repositories import HeartbeatRepo, LeaseRepo, SqlEventLedger
 from backend.infrastructure.runtime import inm_settings, log_store, nats_settings, telemetry_store
-from backend.monitoring.collector import ensure_demo_sites, poll_worker_sites, visible_sites
+from backend.monitoring.collector import (
+    MAX_POLL_CONCURRENCY, configured_poll_concurrency, ensure_demo_sites, poll_worker_sites, visible_sites,
+)
 
 log = logging.getLogger("inm.worker")
 NS = uuid.UUID("6f1d3c52-7a3e-4c55-9d8b-1f6a0e9b2c11")  # namespace for deterministic event IDs
@@ -58,6 +61,7 @@ class Worker:
                       "dead_lettered": 0, "last_poll_at": None, "last_error": None}
         self.stop = asyncio.Event()
         self.nc = self.js = self.bus = None
+        self.switch_pool = ThreadPoolExecutor(max_workers=MAX_POLL_CONCURRENCY, thread_name_prefix="cx-poll")
 
     # ------------------------------------------------------------------ startup
     def check_startup(self) -> None:
@@ -130,12 +134,10 @@ class Worker:
         from sqlalchemy import or_, select
         from datetime import datetime, timezone
 
-        switch_limit = 20 if self.s.mode == "live" else 8
-        self.stats["switch_poll_limit"] = switch_limit
-
         def due_plans():
             now = datetime.now(timezone.utc)
             with session_scope() as db:
+                switch_limit = configured_poll_concurrency(db, "switch") if self.s.mode == "live" else 8
                 rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
                                          CollectionPlan.window_end_hour, InmDevice.family)
                     .join(InmDevice, InmDevice.id == CollectionPlan.device_id).where(
@@ -146,7 +148,7 @@ class Worker:
                 eligible = [row for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)]
                 switches = [row.id for row in eligible if row.family == "switch"][:switch_limit]
                 other = [row.id for row in eligible if row.family != "switch"][:1]
-                return switches + other
+                return switch_limit, switches, other
 
         def poll(plan_id):
             with session_scope() as db:
@@ -154,10 +156,13 @@ class Worker:
 
         while not self.stop.is_set():
             try:
-                ids = await asyncio.to_thread(due_plans)
-                if ids:
-                    results = await asyncio.gather(*(asyncio.to_thread(poll, i) for i in ids),
-                                                   return_exceptions=True)
+                switch_limit, switches, other = await asyncio.to_thread(due_plans)
+                self.stats["switch_poll_limit"] = switch_limit
+                if switches or other:
+                    loop = asyncio.get_running_loop()
+                    work = [loop.run_in_executor(self.switch_pool, poll, i) for i in switches]
+                    work.extend(asyncio.to_thread(poll, i) for i in other)
+                    results = await asyncio.gather(*work, return_exceptions=True)
                     summary = {}
                     for result in results:
                         if isinstance(result, BaseException):
@@ -194,11 +199,12 @@ class Worker:
         """Printer Intelligence: leased read-only SNMP polling (60 s), job recovery (30 s), daily retention/recs."""
         from backend.infrastructure import scheduled_jobs as J
         from backend.printers import service as PS
-        printer_limit = min(20, max(1, int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "20"))))
-        self.stats["printer_poll_limit"] = printer_limit
         tick = 0
         while not self.stop.is_set():
             try:
+                with session_scope() as db:
+                    printer_limit = configured_poll_concurrency(db, "printer")
+                self.stats["printer_poll_limit"] = printer_limit
                 await PS.run_due(session_scope, f"worker-{self.instance}",
                                  limit=int(os.environ.get("INM_PRINTER_POLL_BATCH", "200")),
                                  concurrency=printer_limit)
@@ -483,8 +489,6 @@ class Worker:
             pass
 
     async def run(self) -> None:
-        from concurrent.futures import ThreadPoolExecutor
-
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=28, thread_name_prefix="inm-worker"))
         await asyncio.to_thread(self.check_startup)
@@ -505,6 +509,7 @@ class Worker:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self.switch_pool.shutdown(wait=False, cancel_futures=True)
         if self.nc:
             try:
                 await asyncio.wait_for(self.nc.drain(), timeout=5)
