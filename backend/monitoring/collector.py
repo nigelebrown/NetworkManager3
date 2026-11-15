@@ -26,8 +26,8 @@ from .demo import DEMO_SITES, build_demo_snapshot
 
 log = logging.getLogger("sims.collector")
 POLL_CAPACITY_KEY = "ap-poll-capacity"
-DEFAULT_POLL_CONCURRENCY = 4
-MAX_POLL_CONCURRENCY = 8
+DEFAULT_POLL_CONCURRENCY = 20
+MAX_POLL_CONCURRENCY = 20
 UNLINKED_POLL_INTERVAL = timedelta(minutes=15)
 UNLINKED_POLLS_PER_CYCLE = 2
 

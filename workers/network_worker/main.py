@@ -111,6 +111,9 @@ class Worker:
             await self._sleep(10)
 
     def _beat(self, detail: dict) -> None:
+        from backend.infrastructure.resource_pressure import resource_pressure
+
+        detail["container_resources"] = resource_pressure()["api_container"]
         with session_scope() as db:
             HeartbeatRepo(db).beat("network_worker", self.instance, self.inm.version, detail)
 
@@ -127,16 +130,23 @@ class Worker:
         from sqlalchemy import or_, select
         from datetime import datetime, timezone
 
+        switch_limit = 20 if self.s.mode == "live" else 8
+        self.stats["switch_poll_limit"] = switch_limit
+
         def due_plans():
             now = datetime.now(timezone.utc)
             with session_scope() as db:
                 rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
-                                         CollectionPlan.window_end_hour).where(
+                                         CollectionPlan.window_end_hour, InmDevice.family)
+                    .join(InmDevice, InmDevice.id == CollectionPlan.device_id).where(
                     CollectionPlan.state == "ACTIVE",
                     or_(CollectionPlan.next_due_at.is_(None),
                         CollectionPlan.next_due_at <= now),
                 ).order_by(CollectionPlan.next_due_at.asc().nullsfirst(), CollectionPlan.id))
-                return [row.id for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)][:8]
+                eligible = [row for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)]
+                switches = [row.id for row in eligible if row.family == "switch"][:switch_limit]
+                other = [row.id for row in eligible if row.family != "switch"][:1]
+                return switches + other
 
         def poll(plan_id):
             with session_scope() as db:
@@ -184,12 +194,14 @@ class Worker:
         """Printer Intelligence: leased read-only SNMP polling (60 s), job recovery (30 s), daily retention/recs."""
         from backend.infrastructure import scheduled_jobs as J
         from backend.printers import service as PS
+        printer_limit = min(20, max(1, int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "20"))))
+        self.stats["printer_poll_limit"] = printer_limit
         tick = 0
         while not self.stop.is_set():
             try:
                 await PS.run_due(session_scope, f"worker-{self.instance}",
                                  limit=int(os.environ.get("INM_PRINTER_POLL_BATCH", "200")),
-                                 concurrency=int(os.environ.get("INM_PRINTER_POLL_CONCURRENCY", "32")))
+                                 concurrency=printer_limit)
                 with session_scope() as db:
                     PS.schedule_reports(db)
                 await PS.tick_jobs(session_scope, f"worker-{self.instance}")
@@ -468,8 +480,11 @@ class Worker:
             pass
 
     async def run(self) -> None:
-        await asyncio.to_thread(self.check_startup)
+        from concurrent.futures import ThreadPoolExecutor
+
         loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=28, thread_name_prefix="inm-worker"))
+        await asyncio.to_thread(self.check_startup)
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.stop.set)
         hb = asyncio.create_task(self.heartbeat_loop())
