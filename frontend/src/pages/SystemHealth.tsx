@@ -43,6 +43,7 @@ export default function SystemHealth() {
         <span className="text-xs text-slate-500">Measured {data ? fmtTime(data.checked_at) : "…"} — every status comes from a live probe</span>
       </div>
       <ErrorNote error={error} />
+      <CollectionCapacityCard isAdmin={isAdmin} />
       <OutboxCard />
       <Card title="Seven service roles">
         <Table head={["Role", "Status", "Latency", "Version", "Detail"]}>
@@ -75,6 +76,53 @@ export default function SystemHealth() {
       </Card>
     </div>
   );
+}
+
+function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
+  const capacity = useLoad(v1.collectionCapacity, [], 15000, ["system"]);
+  const [value, setValue] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const data = capacity.data;
+
+  const save = async (concurrency: number) => {
+    setSaving(true); setError(null); setMessage(null);
+    try {
+      await v1.setCollectionCapacity(concurrency);
+      capacity.reload();
+      setMessage("Saved. Applies at the start of the next worker polling cycle.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Saving collection capacity failed."); }
+    finally { setSaving(false); }
+  };
+
+  return <Card title="Collection capacity">
+    <ErrorNote error={capacity.error ?? error} />
+    {data && <>
+      <p className="text-sm">
+        AP controllers: {data.controllers} · {data.overdue} overdue · {data.failed} last poll failed · {data.never_polled} never polled
+      </p>
+      <p className="mt-1 text-sm">Parallel AP polls: {data.effective} · Target interval: {data.interval_seconds} seconds</p>
+      {isAdmin && <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={e => {
+        e.preventDefault();
+        void save(Number(value ?? data.configured));
+      }}>
+        <label className="flex flex-col gap-1 text-sm">Parallel AP polls
+          <input className="rounded border border-slate-300 px-2 py-1" type="number" required
+            min={1} max={data.max_concurrency} value={value ?? data.configured} onChange={e => setValue(e.target.value)} />
+        </label>
+        <button className={btnPrimary} disabled={saving || Number(value ?? data.configured) === data.configured}>
+          {saving ? "Saving…" : "Save limit"}
+        </button>
+      </form>}
+      {message && <p className="mt-2 text-sm" role="status">{message}</p>}
+      <p className="mt-3 text-sm">{data.overdue
+        ? "Successful controller polls are falling behind. Check VM headroom before increasing concurrency."
+        : data.controllers ? "No previously successful controller polls are overdue."
+          : "AP sizing recommendations need observations from enabled live controllers."}</p>
+    </>}
+    <p className="mt-2 text-sm">Syslog sizing needs sustained ingestion rate, dropped messages and delivery lag. Container replica counts are managed on the host.</p>
+  </Card>;
 }
 
 /** Transactional event outbox (collector + change engine -> ingest): nothing is acknowledged until stored. */

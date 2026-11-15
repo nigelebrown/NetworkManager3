@@ -42,7 +42,7 @@ from backend.infrastructure.bus.nats_bus import (
 from backend.infrastructure.persistence.inventory import sync_inventory
 from backend.infrastructure.persistence.repositories import HeartbeatRepo, LeaseRepo, SqlEventLedger
 from backend.infrastructure.runtime import inm_settings, log_store, nats_settings, telemetry_store
-from backend.monitoring.collector import ensure_demo_sites, poll_all, visible_sites
+from backend.monitoring.collector import ensure_demo_sites, poll_worker_sites, visible_sites
 
 log = logging.getLogger("inm.worker")
 NS = uuid.UUID("6f1d3c52-7a3e-4c55-9d8b-1f6a0e9b2c11")  # namespace for deterministic event IDs
@@ -222,7 +222,7 @@ class Worker:
         with session_scope() as db:
             if not LeaseRepo(db, self.instance).try_acquire_slot("poll_all", slot, ttl_s=interval * 2):
                 return None
-        poll_all()  # legacy SIMS collector: demo generator in Phase 1 (live mode is refused by the profile)
+        poll_worker_sites()
         with session_scope() as db:
             counts = sync_inventory(db)
             events = self._build_events(db, slot, counts)

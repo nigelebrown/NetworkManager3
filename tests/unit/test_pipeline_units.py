@@ -3,6 +3,8 @@ import asyncio
 import json
 import subprocess
 import sys
+from threading import Barrier
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +18,28 @@ from backend.infrastructure.telemetry.timescale import TimescaleTelemetryStore
 from backend.presentation.ws import Conn, Hub
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_controller_worker_polls_sites_concurrently(monkeypatch):
+    from contextlib import nullcontext
+    from backend.monitoring import collector
+
+    sites = [SimpleNamespace(id=i, enabled=True, last_poll_at=None) for i in (1, 2)]
+    both_started = Barrier(2, timeout=5)
+    completed = []
+
+    def poll(site_id):
+        both_started.wait()
+        completed.append(site_id)
+
+    monkeypatch.setattr(collector, "session_scope", nullcontext)
+    monkeypatch.setattr(collector, "poll_concurrency", lambda db: 2)
+    monkeypatch.setattr(collector, "visible_sites", lambda db: sites)
+    monkeypatch.setattr(collector, "_poll_site_transaction", poll)
+    monkeypatch.setattr(collector, "prune_old", lambda db: None)
+
+    collector.poll_worker_sites()
+    assert sorted(completed) == [1, 2]
 
 
 class FakeLogs:
