@@ -27,7 +27,10 @@ import DeviceConfig from "./pages/DeviceConfig";
 import ConfigTemplates from "./pages/ConfigTemplates";
 import Phase4Insights from "./pages/Phase4Insights";
 import DiscoveryRanges from "./pages/DiscoveryRanges";
-import { Printers, PrinterDetails } from "./pages/Printers";
+import { PrinterConsumables, PrinterInventory, PrinterLive, PrinterMaintenance, PrinterModels, PrinterOverview,
+  PrinterProfiles, PrinterRecommendations, PrinterReports, PrinterUtilization } from "./pages/PrinterSuite";
+import PrinterDevice from "./pages/PrinterDevice";
+import { AiRules, IntelRecommendations, OperationalAnalytics, PredictiveHealth } from "./pages/Intelligence";
 import DeviceDetails from "./pages/DeviceDetails";
 import Recovery from "./pages/Recovery";
 import Switches from "./pages/Switches";
@@ -94,7 +97,8 @@ export default function App() {
         <Route path="audit" element={<Audit />} />
         <Route path="users" element={<Users />} />
         <Route path="recovery" element={<Recovery />} />
-        <Route path="ai-learning" element={<AiLearning />} />
+        <Route path="ai-learning" element={<AiRules />} />
+        <Route path="ai-site-rules" element={<AiLearning />} />
         <Route path="phase4-insights" element={<Phase4Insights />} />
         <Route path="onboarding" element={<GuidedOnboarding />} />
         <Route path="onboarding/import" element={<InventoryImport />} />
@@ -103,8 +107,17 @@ export default function App() {
         <Route path="config-templates" element={<ConfigTemplates />} />
         <Route path="discovery" element={<DiscoveryRules />} />
         <Route path="discovery/planner" element={<DiscoveryRanges />} />
-        <Route path="printers" element={<Printers />} />
-        <Route path="printers/:id" element={<PrinterDetails />} />
+        <Route path="printers" element={<PrinterOverview />} />
+        <Route path="printers/inventory" element={<PrinterInventory />} />
+        <Route path="printers/live" element={<PrinterLive />} />
+        <Route path="printers/utilization" element={<PrinterUtilization />} />
+        <Route path="printers/consumables" element={<PrinterConsumables />} />
+        <Route path="printers/maintenance" element={<PrinterMaintenance />} />
+        <Route path="printers/models" element={<PrinterModels />} />
+        <Route path="printers/recommendations" element={<PrinterRecommendations />} />
+        <Route path="printers/reports" element={<PrinterReports />} />
+        <Route path="printers/profiles" element={<PrinterProfiles />} />
+        <Route path="printers/:id" element={<PrinterDevice />} />
         <Route path="devices/:id" element={<DeviceDetails />} />
         <Route path="changes" element={<ChangePlans />} />
         <Route path="executive" element={<ExecutiveDashboard />} />
@@ -129,9 +142,9 @@ export default function App() {
         <Route path="port-health" element={<WireframeWorkspace kind="ports" />} />
         <Route path="client-journeys" element={<ClientConnectivity />} />
         <Route path="approvals" element={<WireframeWorkspace kind="approvals" />} />
-        <Route path="recommendations" element={<WireframeWorkspace kind="recommendations" />} />
-        <Route path="predictive" element={<WireframeWorkspace kind="predictive" />} />
-        <Route path="analytics" element={<WireframeWorkspace kind="analytics" />} />
+        <Route path="recommendations" element={<IntelRecommendations />} />
+        <Route path="predictive" element={<PredictiveHealth />} />
+        <Route path="analytics" element={<OperationalAnalytics />} />
         <Route path="credentials" element={<WireframeWorkspace kind="credentials" />} />
         <Route path="integrations" element={<WireframeWorkspace kind="integrations" />} />
         <Route path="switch-config" element={<WireframeWorkspace kind="switchconfig" />} />

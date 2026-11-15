@@ -326,12 +326,17 @@ def v1_logs(stream: str = Query("events", pattern="^(events|syslog)$"), contains
             for k in [d.hostname, d.serial_number, *(d.mgmt_addresses or [])]:
                 if k:
                     by_host.setdefault(str(k).casefold(), d)
+        from ..domain.syslog_host import resolve_host
         for e in entries:
-            host = e["labels"].get("host") or e["labels"].get("hostname")
+            reported = e["labels"].get("host") or e["labels"].get("hostname")
+            host, correction = resolve_host(reported, e.get("line"))
             dev = by_host.get((host or "").casefold())
+            e["host_reported"], e["host_resolved"], e["host_correction"] = reported, host, correction
             e["device"] = _device_out(dev) if dev else None
             e["correlation"] = "MAPPED" if dev else "UNMAPPED"
-            e["unmapped_reason"] = None if dev else (f"no visible device with hostname, IP or serial '{host}'" if host else "message carried no hostname")
+            e["unmapped_reason"] = None if dev else (
+                "header year was parsed as the hostname and no host could be recovered" if correction == "YEAR_AS_HOST_UNRESOLVED"
+                else f"no visible device with hostname, IP or serial '{host}'" if host else "message carried no hostname")
     return {"stream": stream, "query": logql, "entries": entries}
 
 
@@ -419,9 +424,15 @@ async def v1_ai_analyze(request: Request, user: User = Depends(require_role("ope
     if not s.ai_url:
         raise HTTPException(503, "AI service not configured")
     def build():  # runs in a copied context that shares this request's RequestCtx (scope already resolved)
+        from ..infrastructure import rule_store as rule_catalog
         with session_scope() as db:
-            return _analysis_context(db)
+            ctx = _analysis_context(db)
+            rules = rule_catalog.effective(db, "SITE_RULES")
+            ctx["rule_config"] = {rid: {"enabled": r["enabled"], "params": r["params"]} for rid, r in rules.items()}
+            ctx["_rules"] = rules
+            return ctx
     ctx = await run_in_threadpool(build)
+    rules = ctx.pop("_rules")
     cid = str(uuid.uuid4())
     try:
         async with httpx.AsyncClient(timeout=15) as c:
@@ -435,26 +446,32 @@ async def v1_ai_analyze(request: Request, user: User = Depends(require_role("ope
         raise HTTPException(502, "AI service returned an unexpected engine claim for Phase 1")
 
     def store():
+        from ..infrastructure import recommendation_store as RS
         with session_scope() as db:
-            rows = []
+            counts = {"CREATED": 0, "UPDATED": 0, "SUPPRESSED": 0}
             for rec in result["recommendations"]:
-                row = RecommendationRecord(
-                    legacy_site_id=rec.get("legacy_site_id"), engine="RULE", rule_id=rec["rule_id"],
-                    rule_version=rec["rule_version"], source_type=ctx["source_type"], risk=rec["risk"], title=rec["title"],
-                    explanation=rec["explanation"], evidence=rec["evidence"], input_window="latest poll",
-                    approval_state="ADVISORY", requested_by=user.username, correlation_id=cid)
-                db.add(row)
-                rows.append(row)
-            audit(db, "ai_analyze", username=user.username, detail=f"{len(rows)} rule recommendations", request=request,
-                  correlation_id=cid)
-            return len(rows)
-    n = await run_in_threadpool(store)
+                rule = rules.get(rec["rule_id"], {})
+                if rule and not rule["enabled"]:
+                    continue    # defence in depth: a disabled rule never produces a record
+                _, outcome = RS.upsert(
+                    db, rule_id=rec["rule_id"], rule_version=f"{rec['rule_version']}+v{rule.get('version', 1)}",
+                    engine="RULE", title=rec["title"], explanation=rec["explanation"], evidence=rec["evidence"],
+                    risk=rec["risk"], source_type=ctx["source_type"], actor=user.username,
+                    legacy_site_id=rec.get("legacy_site_id"), reason_codes=[rec["rule_id"]], input_window="latest poll",
+                    suppression_minutes=int(rule.get("suppression_minutes", 60)), correlation_id=cid)
+                counts[outcome] += 1
+            audit(db, "ai_analyze", username=user.username,
+                  detail=f"{counts['CREATED']} new, {counts['UPDATED']} refreshed, {counts['SUPPRESSED']} suppressed rule recommendations",
+                  request=request, correlation_id=cid)
+            return counts
+    counts = await run_in_threadpool(store)
+    n = counts["CREATED"]
     nc = getattr(request.app.state, "nc", None)
     if nc is not None and nc.is_connected:
         from ..infrastructure.bus.nats_bus import JetStreamBus
         await JetStreamBus(nc.jetstream()).publish_ui(["recommendations"], legacy_site_ids=None, event_id=cid, correlation_id=cid)
     return {"correlation_id": cid, "engine": "RULE", "ruleset_version": result["ruleset_version"], "trained_model": False,
-            "source_type": ctx["source_type"], "created": n}
+            "source_type": ctx["source_type"], "created": n, "updated": counts["UPDATED"], "suppressed": counts["SUPPRESSED"]}
 
 
 @router.get("/recommendations")

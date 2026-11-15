@@ -2,10 +2,10 @@
   "product": "Intelligent Network Manager",
   "version": "1.2.0-rc2",
   "phase": "1-11 software remediation (hardware certification pending)",
-  "management_schema_head": "0011",
+  "management_schema_head": "0013",
   "telemetry_schema_head": "t002",
   "accepts_management_schemas": [
-    "0011"
+    "0013"
   ],
   "accepts_telemetry_schemas": [
     "t002"
@@ -25,16 +25,21 @@
   },
   "image_pinning": "Tags above are resolved to digests at first install and frozen in /var/lib/inm/images.lock; update.sh only moves digests on an explicit --ref.",
   "printer_module": {
-    "status": "P0_FOUNDATION",
+    "status": "SRS_SOFTWARE_COMPLETE_HARDWARE_NOT_RUN",
     "device_writes": "LOCKED",
-    "schema_revision": "0005",
-    "scope": "inventory, manual meters/supplies, consumable cycles, basic analytics, maintenance records; optional SNMPv3 probe requires explicit approval",
+    "schema_revision": "0012",
+    "scope": "read-only SNMP monitoring, uploaded MIB library, utilization, supplies, faults, reliability, benchmarking, recommendations, reports",
     "not_yet_certified": [
-      "bulk discovery",
-      "scheduled distributed polling",
-      "model-adapter downloads",
-      "trained predictive ML",
-      "procurement recommendations"
+      "live hardware validation per model",
+      "vendor OID mappings (VENDOR_UNVERIFIED)",
+      "CentOS 1,000-printer scale run"
+    ],
+    "not_built_pending_authorisation": [
+      "printer configuration (SNMP SET)",
+      "printer firmware upgrades",
+      "print-job interception",
+      "document-content inspection",
+      "automated purchase orders"
     ]
   },
   "onboarding_module": {
@@ -95,7 +100,9 @@
     "0007",
     "0008",
     "0009",
-    "0010"
+    "0010",
+    "0011",
+    "0012"
   ],
   "capability_completion": {
     "status": "SOFTWARE_REMEDIATION_HARDWARE_UNCERTIFIED",
@@ -104,7 +111,7 @@
     "work_packages": {
       "WP-02": "scheduled read-only collection plans, leases, dedupe, bounded retry/DLQ, freshness",
       "WP-03": "syslog normalization, AAA session evidence, VERIFIED/CORRELATED/UNKNOWN attribution",
-      "WP-04": "draft-only inheritance (phase 3) — unchanged",
+      "WP-04": "draft-only inheritance (phase 3) \u2014 unchanged",
       "WP-05": "envelope-encrypted signed config vault, tamper detection, restore-compatibility validation",
       "WP-06": "typed change plans, 20/40 MHz RF policy, two-person approval, execution gate (always DENY while locked)",
       "WP-07": "replacement planning to LAB_VALIDATION_REQUIRED; no restore endpoint",
@@ -129,5 +136,15 @@
   },
   "upgradable_telemetry_schemas": [
     "t001"
-  ]
+  ],
+  "network_intelligence": {
+    "status": "EIGHT_WORKSPACES_SOFTWARE_COMPLETE",
+    "schema_revision": "0013",
+    "device_writes": "LOCKED",
+    "predictive_model": "baseline-trend-v1 (statistical; OPERATIONAL only when backtest-validated)",
+    "not_yet_certified": [
+      "CentOS restart/recovery",
+      "predictive skill on real fleet telemetry"
+    ]
+  }
 }

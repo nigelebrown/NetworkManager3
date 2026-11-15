@@ -188,7 +188,7 @@ def _cycle(c: PrinterConsumableCycle) -> dict:
     }
 
 
-@router.get("")
+# Superseded by printers_srs.list_printers (filters, pagination, site scoping); kept for reuse.
 def list_printers(db: Session = Depends(get_db), user: User = admin_only):
     rows = db.scalars(select(PrinterDevice).order_by(PrinterDevice.manufacturer, PrinterDevice.model)).all()
     return [_device(p) for p in rows]
@@ -432,7 +432,7 @@ async def _discover_printer_hosts(hosts, target, read, request, db, admin):
                 "unverified": [host for host in hosts if host not in found]}
 
 
-@router.get("/{printer_id}")
+# Served by printers_srs.printer_detail, which extends this payload with identity/monitoring evidence.
 def printer_details(printer_id: str, db: Session = Depends(get_db), user: User = admin_only):
     obj = _printer(db, printer_id)
     meters = list(db.scalars(select(PrinterMeterReading).where(PrinterMeterReading.printer_id == obj.id)

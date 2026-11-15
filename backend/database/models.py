@@ -76,6 +76,8 @@ class AccessPoint(Base):
     memory_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     client_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     radios: Mapped[list | None] = mapped_column(JSON, nullable=True)  # list of radio dicts
+    # 0013: free memory, uplink byte counters + derived rates, over-the-air monitor counts (with provenance).
+    observations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     exp_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # experience score 0-100 (NULL = unavailable)
     exp_band: Mapped[str | None] = mapped_column(String(16), nullable=True)
     simulated: Mapped[bool] = mapped_column(Boolean, default=False)

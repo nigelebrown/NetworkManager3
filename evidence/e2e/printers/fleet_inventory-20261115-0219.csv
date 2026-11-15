@@ -1,0 +1,14 @@
+﻿# report,Printer fleet inventory
+# period,2026-10-16 to 2026-11-15
+# filters,{}
+# printers_in_scope,8
+# basis,"Validated counter intervals; missing coverage is reported, never filled with zeros"
+printer_id,manufacturer,model,serial_number,hostname,management_ip,site,location,division,status,monitoring,last_success,health,identity,provenance
+4fe5e445-480f-43b0-a458-38498b2ba4d4,Epson,WF-6590,EPS-0001,,10.103.70.30,,Annex,,unknown,OFF,,,UNVERIFIED,IMPORT
+5d39c0ae-a988-4777-a36e-03399ec968e2,HP,Color LaserJet M454dn,HPC-0001,prn-hpc-0001,10.103.70.16,,Head Office,,up,ON,2026-11-14T20:00:00+00:00,97.8,VERIFIED,MANUAL
+fbd1fea7-2765-457e-97c8-45769e66a36a,Kyocera,ECOSYS M2640idw,KYC-0002,prn-kyc-0002,10.103.70.12,,Head Office,,up,ON,2026-11-14T20:00:00+00:00,100.0,VERIFIED,MANUAL
+5cc1367f-a59c-4457-939f-479e24973d7b,Kyocera,ECOSYS M2640idw,KYC-0003,prn-kyc-0003,10.103.70.13,,Head Office,,up,ON,2026-11-14T20:00:00+00:00,100.0,VERIFIED,MANUAL
+2b35ac36-0df6-4288-b186-b951b1f1b809,Kyocera,ECOSYS MA4000cix,KYC-0001,prn-kyc-0001,10.103.70.11,,Head Office,,up,ON,2026-11-14T20:00:00+00:00,97.8,VERIFIED,MANUAL
+46c9b29e-0ee6-42e3-bcad-f47b79ae6488,Kyocera,ECOSYS MA5500ifx,KYC-0004,prn-kyc-0004,10.103.70.14,,Records,,up,ON,2026-11-15T02:19:44.822779+00:00,100.0,VERIFIED,MANUAL
+ffa6779d-77ed-4474-a81c-304f7a554549,Kyocera,TASKalfa 6004i,KYC-NEW-01,prn-new,10.103.70.20,,,,unknown,ON,,,UNVERIFIED,DISCOVERY
+9bc04e34-c931-4aa2-862d-a2e94d118d74,Xerox,VersaLink B62,XRX-0001,prn-xrx-0001,10.103.70.15,,Head Office,,up,ON,2026-11-14T20:00:00+00:00,100.0,VERIFIED,MANUAL

@@ -6,7 +6,7 @@ import { Notice, PageHeader, Pill, ago, btn, btn2, useAction } from "../componen
 import { ops } from "../services/ops";
 
 type Dev = { device_id: string; hostname: string; model: string; family: string; evidence_status: string;
-  latest_observation: string | null; metrics: Record<string, { value: number }>; findings: { rule_id: string; title: string }[] };
+  latest_observation: string | null; metrics: Record<string, { value: number }>; findings: { rule_id: string; title: string; rule_version?: string; last_observation?: string | null }[] };
 type Rec = { id: string; device_id: string; title: string; explanation: string; risk: string; approval_state: string; created_at: string };
 
 export default function Phase4Insights() {
@@ -15,7 +15,8 @@ export default function Phase4Insights() {
   const act = useAction();
   const devices = (ov.data?.devices ?? []) as unknown as Dev[];
   const analyze = () => act.run(async () => {
-    const r = await ops.phase4Analyze(); recs.reload(); return `Analysed ${r.evaluated_devices} device(s); ${r.created} new advisory(ies).`; });
+    const r = await ops.phase4Analyze() as { evaluated_devices: number; created: number; updated?: number; suppressed?: number }; recs.reload(); ov.reload();
+    return `Analysed ${r.evaluated_devices} device(s): ${r.created} new, ${r.updated ?? 0} refreshed (deduplicated), ${r.suppressed ?? 0} suppressed after dismissal.`; });
   return <div className="space-y-4">
     <PageHeader title="Device insights" subtitle="Rule analysis of recorded live telemetry. A finding requires two independent recent REST observations; manual readings are shown but never used as evidence. Advisories only — no automatic changes."
       right={<button className={btn} disabled={act.busy} onClick={analyze}>Analyze now</button>} />
@@ -26,11 +27,12 @@ export default function Phase4Insights() {
         <td><Pill value={d.evidence_status} tone={d.evidence_status === "REST_VERIFIED_RECENT" ? "good" : d.evidence_status === "NO_TELEMETRY" ? "none" : "fair"} />
           {d.evidence_status === "NO_TELEMETRY" && <div className="text-[10px] text-slate-500">no monitoring plan / cluster poll yet — see step 1</div>}</td>
         <td className="text-xs">{ago(d.latest_observation)}</td><td className="text-xs">{Object.entries(d.metrics).slice(0, 4).map(([k, v]) => `${k}=${v.value}`).join(" · ")}</td>
-        <td>{d.findings.map(f => <Pill key={f.rule_id} value={f.title} tone="fair" />)}</td></tr>)}
+        <td>{d.findings.map(f => <Link key={f.rule_id} to={`/ai-learning?rule=${f.rule_id}`} title={`${f.rule_id} v${f.rule_version ?? "?"}`}><Pill value={f.title} tone="fair" /></Link>)}</td></tr>)}
         {!devices.length && <tr><td colSpan={5} className="py-3 text-center text-slate-500">No live Aruba devices registered.</td></tr>}</tbody></table></Card>
     <Card title="Advisories"><ul className="space-y-2 text-sm">{((recs.data ?? []) as unknown as Rec[]).map(r => <li key={r.id} className="flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
       <Pill value={r.risk} tone={r.risk === "high" ? "poor" : "fair"} /><b>{r.title}</b><span className="text-xs text-slate-400">{r.explanation}</span>
       <span className="ml-auto text-xs text-slate-500">{ago(r.created_at)}</span><Pill value={r.approval_state} tone="none" />
+      <Link className="text-xs text-sky-600" to="/recommendations">triage</Link>
       {r.approval_state === "ADVISORY" && <><button className={btn2} onClick={() => act.run(async () => { await ops.phase4Review(r.id, "ACKNOWLEDGED"); recs.reload(); })}>Acknowledge</button>
         <button className={btn2} onClick={() => act.run(async () => { await ops.phase4Review(r.id, "DISMISSED"); recs.reload(); })}>Dismiss</button></>}</li>)}
       {!recs.data?.length && <li className="text-slate-500">No advisories.</li>}</ul></Card>

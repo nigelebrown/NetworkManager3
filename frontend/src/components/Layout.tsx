@@ -14,7 +14,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Sites & inventory", items: [
     { to: "/sites", label: "Sites & formations" }, { to: "/inventory", label: "Device inventory" },
     { to: "/aps", label: "Access points" }, { to: "/switches", label: "CX switches" },
-    { to: "/clients", label: "Wireless clients" }, { to: "/printers", label: "Printers", roles: ["admin"], tag: "PARTIAL" },
+    { to: "/clients", label: "Wireless clients" }, { to: "/printers", label: "Printers", tag: "READ-ONLY" },
     { to: "/onboarding", label: "Add & configure devices", roles: ["admin"], tag: "START" },
     { to: "/discovery", label: "Discovery (subnets, credentials, rules)", roles: ["admin"], tag: "AUTO" },
     { to: "/onboarding/manual", label: "Manual / CSV intake", roles: ["admin"] }] },
@@ -41,7 +41,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Intelligence & automation", items: [
     { to: "/optimization", label: "RF optimization", tag: "OPT-IN" },
     { to: "/recommendations", label: "Recommendations" },
-    { to: "/predictive", label: "Predictive health", tag: "CONCEPT" },
+    { to: "/predictive", label: "Predictive health", tag: "VALIDATED" },
     { to: "/analytics", label: "Operational analytics", roles: ["admin","auditor","approver","operator"] },
     { to: "/learning", label: "AI learning centre" },
     { to: "/phase4-insights", label: "Device insights", roles: ["admin"], tag: "RULES" },

@@ -174,6 +174,47 @@ def train(request: Request, db: Session = Depends(get_db), user: User = Depends(
     return _model_public(m)
 
 
+@router.get("/models/compare")
+def compare_models(db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    """Side-by-side holdout metrics against the rule baseline; shows which model is active and why."""
+    ms = list(db.scalars(select(MlModel).order_by(MlModel.trained_at.desc()).limit(20)))
+    rows = []
+    for m in ms:
+        hold = (m.metrics or {}).get("holdout", {})
+        base = (m.metrics or {}).get("holdout_baseline_brier")
+        n_hold = (m.split or {}).get("holdout", 0)
+        rows.append({"id": m.id, "name": m.name, "status": m.status, "algorithm": m.algorithm, "trained_by": m.trained_by,
+                     "trained_at": iso(m.trained_at), "decided_by": m.decided_by, "dataset_sha256": m.dataset_sha256,
+                     "split": m.split, "holdout": hold, "baseline_brier": base,
+                     "brier_improvement": (round(base - hold["brier"], 4) if base is not None and hold.get("brier") is not None else None),
+                     "beats_baseline": (hold.get("brier") is not None and base is not None and hold["brier"] <= base),
+                     "limitations": [x for x in (
+                         f"small holdout ({n_hold} rows)" if n_hold < 10 else None,
+                         "per-rule success rates only; no device-level features",
+                         "labels come from engineer-evaluated outcomes; unevaluated recommendations are excluded") if x]})
+    active = next((r for r in rows if r["status"] == "PROMOTED"), None)
+    return {"models": rows, "active": active["id"] if active else None,
+            "baseline": "Rules only (no model): every recommendation is RULE_BASED"}
+
+
+@router.post("/models/{model_id}/rollback")
+def rollback_model(model_id: str, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_any_role("approver", "admin"))):
+    """Demote the active model and restore the previously promoted one (or rules-only if none)."""
+    m = db.get(MlModel, model_id)
+    if m is None:
+        raise HTTPException(404, "Model not found.")
+    if m.status != "PROMOTED":
+        raise HTTPException(409, "Only the active (promoted) model can be rolled back.")
+    m.status, m.decided_by, m.decided_at = "ROLLED_BACK", user.username, now()
+    prev = db.scalar(select(MlModel).where(MlModel.status == "SUPERSEDED").order_by(MlModel.decided_at.desc()).limit(1))
+    if prev is not None:
+        prev.status = "PROMOTED"
+    audit(db, "ai_model_rolled_back", username=user.username, target=m.id,
+          detail=f"restored={prev.id if prev else 'RULES_ONLY'}", request=request)
+    return {"rolled_back": m.id, "active": prev.id if prev else None, "mode": "MODEL" if prev else "RULES_ONLY"}
+
+
 @router.post("/models/{model_id}/{action}")
 def decide_model(model_id: str, action: Literal["promote", "reject"], request: Request,
                  db: Session = Depends(get_db), user: User = Depends(require_any_role("approver", "admin"))):
@@ -189,6 +230,9 @@ def decide_model(model_id: str, action: Literal["promote", "reject"], request: R
             raise HTTPException(403 if "independent" in str(exc) else 422, str(exc)) from None
     elif m.trained_by.casefold() == user.username.casefold():
         raise HTTPException(403, "Model decisions require an independent approver.")
+    if action == "promote":   # one active model: the previous one is kept for rollback
+        for other in db.scalars(select(MlModel).where(MlModel.status == "PROMOTED", MlModel.id != m.id)):
+            other.status = "SUPERSEDED"
     m.status = "PROMOTED" if action == "promote" else "REJECTED"
     m.decided_by, m.decided_at = user.username, now()
     audit(db, f"ai_model_{m.status.lower()}", username=user.username, target=m.id, request=request)

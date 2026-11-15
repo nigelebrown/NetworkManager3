@@ -139,6 +139,7 @@ export default function Device360() {
           <td>{r.noise_floor_dbm != null ? `${r.noise_floor_dbm} dBm` : "—"}</td><td>{r.tx_power_dbm != null ? `${r.tx_power_dbm} dBm` : "—"}</td></tr>)}</tbody></table>
         : <p className="text-sm text-slate-500">{d?.family === "switch" ? "Radios apply to access points." : "No radio data — the AP is not in a polled cluster."}</p>}
         {ins?.ap && <p className="mt-2 text-xs text-slate-500">Cluster {ins.ap.cluster ?? "not linked"} · read via {ins.ap.transport ?? "—"} · <Pill value={ins.ap.state} tone={STATE_TONE(ins.ap.state)} /></p>}</Card>
+      {ins?.ap_extras && <ApExtrasCard x={ins.ap_extras} />}
       <Card title={`Connected clients (${ins?.clients.length ?? 0})`}>{ins?.client_bands && <p className="mb-2 text-xs text-slate-500">{Object.entries(ins.client_bands).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>}
         <div className="max-h-80 overflow-auto"><table className="inm-table"><thead><tr><th>Client</th><th>SSID</th><th>Band</th><th>SNR</th><th>Rate</th><th>Quality</th></tr></thead>
           <tbody>{(ins?.clients ?? []).map(c => <tr key={c.id}><td className="font-mono text-xs">{c.mac}<div className="text-[10px] text-slate-500">{c.hostname ?? ""}</div></td><td>{c.ssid ?? "—"}</td>
@@ -288,4 +289,30 @@ export default function Device360() {
       {ad.data && <p className="mt-2 text-xs text-slate-500">{ad.data.adapter.notes}</p>}</Card>}
     {diag && d && <DiagnosisPanel target={{ kind: "ap", id, label: d.hostname ?? d.serial_number }} onClose={() => setDiag(false)} />}
   </div>;
+}
+
+
+const bps = (v: number | null) => v == null ? null : v >= 1e6 ? `${(v / 1e6).toFixed(2)} Mb/s` : `${(v / 1e3).toFixed(1)} kb/s`;
+
+function ApExtrasCard({ x }: { x: import("../services/wireless").ApExtras }) {
+  const na = (why?: string | null) => <span className="text-slate-500" title={why ?? ""}>not available</span>;
+  return <Card title="AP resources & radio neighbourhood">
+    <div className="grid gap-3 text-sm md:grid-cols-4">
+      <div><div className="text-xs text-slate-500">Free memory</div>{x.memory_free_mib == null ? na(x.memory_basis) : <b>{x.memory_free_mib} MiB</b>}
+        {x.memory_free_mib != null && <div className="text-[10px] text-slate-500">{x.memory_basis}</div>}</div>
+      <div><div className="text-xs text-slate-500">Uplink {x.uplink.interface ?? ""} rx / tx</div>
+        {x.uplink.rx_bps == null ? na(x.uplink.quality) : <b>{bps(x.uplink.rx_bps)} / {bps(x.uplink.tx_bps)}</b>}
+        <div className="text-[10px] text-slate-500">{x.uplink.quality}{x.uplink.interval_s ? ` over ${x.uplink.interval_s}s` : ""}</div></div>
+      <div><div className="text-xs text-slate-500">Neighbouring APs heard</div>{x.neighbors.aps.total == null ? na(x.neighbors.aps.reason) : <b>{x.neighbors.aps.total}</b>}
+        <div className="text-[10px] text-slate-500">{Object.entries(x.neighbors.aps.by_band ?? {}).map(([k, v]) => `${k} ${v}`).join(" · ")}</div></div>
+      <div><div className="text-xs text-slate-500">Stations heard (monitor)</div>{x.neighbors.stations.total == null ? na(x.neighbors.stations.reason) : <b>{x.neighbors.stations.total}</b>}
+        <div className="text-[10px] text-slate-500">{Object.entries(x.neighbors.stations.by_band ?? {}).map(([k, v]) => `${k} ${v}`).join(" · ")}</div></div>
+    </div>
+    <div className="mt-3 text-sm"><div className="text-xs text-slate-500">Signal of connected stations by band</div>
+      {Object.keys(x.signal_distribution.by_band).length === 0 ? na("no connected stations") :
+        Object.entries(x.signal_distribution.by_band).map(([band, b]) => <div key={band} className="text-xs"><b>{band}</b>: {Object.entries(b).map(([k, v]) => `${k} ${v}`).join(" · ")}</div>)}</div>
+    <p className="mt-2 text-xs text-slate-500">Client Match: {x.client_match.state} — {x.client_match.reason}</p>
+    {!!x.gaps.length && <p className="text-xs text-amber-600">Gaps: {x.gaps.join("; ")}</p>}
+    <p className="text-[10px] text-slate-500">{x.neighbors.source}. {x.format_verification}.</p>
+  </Card>;
 }

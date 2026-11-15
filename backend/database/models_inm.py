@@ -175,6 +175,16 @@ class RecommendationRecord(Base):
     approval_state: Mapped[str] = mapped_column(String(16), default="ADVISORY")
     requested_by: Mapped[str] = mapped_column(String(64))
     correlation_id: Mapped[str] = mapped_column(String(36))
+    # 0013 lifecycle: deduplicated, freshness-tracked, triaged and linked to the rule that produced it.
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    occurrences: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    affected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ReleaseEvent(Base):
