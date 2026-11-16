@@ -7,7 +7,7 @@ import { download, ops } from "../services/ops";
 export default function ExecutiveDashboard() {
   const exec = useLoad(ops.executive, [], 60000);
   const trends = useLoad(ops.trends, [], 60000);
-  const fleet = useLoad(ops.fleetCompliance, [], 120000);
+  const fleet = useLoad(() => ops.fleetCompliance(true), [], 120000);
   const noc = useLoad(ops.noc, [], 60000);
   const act = useAction();
   const e = exec.data, t = trends.data, c = fleet.data, n = noc.data;
@@ -27,7 +27,7 @@ export default function ExecutiveDashboard() {
     <Notice error={act.error} message={act.message} />
     <div className="grid gap-3 md:grid-cols-4">
       <Card><div className="flex justify-around"><Gauge value={expScore} label="User experience" /><Gauge value={c?.fleet_score} label="Config compliance" /></div></Card>
-      <Stat label="Managed devices" value={n?.summary.devices ?? "—"} sub={`${e?.devices_real ?? 0} live · ${(n?.summary.devices ?? 0) - (e?.devices_real ?? 0)} demo`} />
+      <Stat label="Managed devices" value={e?.devices_counted ?? "—"} sub={e?.devices_real ? `${e.devices_real} live` : undefined} />
       <Stat label="Monitoring coverage" value={e?.poll_coverage_percent == null ? "—" : `${e.poll_coverage_percent}%`}
         sub={e?.poll_coverage_reason ?? `${e?.devices_never_polled ?? 0} device(s) never polled`} tone={(e?.poll_coverage_percent ?? 0) >= 90 ? "ok" : "warn"} />
       <Stat label="Config backups" value={e?.vault.artifacts ?? "—"} sub={`${e?.vault.restore_verified ?? 0} lab restore-verified`} />

@@ -56,8 +56,8 @@ def site_out(s: Site) -> dict:
 
 
 @router.get("")
-def list_sites(db: Session = Depends(get_db), _: User = Depends(require_role("viewer"))):
-    return [site_out(s) for s in visible_sites(db)]
+def list_sites(db: Session = Depends(get_db), _: User = Depends(require_role("viewer")), dashboard: bool = False):
+    return [site_out(s) for s in visible_sites(db, dashboard=dashboard)]
 
 
 @router.post("", status_code=201)

@@ -73,7 +73,12 @@ export const v1 = {
     sites: { id: string; name: string; source_type: string }[];
     clusters: { id: string; name: string; legacy_site_id: number | null }[];
   }>("/v1/sites"),
-  devices: (family?: "access_point" | "switch") => request<Device[]>(`/v1/devices${family ? `?family=${family}` : ""}`),
+  devices: (family?: "access_point" | "switch", dashboard = false) => {
+    const params = new URLSearchParams();
+    if (family) params.set("family", family);
+    if (dashboard) params.set("dashboard", "true");
+    return request<Device[]>(`/v1/devices${params.size ? `?${params}` : ""}`);
+  },
   getDevice: (id: string) => request<Device>(`/v1/devices/${encodeURIComponent(id)}`),
   addQuickDevice: (body: { family: "access_point" | "switch"; site_name: string; hostname: string; serial_number: string;
     model: string; firmware?: string | null; management_ip?: string | null; status: string; metrics: Record<string, number> }) =>

@@ -14,8 +14,8 @@ function latest(points: MetricPoint[]) {
 }
 
 export default function Switches() {
-  const devs = useLoad(() => v1.devices("switch"), [], 30000, ["devices"]);
-  const sites = useLoad(() => api.sites(), [], 0, ["sites"]);
+  const devs = useLoad(() => v1.devices("switch", true), [], 30000, ["devices"]);
+  const sites = useLoad(() => api.sites(true), [], 0, ["sites"]);
   const physical = useLoad(() => v1.physicalSites(), [], 30000, ["sites"]);
   const [metrics, setMetrics] = useState<Record<string, Record<string, number | null>>>({});
   useEffect(() => {

@@ -51,8 +51,12 @@ def canonical_inventory(devices):
     return [d for d in devices if d.legacy_ap_id is not None or inventory_identity(d) not in projected]
 
 
+def dashboard_source() -> str:
+    return "DEMO" if get_settings().mode == "demo" else "REAL"
+
+
 def visible_inventory(db: Session, controller_ids: set[int], *, family: str | None = None,
-                      include_unlinked: bool = True) -> list[InmDevice]:
+                      include_unlinked: bool = True, dashboard: bool = False) -> list[InmDevice]:
     from sqlalchemy import or_
     from ..security.context import get_scope
 
@@ -60,15 +64,22 @@ def visible_inventory(db: Session, controller_ids: set[int], *, family: str | No
     if include_unlinked and get_scope() is None:
         visible = or_(visible, (InmDevice.source_type == "REAL") & InmDevice.legacy_site_id.is_(None))
     query = select(InmDevice).where(visible).order_by(InmDevice.family, InmDevice.hostname)
+    if dashboard:
+        query = query.where(InmDevice.source_type == dashboard_source())
     if family:
         query = query.where(InmDevice.family == family)
     return canonical_inventory(db.scalars(query))
 
 
+def fresh_controller_ids(controllers, now: datetime) -> set[int]:
+    interval = get_settings().poll_interval_seconds
+    return {s.id for s in controllers if s.enabled and s.last_poll_ok
+            and C.freshness(s.last_poll_at, interval, now) == "FRESH"}
+
+
 def fresh_wireless_clients(db: Session, controllers, now: datetime) -> list[ClientRecord]:
     interval = get_settings().poll_interval_seconds
-    ids = [s.id for s in controllers if s.enabled and s.last_poll_ok
-           and C.freshness(s.last_poll_at, interval, now) == "FRESH"]
+    ids = fresh_controller_ids(controllers, now)
     if not ids:
         return []
     query = select(ClientRecord).where(

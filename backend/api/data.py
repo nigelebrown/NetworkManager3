@@ -29,8 +29,8 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
-def _site_ids(db: Session, site_id: int | None) -> list[int]:
-    ids = [s.id for s in visible_sites(db)]
+def _site_ids(db: Session, site_id: int | None, *, dashboard: bool = False) -> list[int]:
+    ids = [s.id for s in visible_sites(db, dashboard=dashboard)]
     if site_id is not None:
         if site_id not in ids:
             raise HTTPException(404, "Site not found")
@@ -159,7 +159,7 @@ def list_clients(
     connected: bool = True, limit: int = Query(500, ge=1, le=2000),
     db: Session = Depends(get_db), user: User = Depends(require_role("viewer")),
 ):
-    ids = _site_ids(db, site_id)
+    ids = _site_ids(db, site_id, dashboard=True)
     controllers = list(db.scalars(select(Site).where(Site.id.in_(ids))))
     names = {s.id: s.name for s in controllers}
     stmt = select(ClientRecord).where(ClientRecord.site_id.in_(ids))
@@ -205,11 +205,14 @@ def list_clients(
 def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
                       _: User = Depends(require_role("viewer"))):
     from types import SimpleNamespace
-    from ..infrastructure.device_state import fresh_wireless_clients, plans_by_device, state_of, visible_inventory
+    from ..domain import collection as C
+    from ..infrastructure.device_state import (
+        fresh_controller_ids, fresh_wireless_clients, plans_by_device, state_of, visible_inventory,
+    )
 
     now = utcnow()
-    sites = visible_sites(db)
-    ids = _site_ids(db, site_id)
+    sites = visible_sites(db, dashboard=True)
+    ids = _site_ids(db, site_id, dashboard=True)
     controllers = {s.id: s for s in sites if s.id in ids}
     aps = list(db.scalars(select(AccessPoint).where(AccessPoint.site_id.in_(ids))))
     up = sum(1 for a in aps if a.status == "up")
@@ -217,14 +220,16 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     snrs = [c.snr_db for c in clients if c.snr_db is not None]
     quality = Counter(c.quality or "unavailable" for c in clients)
 
-    # Channel utilization: latest sample per up AP; unavailable (None) if no AP reports it.
+    fresh_ids = fresh_controller_ids(controllers.values(), now)
+    interval = get_settings().poll_interval_seconds
+    # Use current radio samples from reachable controllers.
     u2: list[float] = []
     u5: list[float] = []
     for a in aps:
-        if a.status != "up":
+        if a.status != "up" or a.site_id not in fresh_ids:
             continue
         s = db.scalar(select(ApSample).where(ApSample.ap_id == a.id).order_by(ApSample.ts.desc()).limit(1))
-        if s:
+        if s and C.freshness(s.ts, interval, now) == "FRESH":
             if s.util_2g_percent is not None:
                 u2.append(s.util_2g_percent)
             if s.util_5g_percent is not None:
@@ -232,14 +237,16 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     utils = u2 + u5
 
     polled = [s for s in sites if s.id in ids]
-    polls_ok = sum(1 for s in polled if s.last_poll_ok)
+    current_aps = [a for a in aps if a.site_id in fresh_ids]
+    current_up = sum(1 for a in current_aps if a.status == "up")
     # Phase 1 health score (see docs/SCORING.md): 70% AP availability + 30% sites polling OK.
     health = None
-    if aps and polled:
-        health = round(70 * up / len(aps) + 30 * polls_ok / len(polled), 1)
+    if current_aps and polled:
+        health = round(70 * current_up / len(current_aps) + 30 * len(fresh_ids) / len(polled), 1)
 
     alerts = list(db.scalars(select(Alert).where(
         Alert.status.in_(("active", "acknowledged")),
+        Alert.simulated.is_(get_settings().mode == "demo"),
         or_(Alert.site_id.in_(ids), Alert.site_id.is_(None)))))
     sev = Counter(a.severity for a in alerts if a.status == "active")
 
@@ -247,7 +254,7 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
     bands = Counter(c.band or "unknown" for c in clients)
     # Coverage: the inventory is the denominator, not just the APs that happen to be in a polled cluster. Without it
     # "28 / 28 online" and "health 100" read as the whole estate when most APs are not monitored at all.
-    inv = visible_inventory(db, set(ids), family="access_point", include_unlinked=site_id is None)
+    inv = visible_inventory(db, set(ids), family="access_point", include_unlinked=site_id is None, dashboard=True)
     plans = plans_by_device(db)
     states = Counter(state_of(d, plans.get(d.id), now=now, controller=controllers.get(d.legacy_site_id))["state"]
                      for d in inv)
@@ -289,7 +296,7 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
 @router.get("/dashboard/history")
 def dashboard_history(site_id: int | None = None, hours: int = Query(24, ge=1, le=720),
                       db: Session = Depends(get_db), _: User = Depends(require_role("viewer"))):
-    ids = _site_ids(db, site_id)
+    ids = _site_ids(db, site_id, dashboard=True)
     since = utcnow() - timedelta(hours=hours)
     rows = db.scalars(select(SiteSample).where(SiteSample.site_id.in_(ids), SiteSample.ts >= since)
                       .order_by(SiteSample.ts))

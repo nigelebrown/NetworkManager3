@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/experience", tags=["experience"])
 
 
 def _site_ids(db: Session, site_id: int | None) -> list[int]:
-    ids = [s.id for s in visible_sites(db)]
+    ids = [s.id for s in visible_sites(db, dashboard=True)]
     if site_id is not None:
         if site_id not in ids:
             raise HTTPException(404, "Site not found")
@@ -37,9 +37,13 @@ def overview(site_id: int | None = None, db: Session = Depends(get_db), user: Us
     ids = _site_ids(db, site_id)
     cfg = load_config(db)
     full = user.role in ("operator", "admin")
-    clients = list(db.scalars(select(ClientRecord).where(ClientRecord.site_id.in_(ids), ClientRecord.is_connected.is_(True))))
-    aps = list(db.scalars(select(AccessPoint).where(AccessPoint.site_id.in_(ids))))
-    sites = {s.id: s.name for s in db.scalars(select(Site).where(Site.id.in_(ids)))}
+    from ..infrastructure.device_state import fresh_controller_ids, fresh_wireless_clients
+    controllers = list(db.scalars(select(Site).where(Site.id.in_(ids))))
+    now = utcnow()
+    clients = fresh_wireless_clients(db, controllers, now)
+    aps = list(db.scalars(select(AccessPoint).where(
+        AccessPoint.site_id.in_(fresh_controller_ids(controllers, now)))))
+    sites = {s.id: s.name for s in controllers}
     scored = sorted((c for c in clients if c.exp_score is not None), key=lambda c: c.exp_score)
     return {
         "summary": summarize([c.exp_score for c in clients], cfg),

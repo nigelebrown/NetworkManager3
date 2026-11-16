@@ -35,13 +35,13 @@ UNLINKED_POLLS_PER_CYCLE = 2
 
 
 # ---- site visibility -------------------------------------------------------------------
-def visible_sites(db: Session) -> list[Site]:
+def visible_sites(db: Session, *, dashboard: bool = False) -> list[Site]:
     """Demo mode shows simulated sites; live mode exposes demo sites only when explicitly loaded."""
     if get_settings().mode == "demo":
         cond = Site.simulated.is_(True)
     else:
         row = db.get(AppSetting, "demo_dataset")
-        cond = Site.simulated.in_([True, False]) if row and row.value.get("loaded") else Site.simulated.is_(False)
+        cond = Site.simulated.in_([True, False]) if not dashboard and row and row.value.get("loaded") else Site.simulated.is_(False)
     sites = list(db.scalars(select(Site).where(cond).order_by(Site.name)))
     # INM: a site-scoped user (set per request in security.deps.get_current_user) only sees granted sites.
     # Background jobs never set a scope and therefore see every site.

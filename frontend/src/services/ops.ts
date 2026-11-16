@@ -93,7 +93,7 @@ export const ops = {
   noc: () => request<Noc>("/v1/noc/overview"),
   trends: () => request<Trends>("/v1/executive/trends"),
   executive: () => request<Executive>("/v1/reports/executive"),
-  fleetCompliance: () => request<FleetCompliance>("/v1/compliance/fleet"),
+  fleetCompliance: (dashboard = false) => request<FleetCompliance>(dashboard ? "/v1/compliance/fleet?dashboard=true" : "/v1/compliance/fleet"),
   deviceCompliance: (id: string) => request<DeviceCompliance>(`/v1/compliance/devices/${enc(id)}`),
   series: (id: string, metric: string, hours = 24) => request<Series>(`/v1/devices/${enc(id)}/metrics/series?metric=${enc(metric)}&hours=${hours}`),
   experience: (id: string, window = "1h") => request<Record<string, unknown>>(`/v1/devices/${enc(id)}/experience?window=${window}`),

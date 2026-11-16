@@ -321,10 +321,10 @@ def v1_sites(db: Session = Depends(get_db), _: User = Depends(require_role("view
 
 @router.get("/devices")
 def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$"), db: Session = Depends(get_db),
-               _: User = Depends(require_role("viewer"))):
+               _: User = Depends(require_role("viewer")), dashboard: bool = False):
     from ..infrastructure.device_state import plans_by_device, visible_inventory
-    ids = _visible_legacy_ids(db)
-    devs = visible_inventory(db, ids, family=family)
+    ids = {s.id for s in visible_sites(db, dashboard=dashboard)}
+    devs = visible_inventory(db, ids, family=family, dashboard=dashboard)
     caps: dict[str, list] = {}
     for c in db.scalars(select(DeviceCapability).where(DeviceCapability.device_id.in_([d.id for d in devs]))):
         caps.setdefault(c.device_id, []).append(c)

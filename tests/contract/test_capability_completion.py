@@ -68,11 +68,14 @@ def test_live_mode_shows_no_demo_and_demo_toggle_round_trip(live, adm):
     created = loaded.json()["created"]
     assert created["devices"] >= 10 and created["telemetry_points"] > 1000
     noc = live.get("/api/v1/noc/overview", headers=adm).json()
-    assert {d["source_type"] for d in noc["devices"]} == {"REAL", "DEMO"}
-    assert any(d["health"]["score"] is not None for d in noc["devices"] if d["source_type"] == "DEMO")
+    assert {d["source_type"] for d in noc["devices"]} == {"REAL"}
+    assert live.get("/api/dashboard/summary", headers=adm).json()["coverage"]["inventory_aps"] == 0
+    assert live.get("/api/v1/wireless/fleet", headers=adm).json()["aps"] == []
+    assert [d["id"] for d in live.get("/api/v1/devices?dashboard=true", headers=adm).json()] == [real]
+    assert live.get("/api/sites?dashboard=true", headers=adm).json() == []
     fleet = live.get("/api/v1/compliance/fleet", headers=adm).json()
     assert fleet["fleet_score"] is not None and fleet["top_failures"]
-    assert live.get("/api/v1/executive/trends", headers=adm).json()["hourly"]
+    assert live.get("/api/v1/executive/trends", headers=adm).json()["hourly"] == []
     assert live.get("/api/v1/reports/executive", headers=adm).status_code == 200
     # legacy SIMS pages show demo sites in live mode only while loaded
     assert any(s["simulated"] for s in live.get("/api/sites", headers=adm).json())

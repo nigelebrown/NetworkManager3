@@ -95,14 +95,14 @@ def build_fleet(db: Session) -> dict[str, Any]:
     from ..database.models_onboarding import OnboardingDeviceCredential
     from ..infrastructure.device_state import fresh_wireless_clients, plans_by_device, state_of, visible_inventory
     now = _now()
-    sites = {s.id: s for s in visible_sites(db)}
+    sites = {s.id: s for s in visible_sites(db, dashboard=True)}
     clusters_by_legacy = {c.legacy_site_id: c for c in db.scalars(select(InmCluster)) if c.legacy_site_id}
     phys = {s.id: s.name for s in db.scalars(select(InmSite))}
     legacy_aps = {a.id: a for a in db.scalars(select(AccessPoint).where(AccessPoint.site_id.in_(list(sites) or [-1])))}
     creds = {b.device_id for b in db.scalars(select(OnboardingDeviceCredential))}
     plans = plans_by_device(db)
     tiers = _latest_tiers(db)
-    devices = visible_inventory(db, set(sites), family="access_point")
+    devices = visible_inventory(db, set(sites), family="access_point", dashboard=True)
     # Radio utilisation is stored per poll in ap_samples (the radio dicts only carry it on some firmware paths).
     latest_util: dict[int, ApSample] = {}
     for smp in db.scalars(select(ApSample).where(ApSample.ts >= now - timedelta(minutes=30),
@@ -125,6 +125,10 @@ def build_fleet(db: Session) -> dict[str, Any]:
             cond.update(util_2g_percent=r2["util_percent"], util_5g_percent=r5["util_percent"],
                         cpu_percent=a.cpu_percent, memory_percent=a.memory_percent, clients=a.client_count,
                         noise_2g_dbm=r2["noise_floor_dbm"], noise_5g_dbm=r5["noise_floor_dbm"])
+        fresh_ap = a if st["state"] in ("ONLINE", "DEGRADED") else None
+        if fresh_ap is None:
+            r2 = _radio(None, "2")
+            r5 = _radio(None, "5")
         ctier, ctrig, unavailable = H.condition_tier(cond)
         name = d.hostname or d.serial_number
         ev = tiers.get(name)
@@ -139,9 +143,9 @@ def build_fleet(db: Session) -> dict[str, Any]:
             "cluster": (cl.name if cl else controller.name) if controller else None,
             "is_vc": bool(a and a.is_master), "state": st["state"], "state_reason": st["state_reason"],
             "last_seen": _iso(a.last_seen) if a else st.get("last_persisted_at"),
-            "clients": a.client_count if a else None, "uptime_seconds": a.uptime_seconds if a else None,
-            "cpu_percent": a.cpu_percent if a else None, "memory_percent": a.memory_percent if a else None,
-            "radio_2g": r2, "radio_5g": r5, "exp_score": a.exp_score if a else None,
+            "clients": fresh_ap.client_count if fresh_ap else None, "uptime_seconds": fresh_ap.uptime_seconds if fresh_ap else None,
+            "cpu_percent": fresh_ap.cpu_percent if fresh_ap else None, "memory_percent": fresh_ap.memory_percent if fresh_ap else None,
+            "radio_2g": r2, "radio_5g": r5, "exp_score": fresh_ap.exp_score if fresh_ap else None,
             "tier": tier, "condition_tier": ctier, "condition_triggers": ctrig,
             "event_tier": ev["tier"] if ev else None, "event_trigger": ev["trigger"] if ev else None,
             "unavailable_inputs": unavailable, "transport": transport,

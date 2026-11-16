@@ -21,7 +21,7 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><div className="inm-section-label">Overview & command</div><h1 className="inm-pagetitle">Wi-Fi dashboard {s?.simulated && <SimBadge />}</h1></div>
         <div className="flex items-center gap-2">
-          <SiteFilter value={site} onChange={setSite} />
+          <SiteFilter value={site} onChange={setSite} dashboard />
           <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={hours} onChange={(e) => setHours(Number(e.target.value))} aria-label="History range">
             {[1, 6, 24, 72].map((h) => <option key={h} value={h}>Last {h}h</option>)}
           </select>
@@ -47,7 +47,7 @@ export default function Dashboard() {
               ? `${s.avg_util_2g_percent ?? "—"}% / ${s.avg_util_5g_percent ?? "—"}%` : NA}
               sub={s.avg_util_5g_percent == null && s.avg_util_2g_percent == null ? "not reported by the observed APs" : "2.4 GHz / 5 GHz, AP-reported"} />
             <Stat label="Availability (observed)" value={s.health_score ?? NA} tone={s.health_score == null ? undefined : s.health_score >= 90 ? "ok" : s.health_score >= 70 ? "warn" : "bad"}
-              sub={s.coverage && s.coverage.unmonitored_aps ? `observed APs only — ${s.coverage.unmonitored_aps} unobserved excluded` : "70% AP uptime + 30% cluster polling"} />
+              sub="70% AP availability from fresh observations + 30% current cluster polling" />
             <Stat label="User experience" value={s.user_experience_score ?? NA}
               tone={s.user_experience.band === "good" ? "ok" : s.user_experience.band === "fair" ? "warn" : s.user_experience.band === "poor" ? "bad" : undefined}
               sub={s.user_experience_score == null ? "no scorable clients" : `${s.user_experience.good} good · ${s.user_experience.fair} fair · ${s.user_experience.poor} poor · partial inputs`} />
