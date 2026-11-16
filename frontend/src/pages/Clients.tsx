@@ -21,7 +21,7 @@ export default function Clients() {
           <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" aria-label="Quality">
             <option value="">Any quality</option>{["good", "fair", "poor", "unavailable"].map((q) => <option key={q}>{q}</option>)}
           </select>
-          <SiteFilter value={site} onChange={setSite} />
+          <SiteFilter value={site} onChange={setSite} dashboard />
         </div>
       </div>
       <ErrorNote error={error} />

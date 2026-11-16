@@ -119,18 +119,21 @@ def _summary(db: Session) -> dict:
 
     t = now()
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
-    controllers = {s.id: s for s in visible_sites(db)}
+    controllers = {s.id: s for s in visible_sites(db, dashboard=True)}
     plans = plans_by_device(db)
     devices, fresh = [], {}
-    for d in visible_inventory(db, set(controllers)):
+    for d in visible_inventory(db, set(controllers), dashboard=True):
         devices.append({"id": d.id, "source_type": d.source_type, "site": sites.get(d.site_id), "model": d.model})
         state = state_of(d, plans.get(d.id), now=t, controller=controllers.get(d.legacy_site_id))
         fresh[d.id] = "GAP" if state["last_failure"] else state["freshness"]
-    sources = ("REAL", "DEMO") if any(s.simulated for s in controllers.values()) else ("REAL",)
+    from ..config import get_settings
+    sources = ("DEMO",) if get_settings().mode == "demo" else ("REAL",)
     recs = [{"approval_state": r.approval_state} for r in db.scalars(
         select(RecommendationRecord).where(RecommendationRecord.source_type.in_(sources)))]
-    attrs = [{"level": a.level} for a in db.scalars(select(ChangeAttribution).where(ChangeAttribution.supersedes_id.is_(None)))]
-    vault = [{"restore_state": a.restore_state} for a in db.scalars(select(ConfigArtifact))]
+    attrs = [{"level": a.level} for a in db.scalars(select(ChangeAttribution).where(
+        ChangeAttribution.supersedes_id.is_(None), ChangeAttribution.device_id.in_(list(fresh))))]
+    vault = [{"restore_state": a.restore_state} for a in db.scalars(select(ConfigArtifact).where(
+        ConfigArtifact.device_id.in_(list(fresh))))]
     return R.executive_summary(devices, fresh, recs, attrs, vault, sources)
 
 

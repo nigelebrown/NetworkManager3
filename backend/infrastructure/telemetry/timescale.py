@@ -215,7 +215,7 @@ class TimescaleTelemetryStore:
 
     def query(self, *, device_id: str | None, metric_name: str | None, since: datetime, limit: int = 500,
               source_event_id: str | None = None, entity_type: str | None = None,
-              entity_id: str | None = None) -> list[dict]:
+              entity_id: str | None = None, source_type: str | None = None) -> list[dict]:
         where, params = ["observed_at >= :since"], {"since": _iso(since), "limit": min(max(limit, 1), 20000)}
         if entity_type:
             where.append("entity_type = :et"); params["et"] = entity_type
@@ -227,6 +227,9 @@ class TimescaleTelemetryStore:
             where.append("metric_name = :m"); params["m"] = metric_name
         if source_event_id:
             where.append("source_event_id = :e"); params["e"] = source_event_id
+        if source_type:
+            where.append("source_type = :source")
+            params["source"] = source_type
         sql = text(f"SELECT observed_at, device_id, site_id, metric_name, value, unit, collection_method, quality, "
                    f"source_type, source_event_id, entity_type, entity_id, tags FROM telemetry_points WHERE {' AND '.join(where)} "
                    f"ORDER BY observed_at DESC LIMIT :limit")

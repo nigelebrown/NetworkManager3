@@ -51,7 +51,7 @@ export default function Experience() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><div className="inm-section-label">Monitoring & diagnostics</div><h1 className="inm-pagetitle">Digital experience {o?.simulated && <SimBadge />}</h1></div>
         <div className="flex items-center gap-2">
-          <SiteFilter value={site} onChange={setSite} />
+          <SiteFilter value={site} onChange={setSite} dashboard />
           <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={hours} onChange={(e) => setHours(Number(e.target.value))} aria-label="History range">
             {[6, 24, 72, 168].map((h) => <option key={h} value={h}>Last {h}h</option>)}
           </select>

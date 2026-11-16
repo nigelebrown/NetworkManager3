@@ -38,7 +38,7 @@ export function RuleTable({ c }: { c: DeviceCompliance }) {
 }
 
 export default function Compliance() {
-  const fleet = useLoad(ops.fleetCompliance, [], 60000);
+  const fleet = useLoad(() => ops.fleetCompliance(true), [], 60000);
   const [sel, setSel] = useState<string | null>(null);
   const detail = useLoad(() => sel ? ops.deviceCompliance(sel) : Promise.resolve(null), [sel], 0);
   const f = fleet.data;

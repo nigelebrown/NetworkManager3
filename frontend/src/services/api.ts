@@ -89,7 +89,7 @@ export const api = {
   history: (hours: number, site_id?: number) => request<HistoryPoint[]>(`/dashboard/history${q({ hours, site_id })}`),
   aps: (site_id?: number) => request<AP[]>(`/aps${q({ site_id })}`),
   clients: (p: { site_id?: number; q?: string; quality?: string }) => request<Client[]>(`/clients${q(p)}`),
-  sites: () => request<Site[]>("/sites"),
+  sites: (dashboard = false) => request<Site[]>(dashboard ? "/sites?dashboard=true" : "/sites"),
   createSite: (b: Record<string, unknown>) => request<Site>("/sites", { method: "POST", body: JSON.stringify(b) }),
   testSite: (id: number) => request<{ ok: boolean; error?: string; aps_found?: number; clients_found?: number; firmware?: string; warnings?: string[] }>(`/sites/${id}/test`, { method: "POST" }),
   apHistory: (id: number, hours: number) => request<{

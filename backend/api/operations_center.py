@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database.models import Alert, AuditLog, User
+from ..database.models import Alert, AuditLog, SiteSample, User
 from ..database.models_inm import InmDevice, InmSite, RecommendationRecord
 from ..database.models_phases import (ChangeAttribution, ChangePlan, CollectionPlan, CollectionRun,
                                       ConfigArtifact, DeviceLogEvent)
@@ -87,12 +87,20 @@ def device_compliance(device_id: str, db: Session = Depends(get_db), user: User 
 
 
 @router.get("/compliance/fleet")
-def fleet_compliance(db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+def fleet_compliance(db: Session = Depends(get_db), user: User = Depends(require_role("viewer")),
+                     dashboard: bool = False):
     tpl = _templates(db)
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
     rows, rule_fail = [], Counter()
-    for d in db.scalars(select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"]),
-                                                InmDevice.family.in_(["access_point", "switch"]))):
+    query = select(InmDevice).where(InmDevice.source_type.in_(["REAL", "DEMO"]),
+                                    InmDevice.family.in_(["access_point", "switch"]))
+    if dashboard:
+        from ..infrastructure.device_state import visible_inventory
+        devices = (d for d in visible_inventory(db, {s.id for s in visible_sites(db, dashboard=True)}, dashboard=True)
+                   if d.family in ("access_point", "switch"))
+    else:
+        devices = db.scalars(query)
+    for d in devices:
         c = _device_compliance(db, d, tpl)
         for r in c["results"]:
             if r["status"] == "FAIL":
@@ -127,17 +135,19 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     t = now()
     store = telemetry_store()
     sites = {s.id: s.name for s in db.scalars(select(InmSite))}
-    from ..infrastructure.device_state import fresh_wireless_clients, plans_by_device, state_of, visible_inventory
+    from ..infrastructure.device_state import dashboard_source, fresh_wireless_clients, plans_by_device, state_of, visible_inventory
     plans = plans_by_device(db)
     tiles = []
-    controllers = {s.id: s for s in visible_sites(db)}
-    devices = visible_inventory(db, set(controllers))
+    controllers = {s.id: s for s in visible_sites(db, dashboard=True)}
+    devices = visible_inventory(db, set(controllers), dashboard=True)
+    device_ids = [d.id for d in devices]
+    source = dashboard_source()
     for d in devices:
         controller = controllers.get(d.legacy_site_id)
         p = plans.get(d.id)
         fresh = C.freshness(p.last_success_at, p.interval_seconds, t) if p else ("MANUAL" if d.last_observed_at else "NEVER")
         rows = store.query(device_id=d.id, metric_name=None, since=t - timedelta(hours=1), limit=2000,
-                           entity_type="device") if store else []
+                           entity_type="device", source_type=source) if store else []
         latest = N.latest_by_metric(rows)
         st = state_of(d, p, now=t, controller=controller)
         if controller and d.legacy_ap_id is not None:
@@ -153,28 +163,35 @@ def noc(db: Session = Depends(get_db), user: User = Depends(require_role("viewer
     status = Counter(x["status"] for x in tiles)
     fresh = Counter(x["freshness"] for x in tiles)
     since = t - timedelta(hours=1)
-    runs = Counter(r for r in db.scalars(select(CollectionRun.state).where(CollectionRun.started_at >= since)))
+    runs = Counter(db.scalars(select(CollectionRun.state).where(
+        CollectionRun.started_at >= since, CollectionRun.device_id.in_(device_ids))))
     events = [{"at": iso(e.observed_at), "device_id": e.device_id, "severity": e.severity, "message": e.message,
                "config_change": e.is_config_change}
-              for e in db.scalars(select(DeviceLogEvent).order_by(DeviceLogEvent.observed_at.desc()).limit(25))]
+              for e in db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id.in_(device_ids))
+                                  .order_by(DeviceLogEvent.observed_at.desc()).limit(25))]
     from ..database.models_phases import InmAlert
+    device_alerts = select(InmAlert).where(InmAlert.state.in_(("OPEN", "ACKNOWLEDGED")),
+                                           InmAlert.source_type == source, InmAlert.device_id.in_(device_ids))
+    legacy_alerts = select(Alert).where(Alert.status != "resolved", Alert.simulated.is_(source == "DEMO"),
+                                        Alert.site_id.in_(controllers))
     alerts = [{"id": a.id, "severity": a.severity, "message": a.message, "created_at": iso(a.opened_at),
                "simulated": a.source_type == "DEMO", "rule_id": a.rule_id, "device_id": a.device_id,
                "suppressed": a.suppressed}
-              for a in db.scalars(select(InmAlert).where(InmAlert.state.in_(("OPEN", "ACKNOWLEDGED")))
-                                  .order_by(InmAlert.opened_at.desc()).limit(25))]
+              for a in db.scalars(device_alerts.order_by(InmAlert.opened_at.desc()).limit(25))]
     alerts += [{"id": a.id, "severity": a.severity, "message": a.message, "created_at": iso(a.raised_at),
                 "simulated": a.simulated}
-               for a in db.scalars(select(Alert).where(Alert.status != "resolved").order_by(Alert.raised_at.desc()).limit(25))]
+               for a in db.scalars(legacy_alerts.order_by(Alert.raised_at.desc()).limit(25))]
     worst = sorted([x for x in tiles if x["health"]["score"] is not None], key=lambda x: x["health"]["score"])[:10]
     clients = len(fresh_wireless_clients(db, controllers.values(), t))
+    active_alerts = sum(db.scalar(select(func.count()).select_from(q.subquery()))
+                        for q in (device_alerts, legacy_alerts))
     return {"generated_at": iso(t), "devices": tiles,
             "summary": {"devices": len(tiles), "up": status.get("up", 0), "down": status.get("down", 0),
                         "states": dict(Counter(x["state"] for x in tiles)),
                         "unknown": status.get("unknown", 0), "fresh": fresh.get("FRESH", 0),
                         "stale_or_gap": fresh.get("STALE", 0) + fresh.get("GAP", 0),
                         "never_polled": fresh.get("NEVER", 0) + fresh.get("MANUAL", 0),
-                        "clients": int(clients), "active_alerts": len(alerts),
+                        "clients": clients, "active_alerts": active_alerts,
                         "health_bands": dict(Counter(x["health"]["band"] for x in tiles))},
             "collection_last_hour": dict(runs), "worst_experience": worst, "events": events, "alerts": alerts}
 
@@ -226,14 +243,23 @@ def entities(device_id: str, hours: int = 1, db: Session = Depends(get_db),
 # ---- executive trends ----------------------------------------------------------------------
 @router.get("/executive/trends")
 def trends(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor", "approver", "operator"))):
+    from ..infrastructure.device_state import dashboard_source, visible_inventory
+
     t = now()
     store = telemetry_store()
-    # per (hour, device) averages, then fleet sum (clients) or fleet mean (utilisation, CPU)
+    source = dashboard_source()
+    sites = {s.id for s in visible_sites(db, dashboard=True)}
+    device_ids = {d.id for d in visible_inventory(db, sites, dashboard=True)}
+    # Average each controller's reported client sessions per hour before summing the fleet.
     buckets: dict[tuple, list] = defaultdict(list)
+    for ts, site_id, count in db.execute(select(SiteSample.ts, SiteSample.site_id, SiteSample.clients_total)
+                                        .where(SiteSample.site_id.in_(sites), SiteSample.ts >= t-timedelta(hours=24))):
+        buckets[(iso(ts)[:13], "clients", site_id)].append(count)
     if store is not None:
-        for metric in ("clients", "util_5g_percent", "cpu_percent"):
-            for r in store.query(device_id=None, metric_name=metric, since=t - timedelta(hours=24), limit=5000):
-                if r["value"] is not None:
+        for metric in ("util_5g_percent", "cpu_percent"):
+            for r in store.query(device_id=None, metric_name=metric, since=t-timedelta(hours=24), limit=20000,
+                                 source_type=source, entity_type="device"):
+                if r["value"] is not None and r["device_id"] in device_ids:
                     buckets[(str(r["observed_at"])[:13], metric, r["device_id"])].append(r["value"])
     per_hour: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for (hk, metric, _dev), vals in buckets.items():
@@ -249,15 +275,18 @@ def trends(db: Session = Depends(get_db), user: User = Depends(require_any_role(
                 row[k] = round(sum(m[k]) / len(m[k]), 1)
         hours.append(row)
     days = defaultdict(lambda: {"plans": 0, "approved": 0, "rejected": 0})
-    for p in db.scalars(select(ChangePlan).where(ChangePlan.created_at >= t - timedelta(days=14))):
+    for p in db.scalars(select(ChangePlan).where(ChangePlan.created_at >= t - timedelta(days=14),
+                                                ChangePlan.device_id.in_(device_ids))):
         k = iso(p.created_at)[:10]
         days[k]["plans"] += 1
         if p.state == "APPROVED":
             days[k]["approved"] += 1
         if p.state == "REJECTED":
             days[k]["rejected"] += 1
-    attr = Counter(a.level for a in db.scalars(select(ChangeAttribution).where(ChangeAttribution.supersedes_id.is_(None))))
-    recs = Counter(r.approval_state for r in db.scalars(select(RecommendationRecord)))
+    attr = Counter(a.level for a in db.scalars(select(ChangeAttribution).where(
+        ChangeAttribution.supersedes_id.is_(None), ChangeAttribution.device_id.in_(device_ids))))
+    recs = Counter(r.approval_state for r in db.scalars(select(RecommendationRecord).where(
+        RecommendationRecord.source_type == source)))
     audit_n = db.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.ts >= t - timedelta(days=1))) or 0
     return {"hourly": hours, "changes_by_day": [dict(day=k, **v) for k, v in sorted(days.items())],
             "attribution": dict(attr), "recommendations": dict(recs), "audit_events_24h": audit_n}

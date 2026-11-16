@@ -1,8 +1,8 @@
 import { api } from "../services/api";
 import { useLoad } from "./useLoad";
 
-export default function SiteFilter({ value, onChange }: { value?: number; onChange: (v?: number) => void }) {
-  const { data } = useLoad(() => api.sites(), [], 0);
+export default function SiteFilter({ value, onChange, dashboard = false }: { value?: number; onChange: (v?: number) => void; dashboard?: boolean }) {
+  const { data } = useLoad(() => api.sites(dashboard), [dashboard], 0);
   return (
     <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={value ?? ""}
       onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)} aria-label="Filter by site">
