@@ -111,20 +111,25 @@ def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
             up = telemetry.parse_uplink_counters(raw)
             obs["memory"] = mem or {"memory_free_mib": None, "reason": "no MemAvailable/MemFree line in system-status"}
             obs["uplink_counters"] = up
-            if not up:
-                obs["gaps"].append("uplink byte counters not present in system-status output")
         except ArubaCommandError as exc:
             log.info("system-status unavailable for %s: %s", ip, exc)
             obs["gaps"].append(f"system-status unavailable ({type(exc).__name__})")
-        for cmd, kind in (("show ap monitor ap-list", "ap"), ("show ap monitor client-list", "client")):
+        if obs["uplink_counters"] is None:
+            try:
+                obs["uplink_counters"] = telemetry.parse_uplink_counters(
+                    parsers.output_text(client.show("show interface counters", iap_ip=ip)))
+            except ArubaCommandError:
+                pass
+        if obs["uplink_counters"] is None:
+            obs["gaps"].append("No identifiable uplink byte counters returned by the AP")
+        for cmd, kind in (("show ap monitor ap-list", "ap"), ("show ap monitor sta-list", "client")):
             try:
                 res = telemetry.parse_monitor_list(parsers.output_text(client.show(cmd, iap_ip=ip)), kind)
                 obs[f"monitor_{kind}s"] = res or {"total": None, "reason": f"'{cmd}' returned no recognisable table"}
             except ArubaCommandError as exc:
                 obs[f"monitor_{kind}s"] = {"total": None, "reason": f"'{cmd}' rejected ({type(exc).__name__})"}
         obs["client_match"] = {"state": "NOT_COLLECTED",
-                               "reason": "The Client Match status command was rejected on pilot firmware; the per-band "
-                                         "signal distribution of connected stations is shown instead."}
+                               "reason": "Client Match status is unavailable on the tested firmware."}
         d["observations"] = obs
         if got_any:
             streak = 0

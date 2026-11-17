@@ -43,6 +43,8 @@ READ_ONLY_COMMANDS = (
     "show ap arm history",
     "show ap monitor ap-list",
     "show ap monitor client-list",
+    "show ap monitor sta-list",
+    "show interface counters",
     "show radio-stats",
     "show arm rf-summary",
     "show ap debug radio-stats",

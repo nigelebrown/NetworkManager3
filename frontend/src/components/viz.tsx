@@ -25,14 +25,14 @@ export function PageHeader({ title, subtitle, right, eyebrow }: { title: string;
   </header>;
 }
 
-export function Gauge({ value, label, size = 120 }: { value: number | null | undefined; label?: string; size?: number }) {
+export function Gauge({ value, label, size = 120, tone }: { value: number | null | undefined; label?: string; size?: number; tone?: string }) {
   const v = value == null ? 0 : Math.max(0, Math.min(100, value));
   const r = size / 2 - 10, c = 2 * Math.PI * r, arc = c * 0.75;
   return <div className="flex flex-col items-center">
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       <g transform={`rotate(135 ${size / 2} ${size / 2})`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e5edf6" strokeWidth={10} strokeDasharray={`${arc} ${c}`} strokeLinecap="round" />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={scoreColor(value)} strokeWidth={10}
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={tone ?? scoreColor(value)} strokeWidth={10}
           strokeDasharray={`${(arc * v) / 100} ${c}`} strokeLinecap="round" />
       </g>
       <text x="50%" y="52%" textAnchor="middle" dominantBaseline="middle" fill="#253c55" fontSize={size / 4.5} fontWeight={600}>

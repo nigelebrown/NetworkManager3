@@ -88,7 +88,7 @@ class ArubaInstantWriter:
                   "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, client=None, ssh_runner=None,
-                 snapshot=None):
+                 snapshot=None, diagnostic_target=None):
         from ...aruba.client import ArubaClient, ArubaTarget
         from ...aruba.ssh import run_config_lines
         self.creds = creds
@@ -97,6 +97,7 @@ class ArubaInstantWriter:
         self._ssh = ssh_runner or run_config_lines
         self._snapshot = snapshot
         self.ap_ip = creds.extra.get("ap_ip", creds.host)
+        self.diagnostic_target = diagnostic_target
 
     # ---- session -------------------------------------------------------------------------
     def open(self) -> None:
@@ -139,8 +140,15 @@ class ArubaInstantWriter:
         if kind not in INSTANT_SHOW:
             raise WriterError("UNSUPPORTED", "This Instant diagnostic is not on the read-only allowlist.")
         cmd = INSTANT_SHOW[kind]
+        from ...aruba.ssh import SshShowClient
+        ssh = isinstance(self.client, SshShowClient)
+        target = self.diagnostic_target if kind in ("system", "rf") else None
+        if ssh and target:
+            if target != self.client.host:
+                raise WriterError("UNSUPPORTED", "This SSH connection can read the controller only. Member RF and system diagnostics require targeted REST.")
+            target = None
         try:
-            data = self.client.show(cmd)
+            data = self.client.show(cmd, iap_ip=target) if target else self.client.show(cmd)
         except ArubaError as exc:
             raise WriterError("DEVICE_REJECTED", f"Instant diagnostic failed: {type(exc).__name__}") from None
         if not isinstance(data, dict):
@@ -149,7 +157,7 @@ class ArubaInstantWriter:
         if result is None:
             raise WriterError("PARSE_ERROR", "Instant did not return diagnostic output.")
         return {"kind": kind, "command": cmd, "output": safe_output(result),
-                "source": "INSTANT_REST_SHOW"}
+                "source": "INSTANT_SSH_SHOW" if ssh else "INSTANT_REST_SHOW"}
 
     def read_audit_logs(self, *, kind: str = "system", limit: int = 50) -> list[dict]:
         """Read a bounded Instant VC log view via the documented GET show-cmd API.

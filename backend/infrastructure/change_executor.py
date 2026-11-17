@@ -116,6 +116,41 @@ def writer_for(db: Session, device: InmDevice):
     return ArubaInstantWriter(creds, verify=verify), "HARDWARE"
 
 
+def reader_for(db: Session, device: InmDevice):
+    """Bind linked Instant reads to the same controller and transport as monitoring."""
+    from ..database.models import Site
+
+    site = db.get(Site, device.legacy_site_id) if (
+        device.family == "access_point" and device.source_type == "REAL" and device.legacy_site_id is not None
+    ) else None
+    if site is None or site.simulated:
+        return writer_for(db, device)
+
+    from ipaddress import IPv4Address
+    from fastapi import HTTPException
+    from ..api.quick_devices import _permit_probe
+    from ..aruba.authentication import client_for_site
+    from ..aruba.errors import ArubaError
+    from .ap_autodiscovery import site_transport
+    from .writers.aruba_instant import ArubaInstantWriter
+
+    transport = site_transport(db, site.id)
+    ssh_host = transport.get("ssh_host") if transport.get("transport") == "ssh_cli" else None
+    ap_ip = str(device.mgmt_addresses[0]) if device.mgmt_addresses else None
+    try:
+        for host in {site.vc_host, ssh_host, ap_ip} - {None}:
+            _permit_probe(IPv4Address(host))
+    except (HTTPException, ValueError):
+        raise WriterError("TARGET_NOT_ALLOWED", "Controller or AP is outside the approved management ranges.") from None
+    try:
+        client = client_for_site(site)
+    except ArubaError as exc:
+        raise WriterError("PRECONDITION", str(exc)) from None
+    reader = ArubaInstantWriter(Credentials(host=site.vc_host, username="", password=""), client=client,
+                                diagnostic_target=ap_ip)
+    return reader, "HARDWARE"
+
+
 # ---- vault helper --------------------------------------------------------------------------------
 def seal_artifact(db: Session, device: InmDevice, content: bytes, *, trigger: str, actor: str,
                   source: str) -> ConfigArtifact:

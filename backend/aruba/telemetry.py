@@ -237,6 +237,19 @@ def parse_uplink_counters(text: str | None) -> dict[str, Any] | None:
     """Cumulative uplink byte counters. Never a rate: rates need two timed samples (see uplink_rates)."""
     if not text:
         return None
+    interfaces = re.split(r"(?mi)(?=^\s*(?:bond0|eth0|eth1) is (?:up|down),)", text)
+    reported = {}
+    for block in interfaces:
+        iface = re.match(r"\s*(bond0|eth0|eth1) is up, line protocol is up", block, re.I)
+        rx = re.search(r"(?mi)^\s*Received bytes\s+(\d+)", block)
+        tx = re.search(r"(?mi)^\s*Transmitted bytes\s+(\d+)", block)
+        if iface and rx and tx:
+            reported[iface[1].lower()] = (int(rx[1]), int(tx[1]))
+    uplink = "bond0" if "bond0" in reported else next(iter(reported)) if len(reported) == 1 else None
+    if uplink:
+        rx_bytes, tx_bytes = reported[uplink]
+        return {"interface": uplink, "rx_bytes": rx_bytes, "tx_bytes": tx_bytes,
+                "format": "PARSED_FORMAT_UNVERIFIED"}
     for block in _IFCONFIG_BLOCK.finditer(text):
         m = _RX_TX.search(block.group(0))
         if m:

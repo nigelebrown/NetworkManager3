@@ -139,7 +139,7 @@ def capture_from_device(device_id: str, request: Request, db: Session = Depends(
     """Read the FULL running configuration from the device (read-only) and seal it in the vault."""
     d = real_device(db, device_id)
     try:
-        w, env = X.writer_for(db, d)
+        w, env = X.reader_for(db, d)
         w.open()
         try:
             content = w.backup()
@@ -209,7 +209,7 @@ def run_due_captures(db: Session, *, actor: str = "vault-scheduler") -> dict:
         if d is None:
             continue
         try:
-            w, env = X.writer_for(db, d)
+            w, env = X.reader_for(db, d)
             w.open()
             try:
                 content = w.backup()
@@ -308,7 +308,7 @@ def authority(device_id: str, request: Request, db: Session = Depends(get_db),
               user: User = Depends(require_role("operator"))):
     d = real_device(db, device_id)
     try:
-        w, env = X.writer_for(db, d)
+        w, env = X.reader_for(db, d)
         w.open()
         try:
             res = w.management_authority()
@@ -340,7 +340,7 @@ def read_device_logs(device_id: str, request: Request, kind: str | None = None,
     if chosen not in choices:
         raise HTTPException(422, f"Unsupported log kind for this device family; use {', '.join(choices)}.")
     try:
-        w, env = X.writer_for(db, d)
+        w, env = X.reader_for(db, d)
         w.open()
         try:
             if not hasattr(w, "read_audit_logs"):
@@ -374,7 +374,7 @@ def read_device_diagnostics(device_id: str, request: Request, kind: str,
     if kind not in choices:
         raise HTTPException(422, f"Unsupported read-only diagnostic. Choose: {', '.join(choices) or 'none'}.")
     try:
-        w, env = X.writer_for(db, d)
+        w, env = X.reader_for(db, d)
         w.open()
         try:
             if not hasattr(w, "read_diagnostics"):

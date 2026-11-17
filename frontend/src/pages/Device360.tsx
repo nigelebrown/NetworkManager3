@@ -100,10 +100,12 @@ export default function Device360() {
     {ins && ins.state.state !== "ONLINE" && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
       <b>{ins.state.state}:</b> {ins.state.state_reason}.{ins.ap && <> <b>What to do:</b> {ins.ap.guidance}</>}</div>}
     <div className="grid gap-3 md:grid-cols-4">
-      <Card><Gauge value={ins?.health.score} label={d?.family === "switch" ? "Health" : "AP health"} />
+      <Card><Gauge value={ins?.health.score} label={d?.family === "switch" ? "Health" : "Client experience"}
+        tone={ins?.ap ? ({ good: "#39966d", fair: "#d69923", poor: "#dc7425", unavailable: "#94a3b8" }[ins.health.band] ?? "#94a3b8") : undefined} />
         <p className="mt-1 text-center text-xs text-slate-500">{ins ? (ins.health.reasons.join(" · ") || (ins.health.score == null ? "No measured telemetry" : "No threshold breached")) : "…"}</p>
         {!!ins?.health.inputs.length && <p className="text-center text-[10px] text-slate-400">checked: {ins.health.inputs.map(label).join(", ")}</p>}
-        {ins?.ap && <p className="mt-1 text-center"><Pill value={`Tier ${ins.ap.tier}`} tone={TIER_TONE[ins.ap.tier]} /></p>}</Card>
+        {ins?.ap && <p className="mt-1 text-center"><Pill value={ins.state.state === "OFFLINE" ? "OFFLINE" : `Tier ${ins.ap.tier}`}
+          tone={ins.state.state === "OFFLINE" ? "poor" : TIER_TONE[ins.ap.tier]} /></p>}</Card>
       <Card><Gauge value={comp.data?.score} label="Best practice" />
         {ins && !ins.config.captured ? <p className="mt-1 text-center text-xs text-amber-700">No configuration captured yet, so rules cannot be checked.
           <button className="ml-1 underline" onClick={() => setTab("Operations")}>Capture it</button></p>
@@ -309,7 +311,7 @@ function ApExtrasCard({ x }: { x: import("../services/wireless").ApExtras }) {
         <div className="text-[10px] text-slate-500">{Object.entries(x.neighbors.stations.by_band ?? {}).map(([k, v]) => `${k} ${v}`).join(" · ")}</div></div>
     </div>
     <div className="mt-3 text-sm"><div className="text-xs text-slate-500">Signal of connected stations by band</div>
-      {Object.keys(x.signal_distribution.by_band).length === 0 ? na("no connected stations") :
+      {Object.keys(x.signal_distribution.by_band).length === 0 ? <span className="text-slate-500">No recently observed connected stations</span> :
         Object.entries(x.signal_distribution.by_band).map(([band, b]) => <div key={band} className="text-xs"><b>{band}</b>: {Object.entries(b).map(([k, v]) => `${k} ${v}`).join(" · ")}</div>)}</div>
     <p className="mt-2 text-xs text-slate-500">Client Match: {x.client_match.state} — {x.client_match.reason}</p>
     {!!x.gaps.length && <p className="text-xs text-amber-600">Gaps: {x.gaps.join("; ")}</p>}

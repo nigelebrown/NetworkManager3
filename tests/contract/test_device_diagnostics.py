@@ -53,6 +53,21 @@ def test_instant_diagnostics_reject_unlisted_commands_and_do_not_mutate_config()
         w.close()
 
 
+def test_instant_member_diagnostic_targets_the_selected_ap():
+    from backend.infrastructure.writers import Credentials
+    from backend.infrastructure.writers.aruba_instant import ArubaInstantWriter
+
+    class Client:
+        def show(self, command, **kwargs):
+            assert command == "show ap arm rf-summary"
+            assert kwargs == {"iap_ip": "10.0.0.2"}
+            return {"Command output": "Measured RF summary"}
+
+    reader = ArubaInstantWriter(Credentials("10.0.0.1", "", ""), client=Client(),
+                               diagnostic_target="10.0.0.2")
+    assert reader.read_diagnostics(kind="rf")["output"] == "Measured RF summary"
+
+
 def test_diagnostics_endpoint_has_role_gates_and_no_free_form_commands(env):
     c, adm, _appr, sw, ap = env
     for d, kind, expected in ((sw, "port_auth", "show port-access clients"),

@@ -29,6 +29,8 @@ def test_memory_free_prefers_available_and_never_guesses():
 
 
 def test_uplink_counters_ifconfig_and_proc_net_dev():
+    measured = "bond0 is up, line protocol is up\nReceived bytes 1200\nTransmitted bytes 3400\n"
+    assert T.parse_uplink_counters(measured)["tx_bytes"] == 3400
     assert T.parse_uplink_counters(SYS) == {"interface": "eth0", "rx_bytes": 123456789, "tx_bytes": 987654321,
                                             "format": "PARSED_FORMAT_UNVERIFIED"}
     proc = "Inter-|   Receive\n face |bytes packets\n  eth0: 5000 10 0 0 0 0 0 0 7000 12 0 0 0 0 0 0\n"

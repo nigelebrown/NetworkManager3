@@ -480,6 +480,10 @@ def test_device_insight(client, admin):
     assert r.status_code == 200, r.text
     b = r.json()
     assert b["ap"]["device_id"] == did and "inputs" in b["health"] and "config" in b
+    measured = b["ap"]["client_experience"]
+    assert b["health"]["score"] == (measured["score"] if measured else None)
+    displayed = [m for m in b["metrics"] if m["metric"] == "exp_score"]
+    assert len(displayed) == (1 if measured else 0)
 
 
 # ------------------------------------------------------------------ diagnosis

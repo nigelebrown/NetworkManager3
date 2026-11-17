@@ -695,15 +695,38 @@ def device_insight(device_id: str, db: Session = Depends(get_db), user: User = D
         out["ap"] = next((a for a in fl["aps"] if a["device_id"] == d.id), None)
         if controller is not None and d.hostname:
             full = user.role in ("operator", "admin")
-            for c in db.scalars(select(ClientRecord).where(ClientRecord.site_id == controller.id,
-                                                           ClientRecord.ap_name == d.hostname,
-                                                           ClientRecord.is_connected.is_(True)).limit(500)):
+            from ..infrastructure.device_state import fresh_wireless_clients
+            for c in fresh_wireless_clients(db, [controller], now):
+                if not c.ap_name or c.ap_name.casefold() != d.hostname.casefold():
+                    continue
                 out["clients"].append({"id": c.id, "mac": c.mac if full else mask_mac(c.mac),
                                        "hostname": c.hostname if full else None, "ssid": c.ssid, "band": c.band,
                                        "channel": c.channel, "snr_db": c.snr_db, "speed_mbps": c.speed_mbps,
                                        "quality": c.quality, "exp_score": c.exp_score})
             # client counts per band from this AP's connected clients
             out["client_bands"] = dict(Counter(c["band"] or "unknown" for c in out["clients"]))
+        ap = out["ap"]
+        if ap:
+            exp = ap["client_experience"]
+            current = st["state"] in ("ONLINE", "DEGRADED")
+            reasons = list(ap["condition_triggers"])
+            if ap["event_trigger"]:
+                reasons.append(ap["event_trigger"])
+            if exp:
+                reasons.append(exp["detail"])
+            score = exp["score"] if exp and current else None
+            if st["state"] == "OFFLINE":
+                score = 0
+            out["health"] = {"score": score, "band": (
+                "poor" if st["state"] == "OFFLINE" else
+                {"GOLD": "good", "SILVER": "fair", "BRONZE": "poor"}.get(ap["tier"], "unavailable")
+                if current else "unavailable"),
+                "reasons": reasons or ["Client experience has no recent scored clients"],
+                "inputs": ["connected client experience"] if exp and current else []}
+            out["metrics"] = [m for m in out["metrics"] if m["metric"] != "exp_score"]
+            if exp and current:
+                out["metrics"].append({"metric": "exp_score", "label": "Client experience", "unit": "/100",
+                                      "value": exp["score"], "observed_at": now.isoformat(), "quality": "DERIVED"})
         out["ap_extras"] = ap_extras(db, d, controller)
     phys = {s.id: s.name for s in db.scalars(select(InmSite))}
     for a in db.scalars(select(InmAlert).where(InmAlert.device_id == d.id).order_by(InmAlert.opened_at.desc()).limit(25)):
@@ -728,8 +751,10 @@ def ap_extras(db: Session, d, controller) -> dict:
     rates = obs.get("uplink_rates") or {"quality": "NO_COUNTERS"}
     dist: dict[str, dict[str, int]] = {}
     if controller is not None and d.hostname:
-        for c in db.scalars(select(ClientRecord).where(ClientRecord.site_id == controller.id, ClientRecord.ap_name == d.hostname,
-                                                       ClientRecord.is_connected.is_(True)).limit(2000)):
+        from ..infrastructure.device_state import fresh_wireless_clients
+        for c in fresh_wireless_clients(db, [controller], _now()):
+            if not c.ap_name or c.ap_name.casefold() != d.hostname.casefold():
+                continue
             band = c.band or "unknown"
             label = "unknown" if c.rssi_dbm is None else next(lbl for lim, lbl in RSSI_BUCKETS if c.rssi_dbm >= lim)
             dist.setdefault(band, {})[label] = dist.setdefault(band, {}).get(label, 0) + 1
@@ -743,7 +768,7 @@ def ap_extras(db: Session, d, controller) -> dict:
             "signal_distribution": {"by_band": dist, "source": "connected stations (show clients, RSSI)"},
             "client_match": obs.get("client_match") or {"state": "NOT_COLLECTED", "reason": "not collected yet"},
             "gaps": obs.get("gaps", []) if obs else ["no AP observations collected yet"],
-            "format_verification": "PARSED_FORMAT_UNVERIFIED until a hardware fixture for this model/firmware is captured"}
+            "format_verification": "Hardware output format verification pending"}
 
 
 # ---------------------------------------------------------------------------------------- diagnosis + AI
