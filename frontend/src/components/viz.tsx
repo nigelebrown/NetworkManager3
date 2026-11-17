@@ -57,9 +57,9 @@ export function Donut({ data, height = 180 }: { data: { name: string; value: num
   </div>;
 }
 
-export function Pill({ value, tone }: { value: ReactNode; tone?: "good" | "fair" | "poor" | "info" | "demo" | "none" }) {
+export function Pill({ value, tone }: { value: ReactNode; tone?: "good" | "fair" | "poor" | "bronze" | "info" | "demo" | "none" }) {
   const map = { good: "bg-emerald-50 border border-emerald-200 text-emerald-700", fair: "bg-amber-50 border border-amber-200 text-amber-700", poor: "bg-red-50 border border-red-200 text-red-700",
-    info: "bg-sky-50 border border-sky-200 text-sky-700", demo: "bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700", none: "bg-slate-100 border border-slate-200 text-slate-700" };
+    bronze: "bg-orange-50 border border-orange-300 text-orange-800", info: "bg-sky-50 border border-sky-200 text-sky-700", demo: "bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700", none: "bg-slate-100 border border-slate-200 text-slate-700" };
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map[tone ?? "none"]}`}>{value}</span>;
 }
 

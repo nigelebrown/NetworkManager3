@@ -155,7 +155,8 @@ function ClusterBlock({ c, aps, mode, collapsed, toggle, open, setOpen, onDiagno
         <td><Link className="inm-link" to={`/devices/${a.device_id}/360`}>{a.name}</Link>{a.is_vc && <span className="ml-1 rounded bg-blue-100 px-1 text-[10px] text-blue-800">VC</span>}
           <div className="text-[10px] text-slate-500">{a.model ?? "—"} · {a.ip ?? "no IP"}</div></td>
         <td><button title={a.state_reason} onClick={() => setOpen(open === a.device_id ? null : a.device_id)}><Pill value={a.state} tone={STATE_TONE(a.state)} /></button></td>
-        <td><span title={[...a.condition_triggers, a.event_trigger].filter(Boolean).join("; ") || "no breach"}><Pill value={a.tier} tone={TIER_TONE[a.tier]} /></span></td>
+        <td><span title={[...a.condition_triggers, a.event_trigger, a.client_experience?.detail].filter(Boolean).join("; ")}>
+          <Pill value={a.state === "OFFLINE" ? "OFFLINE" : a.tier} tone={a.state === "OFFLINE" ? "poor" : TIER_TONE[a.tier]} /></span></td>
         <td>{a.clients ?? "—"}</td><td><Radio r={a.radio_2g} warn={70} /></td><td><Radio r={a.radio_5g} warn={80} /></td>
         {mode === "aps" && <><td>{pct(a.cpu_percent)} / {pct(a.memory_percent)}</td><td>{fmtUptime(a.uptime_seconds)}</td><td className="text-xs">{a.site ?? "—"}</td></>}
         <td className="whitespace-nowrap"><button className="inm-btn-secondary" onClick={() => onDiagnose(a)}>Diagnose</button>
@@ -164,6 +165,7 @@ function ClusterBlock({ c, aps, mode, collapsed, toggle, open, setOpen, onDiagno
           <b>{a.state}:</b> {a.state_reason}. <b>What to do:</b> {a.guidance}
           {!!a.condition_triggers.length && <> · <b>Health trigger:</b> {a.condition_triggers.join("; ")}</>}
           {a.event_trigger && <> · <b>Events:</b> {a.event_trigger}</>}
+          <div className="text-xs text-slate-600">{a.client_experience?.detail ?? "Client experience unavailable"}</div>
           {!!a.unavailable_inputs.length && a.state === "ONLINE" && <div className="text-xs text-slate-500">Not measured: {a.unavailable_inputs.join(", ")}</div>}
         </td></tr>}</Fragment>)}</tbody></table></div>}
   </div>;

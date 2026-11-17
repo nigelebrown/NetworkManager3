@@ -63,11 +63,16 @@ def test_build_rows_combines_events_and_condition_and_never_defaults_gold():
         "AP2": {"state": "ONLINE", "util_5g_percent": 85.0},   # condition breach only
         "AP3": {"state": "UNKNOWN"},                           # nothing measured
         "AP4": {"state": "OFFLINE"},
+        "AP5": {"state": "ONLINE"},
+        "AP6": {"state": "ONLINE", "util_5g_percent": 20.0,
+                "client_experience": {"tier": "BRONZE", "detail": "Client experience 40/100"}},
     })}
     assert rows["AP1"]["tier"] == "BRONZE" and rows["AP1"]["top_reject_ssid_band"] == "GUEST / 5GHz"
     assert rows["AP2"]["tier"] == "BRONZE" and "5 GHz busy" in rows["AP2"]["trigger"]
     assert rows["AP3"]["tier"] == "UNRATED"
     assert rows["AP4"]["tier"] == "BRONZE"
+    assert rows["AP5"]["tier"] == "UNRATED"
+    assert rows["AP6"]["tier"] == "BRONZE" and "Client experience 40/100" in rows["AP6"]["trigger"]
     mv = H.movement([{"ap": "AP1", "tier": "SILVER", "events": {}}], [{"ap": "AP1", "tier": "GOLD", "events": {}}])
     assert mv == [{"ap": "AP1", "from": "SILVER", "to": "GOLD", "direction": "improved"}]
     mv = H.movement([{"ap": "AP1", "tier": "BRONZE", "events": {"reject": 400}}], [{"ap": "AP1", "tier": "GOLD", "events": None}])
@@ -110,6 +115,9 @@ def test_fleet_is_grouped_by_cluster_with_both_bands(client, admin):
     assert any(a["radio_5g"]["channel"] for a in body["aps"])
     for a in body["aps"]:
         assert a["guidance"] and a["tier"] in ("GOLD", "SILVER", "BRONZE", "UNRATED")
+    measured = [a for a in body["aps"] if a["client_experience"]]
+    assert measured
+    assert all(H.TIER_RANK[a["tier"]] <= H.TIER_RANK[a["client_experience"]["tier"]] for a in measured)
     assert body["summary"]["attention"] == sum(v for k, v in body["summary"]["states"].items() if k != "ONLINE")
 
 

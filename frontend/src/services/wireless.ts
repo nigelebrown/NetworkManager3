@@ -11,6 +11,7 @@ const qs = (o: Record<string, string | number | boolean | null | undefined>) => 
 };
 
 export type Tier = "GOLD" | "SILVER" | "BRONZE" | "UNRATED";
+interface ClientExperience { score: number; band: string; scored: number; connected: number; tier: Tier; detail: string }
 export interface RadioInfo { channel: string | null; util_percent: number | null; noise_floor_dbm: number | null; tx_power_dbm: number | null }
 export interface FleetAp {
   device_id: string; name: string; serial: string; model: string | null; firmware: string | null; ip: string | null;
@@ -18,6 +19,7 @@ export interface FleetAp {
   state: string; state_reason: string; last_seen: string | null; clients: number | null; uptime_seconds: number | null;
   cpu_percent: number | null; memory_percent: number | null; radio_2g: RadioInfo; radio_5g: RadioInfo;
   exp_score: number | null; tier: Tier; condition_tier: Tier | null; condition_triggers: string[];
+  client_experience: ClientExperience | null;
   event_tier: Tier | null; event_trigger: string | null; unavailable_inputs: string[]; transport: string | null; guidance: string;
 }
 export interface FleetCluster {
@@ -34,6 +36,7 @@ export interface Fleet {
 }
 export interface HealthRow {
   ap: string; device_id?: string; site?: string; cluster?: string; state?: string; tier: Tier; trigger: string;
+  client_experience?: ClientExperience | null;
   events: Record<string, number> | null; total_events: number | null; negative: number | null; unique_clients: number | null;
   event_tier: Tier | null; condition_tier: Tier | null; condition_triggers: string[]; unavailable_inputs: string[];
   interpretation: string; action: string; top_client?: string | null; top_reject_ssid_band?: string | null;
@@ -148,7 +151,7 @@ export const inc = {
   reopen: (id: string, text: string) => post<Incident>(`/v1/incidents/${enc(id)}/reopen`, { text }),
 };
 
-export const TIER_TONE: Record<string, "good" | "fair" | "poor" | "none"> = { GOLD: "good", SILVER: "fair", BRONZE: "poor", UNRATED: "none" };
+export const TIER_TONE = { GOLD: "good", SILVER: "fair", BRONZE: "bronze", UNRATED: "none" } as const;
 export const STATE_TONE = (s: string): "good" | "fair" | "poor" | "none" =>
   s === "ONLINE" ? "good" : s === "OFFLINE" ? "poor" : s === "DEGRADED" || s === "STALE" ? "fair" : "none";
 export const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v)}%`;

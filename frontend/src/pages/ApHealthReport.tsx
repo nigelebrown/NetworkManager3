@@ -92,11 +92,13 @@ export default function ApHealthReport() {
           : <p className="text-sm text-slate-500">No AP changed tier.</p>}</div></section>}
       <section className="inm-card"><div className="inm-cardhead"><h2>Full AP categorization ({rep.rows.length})</h2></div><div className="overflow-x-auto"><table className="inm-table">
         <thead><tr><th>Tier</th><th>AP</th><th>Total</th><th>Clients</th><th>Negative</th><th>Rejects</th><th>DHCP TO</th><th>Auth/Sec</th><th>Deauth</th><th>2.4 / 5 GHz busy</th><th>Trigger</th><th className="print:hidden"></th></tr></thead>
-        <tbody>{rep.rows.map(r => <tr key={r.ap}><td><Pill value={r.tier} tone={TIER_TONE[r.tier]} /></td>
+        <tbody>{rep.rows.map(r => <tr key={r.ap}><td><Pill value={r.state === "OFFLINE" ? "OFFLINE" : r.tier}
+          tone={r.state === "OFFLINE" ? "poor" : TIER_TONE[r.tier]} /></td>
           <td>{r.device_id ? <Link className="inm-link" to={`/devices/${r.device_id}/360`}>{r.ap}</Link> : r.ap}<div className="text-[10px] text-slate-500">{r.cluster ?? ""}</div></td>
           <td>{n(r.total_events)}</td><td>{n(r.unique_clients ?? r.clients_now)}</td><td>{n(r.negative)}</td><td>{n(r.events?.reject)}</td><td>{n(r.events?.dhcp_timeout)}</td>
           <td>{n(r.events?.auth)}</td><td>{n(r.events?.deauth)}</td><td className="whitespace-nowrap">{r.util_2g_percent ?? "—"}% / {r.util_5g_percent ?? "—"}%</td>
-          <td className="text-xs">{r.trigger}</td>
+          <td className="text-xs">{r.trigger}{r.client_experience && r.client_experience.tier === "GOLD" &&
+            <div className="text-slate-500">{r.client_experience.detail}</div>}</td>
           <td className="print:hidden">{r.device_id && <button className="inm-btn-secondary" onClick={() => setDiag(r)}>Diagnose</button>}</td></tr>)}</tbody></table></div></section>
       {(["BRONZE", "SILVER"] as Tier[]).map(t => tiers(t).length > 0 && <section key={t} className="inm-card"><div className="inm-cardhead">
         <h2>{t === "BRONZE" ? "Bronze APs — corrective actions required" : "Silver APs — monitor and tune"}</h2></div><div className="overflow-x-auto"><table className="inm-table">
@@ -110,9 +112,10 @@ export default function ApHealthReport() {
         <p>Negative events: {rep.method.negative_categories.join(", ")}.</p>
         <p><b>Silver</b> (any): {Object.entries(rep.method.silver).map(([k, v]) => `${k} ≥ ${v}`).join(", ")}.</p>
         <p><b>Bronze</b> (any): {Object.entries(rep.method.bronze).map(([k, v]) => `${k} ≥ ${v}`).join(", ")}.</p>
-        <p><b>Condition</b>: offline → Bronze; utilisation ≥ {rep.method.condition_silver.util_percent}% Silver / ≥ {rep.method.condition_bronze.util_percent}% Bronze;
+        <p><b>Condition</b>: confirmed outages display as red Offline; utilisation ≥ {rep.method.condition_silver.util_percent}% Silver / ≥ {rep.method.condition_bronze.util_percent}% Bronze;
           CPU ≥ {rep.method.condition_silver.cpu_percent}/{rep.method.condition_bronze.cpu_percent}%; memory ≥ {rep.method.condition_silver.memory_percent}/{rep.method.condition_bronze.memory_percent}%;
           clients ≥ {rep.method.condition_silver.clients}/{rep.method.condition_bronze.clients}; noise above {rep.method.condition_silver.noise_floor_dbm}/{rep.method.condition_bronze.noise_floor_dbm} dBm. Unmeasured inputs never count as healthy.</p>
+        <p><b>Client experience</b> uses the mean score of currently connected, recently measured clients. Good, fair and poor map to Gold, Silver and Bronze. The worst measured result sets the tier.</p>
         <h3 className="mt-2 font-semibold">Validation after corrective action</h3>
         <ol className="list-decimal pl-5"><li>Save a snapshot now; make the changes on Bronze APs first.</li><li>After 6–24 h, open the new live report (or import the same export window) and compare with the snapshot: the goal is Bronze → Silver/Gold and Silver → Gold.</li>
           <li>Separate AP-side issues from endpoint-driven ones (top client MACs) before changing RF globally.</li><li>Confirm RF changes did not raise rejects or roaming failures on neighbouring APs.</li></ol>

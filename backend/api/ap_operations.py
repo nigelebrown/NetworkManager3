@@ -21,6 +21,8 @@ from ..database.models import AccessPoint, ApSample, AppSetting, ClientEvent, Cl
 from ..database.models_inm import InmCluster, InmDevice, InmSite
 from ..database.session import get_db
 from ..domain import ap_health as H
+from ..experience.config import load_config
+from ..experience.scoring import summarize as summarize_experience
 from ..infrastructure import ap_autodiscovery as AD
 from ..monitoring.collector import visible_sites
 from ..security.deps import audit, require_role
@@ -87,7 +89,8 @@ def _latest_tiers(db: Session) -> dict[str, dict]:
     row = db.get(AppSetting, "ap-health:latest")
     if not row:
         return {}
-    return {r["ap"]: {"tier": r["tier"], "trigger": r["trigger"]} for r in row.value.get("rows", [])} | {
+    return {r["ap"]: {"tier": r["event_tier"], "trigger": r.get("event_trigger")}
+            for r in row.value.get("rows", []) if r.get("event_tier")} | {
         "_generated_at": {"at": row.value.get("generated_at")}}
 
 
@@ -103,6 +106,12 @@ def build_fleet(db: Session) -> dict[str, Any]:
     plans = plans_by_device(db)
     tiers = _latest_tiers(db)
     devices = visible_inventory(db, set(sites), family="access_point", dashboard=True)
+    connected = fresh_wireless_clients(db, sites.values(), now)
+    scores_by_ap = defaultdict(list)
+    for client in connected:
+        if client.ap_name:
+            scores_by_ap[(client.site_id, client.ap_name.casefold())].append(client.exp_score)
+    experience_config = load_config(db)
     # Radio utilisation is stored per poll in ap_samples (the radio dicts only carry it on some firmware paths).
     latest_util: dict[int, ApSample] = {}
     for smp in db.scalars(select(ApSample).where(ApSample.ts >= now - timedelta(minutes=30),
@@ -132,7 +141,18 @@ def build_fleet(db: Session) -> dict[str, Any]:
         ctier, ctrig, unavailable = H.condition_tier(cond)
         name = d.hostname or d.serial_number
         ev = tiers.get(name)
-        tier = min([t for t in (ctier, ev and ev["tier"]) if t] or ["UNRATED"], key=lambda t: H.TIER_RANK[t])
+        experience = None
+        if fresh_ap:
+            scores = scores_by_ap.get((fresh_ap.site_id, fresh_ap.name.casefold()), [])
+            measured = summarize_experience(scores, experience_config)
+            if measured["score"] is not None:
+                score, band = measured["score"], measured["band"]
+                count = len(scores) - measured["unscored"]
+                experience = {"score": score, "band": band, "scored": count, "connected": len(scores),
+                              "tier": {"good": "GOLD", "fair": "SILVER", "poor": "BRONZE"}[band],
+                              "detail": f"Client experience {score:g}/100 ({band}; {count} of {len(scores)} scored)"}
+        tier = min([t for t in (ctier, ev and ev["tier"], experience and experience["tier"]) if t]
+                   or ["UNRATED"], key=lambda t: H.TIER_RANK[t])
         cl = clusters_by_legacy.get(d.legacy_site_id)
         transport = AD.site_transport(db, controller.id)["transport"] if controller else None
         aps.append({
@@ -148,6 +168,7 @@ def build_fleet(db: Session) -> dict[str, Any]:
             "radio_2g": r2, "radio_5g": r5, "exp_score": fresh_ap.exp_score if fresh_ap else None,
             "tier": tier, "condition_tier": ctier, "condition_triggers": ctrig,
             "event_tier": ev["tier"] if ev else None, "event_trigger": ev["trigger"] if ev else None,
+            "client_experience": experience,
             "unavailable_inputs": unavailable, "transport": transport,
             "guidance": guidance(st["state"], st["state_reason"], has_ip=bool(d.mgmt_addresses),
                                  has_cred=d.id in creds or controller is not None, in_cluster=controller is not None,
@@ -164,7 +185,6 @@ def build_fleet(db: Session) -> dict[str, Any]:
     groups[UNLINKED] = {"key": UNLINKED, "name": "Not linked to a polled cluster", "vc_host": None, "simulated": False,
                         "enabled": None, "last_poll_at": None, "last_poll_ok": None, "last_poll_error": None,
                         "transport": None, "rest_state": None}
-    connected = fresh_wireless_clients(db, sites.values(), now)
     clients_by_site = Counter(str(c.site_id) for c in connected)
     for g in groups.values():
         rows = [x for x in aps if x["cluster_key"] == g["key"]]
@@ -322,6 +342,7 @@ def _conditions(fleet_rows: list[dict], cluster: str | None) -> dict[str, dict]:
             continue
         out[r["name"]] = {"device_id": r["device_id"], "site": r["site"], "cluster": r["cluster"], "model": r["model"],
                           "state": r["state"], "state_reason": r["state_reason"], "clients_now": r["clients"],
+                          "client_experience": r["client_experience"],
                           "util_2g_percent": r["radio_2g"]["util_percent"], "util_5g_percent": r["radio_5g"]["util_percent"],
                           "cpu_percent": r["cpu_percent"], "memory_percent": r["memory_percent"],
                           "channel_2g": r["radio_2g"]["channel"], "channel_5g": r["radio_5g"]["channel"],
@@ -359,7 +380,7 @@ def build_report(db: Session, *, hours: int, cluster: str | None, events: list[d
         raw = {k: v for k, v in raw.items() if aliases.get(k, k) in allowed}
     rows = H.build_rows(raw, conditions, aliases)
     if not raw:
-        notes.append("No AP events in this window: tiers are based on the measured point-in-time condition only. "
+        notes.append("No AP events in this window: tiers use measured AP condition and client experience. "
                      "Point Instant syslog at the collector (UDP 514) or import an event export.")
     cname = next((c["name"] for c in fl["clusters"] if c["key"] == cluster), None) if cluster else "All clusters"
     return {"id": str(uuid.uuid4()), "generated_at": _now().isoformat(), "window_hours": hours,

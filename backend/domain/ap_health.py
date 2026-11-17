@@ -1,6 +1,6 @@
 """AP health rating — Gold / Silver / Bronze (pure functions, no I/O).
 
-Two independent evidence streams are rated and the WORSE tier wins:
+The worst tier across event, condition, and measured client experience evidence wins:
 
 1. Event evidence (syslog / Loki, ingested device log events, or an imported Aruba event export). Each event is
    classified into one category; negative categories are counted per AP and compared with the thresholds below.
@@ -156,7 +156,7 @@ def condition_tier(m: dict[str, Any]) -> tuple[str | None, list[str], list[str]]
         return "BRONZE", bronze, unavailable
     if silver:
         return "SILVER", silver, unavailable
-    return ("GOLD" if measured or m.get("state") == "ONLINE" else None), [], unavailable
+    return ("GOLD" if measured else None), [], unavailable
 
 
 def interpretation(row: dict[str, Any]) -> tuple[str, str]:
@@ -195,6 +195,9 @@ def interpretation(row: dict[str, Any]) -> tuple[str, str]:
     if cond:
         return ("Measured radio/system condition breached a threshold: " + "; ".join(cond) + ".",
                 "Review channel utilisation and noise around this AP, client load and AP resource usage.")
+    if (exp := row.get("client_experience")) and exp["tier"] != "GOLD":
+        return ("Connected clients report reduced digital experience.",
+                "Review the affected clients' signal, connection rates and disconnect history.")
     if row.get("tier") == "GOLD":
         return ("No threshold breach in this window.", "Keep as baseline; no immediate AP-side corrective action.")
     return ("Not enough evidence to rate.", "Enable syslog to the collector and make sure the AP is in a polled cluster.")
@@ -224,7 +227,8 @@ def build_rows(event_map: dict[str, ApEvents], conditions: dict[str, dict[str, A
         ev, cond = merged.get(name), conditions.get(name, {})
         row: dict[str, Any] = {"ap": name, **{k: cond.get(k) for k in (
             "device_id", "site", "cluster", "model", "state", "state_reason", "clients_now", "util_2g_percent",
-            "util_5g_percent", "cpu_percent", "memory_percent", "channel_2g", "channel_5g")}}
+            "util_5g_percent", "cpu_percent", "memory_percent", "channel_2g", "channel_5g",
+            "client_experience")}}
         tiers, triggers = [], []
         if ev:
             counts = {k: ev.counts.get(k, 0) for k in (REJECT, DHCP_TIMEOUT, DHCP_ACK, AUTH, DEAUTH, ARM, OTHER)}
@@ -233,7 +237,7 @@ def build_rows(event_map: dict[str, ApEvents], conditions: dict[str, dict[str, A
             triggers += etr
             top = ev.client_negative.most_common(1)
             row.update(events=counts, total_events=ev.total, negative=ev.negative, unique_clients=len(ev.clients),
-                       event_tier=et, top_client=top[0][0] if top else None,
+                       event_tier=et, event_trigger="; ".join(etr) or None, top_client=top[0][0] if top else None,
                        top_client_share=round(top[0][1] / ev.negative, 2) if top and ev.negative else None,
                        top_reject_ssid_band=(ev.reject_by_ssid_band.most_common(1) or [(None,)])[0][0],
                        reject_hours=[{"hour": h, "count": n} for h, n in ev.reject_by_hour.most_common(3)])
@@ -244,12 +248,16 @@ def build_rows(event_map: dict[str, ApEvents], conditions: dict[str, dict[str, A
         if ct:
             tiers.append(ct)
             triggers += ctr
+        if exp := cond.get("client_experience"):
+            tiers.append(exp["tier"])
+            if exp["tier"] != "GOLD":
+                triggers.append(exp["detail"])
         row["tier"] = min(tiers, key=lambda t: TIER_RANK[t]) if tiers else "UNRATED"
         row["trigger"] = "; ".join(triggers) if triggers else (
             "No threshold breach" if row["tier"] == "GOLD" else "No evidence in window")
         row["interpretation"], row["action"] = interpretation(row)
         rows.append(row)
-    rows.sort(key=lambda r: (TIER_RANK[r["tier"]], -(r["negative"] or 0), r["ap"]))
+    rows.sort(key=lambda r: (r["state"] != "OFFLINE", TIER_RANK[r["tier"]], -(r["negative"] or 0), r["ap"]))
     return rows
 
 
