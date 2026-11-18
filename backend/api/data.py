@@ -252,6 +252,48 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
 
     exp = summarize([c.exp_score for c in clients], load_config(db))
     bands = Counter(c.band or "unknown" for c in clients)
+    def band_experience(band, connected):
+        members = [c for c in connected if (c.band or "unknown") == band]
+        measured = summarize([c.exp_score for c in members], load_config(db))
+        return {**measured, "band": band, "experience_band": measured["band"], "clients": len(members)}
+    firmware_groups = {}
+    ap_firmware = {}
+    for ap in aps:
+        key = (ap.model or "Unreported model", ap.firmware or "Unreported firmware")
+        cohort = firmware_groups.setdefault(key, {"aps": [], "clients": []})
+        cohort["aps"].append(ap)
+        ap_firmware[(ap.site_id, ap.name.casefold())] = key
+    for client in clients:
+        key = ap_firmware.get((client.site_id, (client.ap_name or "").casefold()))
+        if key is not None:
+            firmware_groups[key]["clients"].append(client)
+    firmware_comparison = []
+    for (model, firmware), cohort in sorted(firmware_groups.items()):
+        observed = [a for a in cohort["aps"] if a.site_id in fresh_ids and a.status == "up"]
+        connected = cohort["clients"]
+        cpus = [a.cpu_percent for a in observed if a.cpu_percent is not None]
+        snr = [c.snr_db for c in connected if c.snr_db is not None]
+        rates = [c.speed_mbps for c in connected if c.speed_mbps is not None]
+        firmware_comparison.append({
+            "model": model, "firmware": firmware, "aps": len(cohort["aps"]), "reporting_aps": len(observed),
+            "clients": len(connected), "sites": len({a.site_id for a in observed}),
+            **summarize([c.exp_score for c in connected], load_config(db)),
+            "avg_cpu_percent": round(sum(cpus) / len(cpus), 1) if cpus else None,
+            "avg_snr_db": round(sum(snr) / len(snr), 1) if snr else None,
+            "avg_link_rate_mbps": round(sum(rates) / len(rates), 1) if rates else None,
+            "by_band": [band_experience(b, connected)
+                        for b in sorted({c.band or "unknown" for c in connected})],
+        })
+    experience_by_band = [
+        band_experience(band, clients)
+        for band in sorted(bands)
+    ]
+    experience_by_site = [
+        {"site": site.name, "clients": len(site_clients),
+         **summarize([c.exp_score for c in site_clients], load_config(db))}
+        for site in controllers.values()
+        if (site_clients := [c for c in clients if c.site_id == site.id])
+    ]
     # Coverage: the inventory is the denominator, not just the APs that happen to be in a polled cluster. Without it
     # "28 / 28 online" and "health 100" read as the whole estate when most APs are not monitored at all.
     inv = visible_inventory(db, set(ids), family="access_point", include_unlinked=site_id is None, dashboard=True)
@@ -274,6 +316,9 @@ def dashboard_summary(site_id: int | None = None, db: Session = Depends(get_db),
         "avg_util_2g_percent": round(sum(u2) / len(u2), 1) if u2 else None,
         "avg_util_5g_percent": round(sum(u5) / len(u5), 1) if u5 else None,
         "clients_by_band": dict(bands),
+        "experience_by_band": experience_by_band,
+        "experience_by_site": experience_by_site,
+        "firmware_comparison": firmware_comparison,
         "mode": get_settings().mode,
         "simulated": get_settings().mode == "demo",
         "sites_total": len(polled),

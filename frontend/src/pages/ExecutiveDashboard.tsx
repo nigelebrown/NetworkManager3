@@ -1,79 +1,110 @@
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Link } from "react-router-dom";
+import { Area, AreaChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
-import { COLORS, Donut, Gauge, Notice, PageHeader, TT, btn2, useAction } from "../components/viz";
-import { download, ops } from "../services/ops";
+import { COLORS, Donut, Gauge, PageHeader, TT } from "../components/viz";
+import { api } from "../services/api";
+import { ops } from "../services/ops";
+import DashboardSwitcher from "../components/DashboardSwitcher";
+import FirmwareExperience from "../components/FirmwareExperience";
+
+const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v)}%`;
+const score = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v)} / 100`;
 
 export default function ExecutiveDashboard() {
-  const exec = useLoad(ops.executive, [], 60000);
-  const trends = useLoad(ops.trends, [], 60000);
-  const fleet = useLoad(() => ops.fleetCompliance(true), [], 120000);
-  const noc = useLoad(ops.noc, [], 60000);
-  const act = useAction();
-  const e = exec.data, t = trends.data, c = fleet.data, n = noc.data;
-  const exp = n ? n.devices.map(x => x.health.score).filter((x): x is number => x != null) : [];
-  const expScore = exp.length ? exp.reduce((a, b) => a + b, 0) / exp.length : null;
-  const exportCsv = (kind: string) => act.run(async () => {
-    const end = new Date(); const start = new Date(end.getTime() - 30 * 86400e3);
-    const r = await ops.exportReport({ kind, start: start.toISOString(), end: new Date(end.getTime() + 60e3).toISOString() });
-    download(`inm-${kind}-${end.toISOString().slice(0, 10)}.csv`, r.body);
-    return `Signed ${kind} export: ${r.row_count} rows · SHA-256 ${r.sha256.slice(0, 16)}… (signature recorded in audit).`;
-  });
-  return <div className="space-y-4">
-    <PageHeader title="Executive overview" subtitle="Service quality, risk and governance across all sites. Unmeasured values are shown as unavailable, never as zero."
-      right={<div className="flex gap-2">{["inventory", "attribution", "audit"].map(k =>
-        <button key={k} className={btn2} disabled={act.busy} onClick={() => exportCsv(k)}>Export {k}</button>)}</div>} />
-    <ErrorNote error={exec.error ?? trends.error ?? fleet.error} />
-    <Notice error={act.error} message={act.message} />
-    <div className="grid gap-3 md:grid-cols-4">
-      <Card><div className="flex justify-around"><Gauge value={expScore} label="User experience" /><Gauge value={c?.fleet_score} label="Config compliance" /></div></Card>
-      <Stat label="Managed devices" value={e?.devices_counted ?? "—"} sub={e?.devices_real ? `${e.devices_real} live` : undefined} />
-      <Stat label="Monitoring coverage" value={e?.poll_coverage_percent == null ? "—" : `${e.poll_coverage_percent}%`}
-        sub={e?.poll_coverage_reason ?? `${e?.devices_never_polled ?? 0} device(s) never polled`} tone={(e?.poll_coverage_percent ?? 0) >= 90 ? "ok" : "warn"} />
-      <Stat label="Config backups" value={e?.vault.artifacts ?? "—"} sub={`${e?.vault.restore_verified ?? 0} lab restore-verified`} />
+  const summary = useLoad(() => api.summary(), [], 30000, ["dashboard", "experience", "clients", "devices"]);
+  const trends = useLoad(ops.trends, [], 60000, ["dashboard"]);
+  const noc = useLoad(ops.noc, [], 60000, ["devices", "telemetry"]);
+  const s = summary.data, n = noc.data, hours = trends.data?.hourly ?? [];
+  const experience = s?.user_experience;
+  const scored = experience ? experience.good + experience.fair + experience.poor : 0;
+  const goodShare = scored && experience ? 100 * experience.good / scored : null;
+  const online = n?.devices.filter(d => d.state === "ONLINE" || d.state === "DEGRADED").length;
+  const runs = n?.collection_last_hour;
+  const completed = runs ? (runs.SUCCEEDED ?? 0) + (runs.FAILED ?? 0) : 0;
+  const collectionSuccess = completed && runs ? 100 * (runs.SUCCEEDED ?? 0) / completed : null;
+  const bands = s?.experience_by_band ?? [];
+  const sites = [...(s?.experience_by_site ?? [])].sort((a, b) =>
+    b.poor - a.poor || b.fair - a.fair || (a.score ?? 101) - (b.score ?? 101)).slice(0, 6);
+  const cpu = n?.devices.filter(d => ["ONLINE", "DEGRADED"].includes(d.state))
+    .map(d => d.metrics.cpu_percent).filter((v): v is number => v != null) ?? [];
+  const meanCpu = cpu.length ? cpu.reduce((a, b) => a + b, 0) / cpu.length : null;
+  return <div className="space-y-5">
+    <PageHeader title="Executive overview" eyebrow="SERVICE EXPERIENCE"
+      subtitle="User experience, wireless demand and service performance across the network."
+      right={<DashboardSwitcher />} />
+    <ErrorNote error={summary.error ?? noc.error ?? trends.error} />
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Stat label="User experience" value={score(experience?.score)}
+        sub={s ? `${scored} scored · ${experience?.unscored ?? 0} unscored connected clients` : "Awaiting measurements"}
+        tone={experience?.band === "poor" ? "bad" : experience?.band === "fair" ? "warn" : experience?.band === "good" ? "ok" : undefined} />
+      <Stat label="Users with good experience" value={pct(goodShare)}
+        sub={experience ? `${experience.fair} fair · ${experience.poor} poor` : "Awaiting measurements"} />
+      <Stat label="Connected wireless users" value={s?.clients_total ?? "—"} sub="Unique clients with fresh observations" />
+      <Stat label="Devices reporting" value={n ? `${online} / ${n.summary.devices}` : "—"}
+        sub={n ? `${n.summary.states.OFFLINE ?? 0} offline · ${(n.summary.states.STALE ?? 0) + (n.summary.states.UNKNOWN ?? 0)} stale or unknown` : "Awaiting collection"} />
     </div>
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Card title="Clients & 5 GHz utilisation — last 24 h">
-        {t?.hourly.length ? <ResponsiveContainer width="100%" height={220}><AreaChart data={t.hourly}>
-          <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.info} stopOpacity={0.5} /><stop offset="100%" stopColor={COLORS.info} stopOpacity={0} /></linearGradient></defs>
-          <CartesianGrid stroke="#1e293b" /><XAxis dataKey="hour" stroke="#64748b" fontSize={11} /><YAxis yAxisId="l" stroke="#64748b" fontSize={11} />
-          <YAxis yAxisId="r" orientation="right" stroke="#64748b" fontSize={11} domain={[0, 100]} /><Tooltip {...TT} /><Legend />
-          <Area yAxisId="l" dataKey="clients" name="Clients" stroke={COLORS.info} fill="url(#g1)" />
-          <Area yAxisId="r" dataKey="util_5g_percent" name="5 GHz util %" stroke={COLORS.fair} fill="none" />
-        </AreaChart></ResponsiveContainer> : <p className="py-10 text-center text-sm text-slate-500">Telemetry appears once collection plans run.</p>}
+    <div className="grid gap-4 xl:grid-cols-3">
+      <Card title="The experience users receive">
+        <Donut data={experience ? [
+          { name: "Good", value: experience.good, color: COLORS.good },
+          { name: "Fair", value: experience.fair, color: COLORS.fair },
+          { name: "Poor", value: experience.poor, color: COLORS.poor },
+          { name: "Unscored", value: experience.unscored, color: COLORS.none },
+        ] : []} />
+        <p className="text-xs text-slate-500">Client scores use measured signal, connection rates and observed stability. Coverage depends on available measurements.</p>
       </Card>
-      <Card title="Compliance grades"><Donut data={["A", "B", "C", "D", "UNKNOWN"].map(g => ({ name: g === "UNKNOWN" ? "No config" : `Grade ${g}`, value: c?.grades[g] ?? 0,
-        color: { A: COLORS.good, B: "#86efac", C: COLORS.fair, D: COLORS.poor, UNKNOWN: COLORS.none }[g] }))} /></Card>
-      <Card title="Who changed the network (attribution)"><Donut data={[
-        { name: "Verified technician", value: t?.attribution.VERIFIED ?? 0, color: COLORS.good },
-        { name: "Correlated", value: t?.attribution.CORRELATED ?? 0, color: COLORS.fair },
-        { name: "Unknown actor", value: t?.attribution.UNKNOWN ?? 0, color: COLORS.poor }]} /></Card>
-    </div>
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card title="Change governance — last 14 days">
-        {t?.changes_by_day.length ? <ResponsiveContainer width="100%" height={200}><BarChart data={t.changes_by_day}>
-          <CartesianGrid stroke="#1e293b" /><XAxis dataKey="day" stroke="#64748b" fontSize={11} /><YAxis allowDecimals={false} stroke="#64748b" fontSize={11} /><Tooltip {...TT} /><Legend />
-          <Bar dataKey="plans" name="Requested" fill={COLORS.info} /><Bar dataKey="approved" name="Approved" fill={COLORS.good} /><Bar dataKey="rejected" name="Rejected" fill={COLORS.poor} />
-        </BarChart></ResponsiveContainer> : <p className="py-10 text-center text-sm text-slate-500">No change plans yet.</p>}
+      <Card title="5 GHz and 2.4 GHz experience">
+        <Donut data={bands.map(b => ({ name: b.band === "unknown" ? "Band unreported" : b.band,
+          value: b.clients, color: b.band === "5GHz" ? COLORS.info : b.band === "2.4GHz" ? COLORS.violet : COLORS.none }))} />
+        <div className="space-y-2">{bands.map(b => <div key={b.band} className="flex justify-between gap-3 text-sm">
+          <span>{b.band === "unknown" ? "Band unreported" : b.band} · {b.clients} users</span><span>{score(b.score)}</span>
+        </div>)}</div>
+        {!bands.length && <p className="text-sm text-slate-500">No fresh connected-client observations.</p>}
       </Card>
-      <Card title="Top configuration risks">
-        <ul className="space-y-2 text-sm">{(c?.top_failures ?? []).slice(0, 8).map(f => <li key={f.id} className="flex items-center gap-3">
-          <span className="w-20 shrink-0 font-mono text-xs text-slate-500">{f.id}</span><span className="flex-1 text-slate-300">{f.title}</span>
-          <div className="h-2 w-28 rounded bg-slate-800"><div className="h-2 rounded" style={{ width: `${Math.min(100, (f.devices / Math.max(1, c?.devices.length ?? 1)) * 100)}%`, background: f.severity === "critical" ? COLORS.poor : COLORS.fair }} /></div>
-          <span className="w-16 text-right text-xs text-slate-400">{f.devices} dev.</span></li>)}
-          {!c?.top_failures.length && <li className="text-slate-500">No failing rules (or no configuration captured yet).</li>}</ul>
-      </Card>
-    </div>
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Card title="Devices by model"><Donut data={Object.entries(e?.by_model ?? {}).map(([name, value]) => ({ name, value }))} /></Card>
-      <Card title="AI recommendations"><Donut data={Object.entries(t?.recommendations ?? {}).map(([name, value]) => ({ name, value }))} />
-        <p className="mt-2 text-xs text-slate-500">Rule-based advisories. No automatic optimization is performed.</p></Card>
-      <Card title="Governance">
-        <dl className="grid grid-cols-2 gap-2 text-sm"><dt className="text-slate-400">Audit events (24 h)</dt><dd className="font-semibold">{t?.audit_events_24h ?? "—"}</dd>
-          <dt className="text-slate-400">Config drift detected</dt><dd className="font-semibold">{c?.drift.DRIFT ?? 0}</dd>
-          <dt className="text-slate-400">Devices without captured config</dt><dd className="font-semibold">{c?.devices_without_config ?? "—"}</dd>
-          <dt className="text-slate-400">Not measured</dt><dd className="text-xs">{e?.kpis_not_measured.join(", ")}</dd></dl>
+      <Card title="Service delivery">
+        <div className="flex justify-center"><Gauge value={collectionSuccess} label="Successful polls · last hour" /></div>
+        <dl className="mt-4 space-y-3 text-sm">
+          <div className="flex justify-between"><dt>2.4 GHz channel use</dt><dd className="font-semibold">{pct(s?.avg_util_2g_percent)}</dd></div>
+          <div className="flex justify-between"><dt>5 GHz channel use</dt><dd className="font-semibold">{pct(s?.avg_util_5g_percent)}</dd></div>
+          <div className="flex justify-between"><dt>Average device CPU</dt><dd className="font-semibold">{pct(meanCpu)}</dd></div>
+          <div className="flex justify-between"><dt>Open incidents</dt><dd><Link className="inm-link font-semibold" to="/incidents">{n?.summary.active_alerts ?? "—"}</Link></dd></div>
+        </dl>
+        <p className="mt-3 text-xs text-slate-500">CPU covers {cpu.length} reporting devices. Poll success measures collection reliability.</p>
       </Card>
     </div>
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Card title="User experience over 24 hours">
+        {hours.some(h => h.experience_score != null) ? <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={hours}><CartesianGrid stroke="#e5edf6" vertical={false} />
+            <XAxis dataKey="hour" stroke="#64748b" fontSize={11} /><YAxis domain={[0, 100]} stroke="#64748b" fontSize={11} />
+            <Tooltip {...TT} /><Legend /><Line dataKey="experience_score" name="Measured client experience / 100"
+              stroke={COLORS.good} strokeWidth={2} dot={false} connectNulls={false} />
+          </LineChart>
+        </ResponsiveContainer> : <p className="py-12 text-center text-sm text-slate-500">Experience history appears as scored client observations are collected.</p>}
+        <p className="text-xs text-slate-500">Hourly scores are weighted by scored client observations.</p>
+      </Card>
+      <Card title="Wireless demand over 24 hours">
+        {hours.some(h => h.clients != null) ? <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={hours}><CartesianGrid stroke="#e5edf6" vertical={false} />
+            <XAxis dataKey="hour" stroke="#64748b" fontSize={11} /><YAxis allowDecimals={false} stroke="#64748b" fontSize={11} />
+            <Tooltip {...TT} /><Legend /><Area dataKey="clients" name="Average reported client sessions"
+              stroke={COLORS.info} fill={COLORS.info} fillOpacity={0.13} connectNulls={false} />
+          </AreaChart>
+        </ResponsiveContainer> : <p className="py-12 text-center text-sm text-slate-500">Demand history appears after successful collection.</p>}
+      </Card>
+    </div>
+    <Card title="Where users need attention" right={<Link className="inm-link" to="/experience">View details</Link>}>
+      <div className="overflow-x-auto"><table className="inm-table">
+        <thead><tr><th>Site / controller</th><th>Connected users</th><th>Experience</th><th>Good</th><th>Fair</th><th>Poor</th><th>Unscored</th></tr></thead>
+        <tbody>{sites.map(site => <tr key={site.site}><td>{site.site}</td><td>{site.clients}</td><td>{score(site.score)}</td>
+          <td>{site.good}</td><td className={site.fair ? "text-amber-700" : ""}>{site.fair}</td>
+          <td className={site.poor ? "text-red-700 font-semibold" : ""}>{site.poor}</td><td>{site.unscored}</td></tr>)}</tbody>
+      </table></div>
+      {!sites.length && <p className="py-6 text-sm text-slate-500">No fresh connected-client observations to compare.</p>}
+    </Card>
+    {s && <FirmwareExperience summary={s} />}
+    <p className="text-xs text-slate-500">Live refreshes are coalesced; polling provides a fallback.
+      {s?.last_poll_at && ` Latest controller observation ${new Date(s.last_poll_at).toLocaleString()}.`}</p>
   </div>;
 }

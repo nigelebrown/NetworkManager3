@@ -6,12 +6,16 @@ import { Card, ErrorNote, NA, SimBadge, Stat, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { Link } from "react-router-dom";
 import { api } from "../services/api";
+import DashboardSwitcher from "../components/DashboardSwitcher";
+import FirmwareExperience from "../components/FirmwareExperience";
+import { COLORS, Donut } from "../components/viz";
 
 const QCOL: Record<string, string> = { good: "#34d399", fair: "#fbbf24", poor: "#f87171", unavailable: "#64748b" };
 
 export default function Dashboard() {
   const [site, setSite] = useState<number | undefined>();
   const [hours, setHours] = useState(6);
+  const [view, setView] = useState("experience");
   const sum = useLoad(() => api.summary(site), [site], 15000, ["devices", "telemetry", "sites", "clients"]);
   const hist = useLoad(() => api.history(hours, site), [site, hours]);
   const s = sum.data;
@@ -21,6 +25,7 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><div className="inm-section-label">Overview & command</div><h1 className="inm-pagetitle">Wi-Fi dashboard {s?.simulated && <SimBadge />}</h1></div>
         <div className="flex items-center gap-2">
+          <DashboardSwitcher />
           <SiteFilter value={site} onChange={setSite} dashboard />
           <select className="rounded border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm" value={hours} onChange={(e) => setHours(Number(e.target.value))} aria-label="History range">
             {[1, 6, 24, 72].map((h) => <option key={h} value={h}>Last {h}h</option>)}
@@ -28,6 +33,10 @@ export default function Dashboard() {
         </div>
       </div>
       <ErrorNote error={sum.error} />
+      <nav className="inm-tabs" aria-label="Wireless dashboard view">
+        {[["experience", "User experience"], ["performance", "RF & device performance"], ["firmware", "Firmware comparison"]].map(([key, label]) =>
+          <button key={key} className={`inm-tab ${view === key ? "active" : ""}`} onClick={() => setView(key)}>{label}</button>)}
+      </nav>
       {s && (
         <>
           {s.coverage && s.coverage.unmonitored_aps > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -52,7 +61,27 @@ export default function Dashboard() {
               tone={s.user_experience.band === "good" ? "ok" : s.user_experience.band === "fair" ? "warn" : s.user_experience.band === "poor" ? "bad" : undefined}
               sub={s.user_experience_score == null ? "no scorable clients" : `${s.user_experience.good} good · ${s.user_experience.fair} fair · ${s.user_experience.poor} poor · partial inputs`} />
           </div>
-          <div className="grid gap-4 lg:grid-cols-3">
+          {view === "experience" && <div className="grid gap-4 lg:grid-cols-2">
+            <Card title="Client experience">
+              <Donut data={[{ name: "Good", value: s.user_experience.good, color: COLORS.good },
+                { name: "Fair", value: s.user_experience.fair, color: COLORS.fair },
+                { name: "Poor", value: s.user_experience.poor, color: COLORS.poor },
+                { name: "Unscored", value: s.user_experience.unscored, color: COLORS.none }]} />
+              <Link className="inm-link" to="/experience">Investigate affected users</Link>
+            </Card>
+            <Card title="Experience by wireless band">
+              {(s.experience_by_band ?? []).map(b => <div key={b.band} className="mb-4">
+                <div className="flex justify-between text-sm"><strong>{b.band}</strong><span>{b.clients} clients · {b.score == null ? "unscored" : `${b.score} / 100`}</span></div>
+                <div className="mt-2 flex h-3 overflow-hidden rounded bg-slate-100">
+                  {[["Good", b.good, COLORS.good], ["Fair", b.fair, COLORS.fair], ["Poor", b.poor, COLORS.poor], ["Unscored", b.unscored, COLORS.none]].map(([label, count, color]) =>
+                    <div key={String(label)} title={`${label}: ${count}`} style={{ width: `${b.clients ? 100 * Number(count) / b.clients : 0}%`, background: String(color) }} />)}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{b.good} good · {b.fair} fair · {b.poor} poor · {b.unscored} unscored</p>
+              </div>)}
+              {!s.experience_by_band?.length && <p className="text-sm text-slate-500">Awaiting fresh connected-client observations.</p>}
+            </Card>
+          </div>}
+          {view === "performance" && <div className="grid gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2"><Card title="Clients & signal over time"><HistoryChart data={hist.data ?? []} /></Card></div>
             <Card title="Client connection quality">
               <ResponsiveContainer width="100%" height={200}>
@@ -64,15 +93,8 @@ export default function Dashboard() {
               </ResponsiveContainer>
               <p className="mt-2 text-xs text-slate-500">Quality uses the AP's own label when given, otherwise SNR thresholds (≥25 good, ≥15 fair).</p>
             </Card>
-          </div>
-          <Card title="AP firmware versions">
-            <ul className="flex flex-wrap gap-2 text-sm">
-              {Object.entries(s.firmware_versions).map(([v, n]) => (
-                <li key={v} className="rounded border border-slate-700 px-2 py-1">{v} <span className="text-slate-500">× {n}</span></li>
-              ))}
-            </ul>
-            {Object.keys(s.firmware_versions).length > 1 && <p className="mt-2 text-xs text-amber-400">More than one firmware version in view.</p>}
-          </Card>
+          </div>}
+          {view === "firmware" && <FirmwareExperience summary={s} />}
           <p className="text-xs text-slate-500">Last poll: {fmtTime(s.last_poll_at)} · auto-refreshes every 30 s</p>
         </>
       )}

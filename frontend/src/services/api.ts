@@ -11,23 +11,46 @@ export const setSession = (s: Session | null) => {
   try { s ? sessionStorage.setItem(KEY, JSON.stringify(s)) : sessionStorage.removeItem(KEY); } catch { /* ignore */ }
 };
 
-export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
+export class ApiError extends Error { constructor(public status: number, message: string, public retryAfterMs?: number) { super(message); } }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+let rateLimitUntil = 0;
+const pendingReads = new Map<string, Promise<unknown>>();
+
+async function performRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (Date.now() < rateLimitUntil) {
+    throw new ApiError(429, "Request limit reached. Retrying shortly.", rateLimitUntil - Date.now());
+  }
   const s = getSession();
   const headers: Record<string, string> = { ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...(init.headers as Record<string, string>) };
   if (s) headers.Authorization = `Bearer ${s.access_token}`;
   const resp = await fetch(`/api${path}`, { ...init, headers });
   if (resp.status === 401 && s) { setSession(null); window.location.href = "/login"; }
   if (!resp.ok) {
+    let retryAfterMs: number | undefined;
+    if (resp.status === 429) {
+      const header = resp.headers.get("Retry-After");
+      const seconds = header == null ? NaN : Number(header);
+      retryAfterMs = Number.isFinite(seconds) ? Math.max(1000, seconds * 1000) : 60000;
+      rateLimitUntil = Date.now() + retryAfterMs;
+    }
     let msg = resp.statusText;
     try { const j = await resp.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* ignore */ }
     if (resp.status === 403 && msg === "password_change_required" && s) {
       setSession({ ...s, must_change_password: true }); window.location.href = "/change-password";
     }
-    throw new ApiError(resp.status, msg);
+    throw new ApiError(resp.status, msg, retryAfterMs);
   }
   return resp.json();
+}
+
+export function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (init.method && init.method.toUpperCase() !== "GET") return performRequest<T>(path, init);
+  const key = `${getSession()?.access_token ?? ""}:${path}`;
+  const existing = pendingReads.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = performRequest<T>(path, init).finally(() => pendingReads.delete(key));
+  pendingReads.set(key, pending);
+  return pending;
 }
 
 export interface Summary {
@@ -42,6 +65,11 @@ export interface Summary {
   coverage: { inventory_aps: number; monitored_aps: number; unmonitored_aps: number; percent: number | null } | null;
   clusters_failing: number; avg_util_2g_percent: number | null; avg_util_5g_percent: number | null;
   clients_by_band: Record<string, number>;
+  experience_by_band: BandExperience[];
+  experience_by_site: ({ site: string; clients: number } & ExpSummary)[];
+  firmware_comparison: ({ model: string; firmware: string; aps: number; reporting_aps: number; clients: number; sites: number;
+    avg_cpu_percent: number | null; avg_snr_db: number | null; avg_link_rate_mbps: number | null;
+    by_band: BandExperience[] } & ExpSummary)[];
 }
 export interface HistoryPoint { ts: string; clients: number; aps_up: number; aps_total: number; avg_snr_db: number | null; avg_util_percent: number | null }
 export interface Radio {
@@ -55,6 +83,7 @@ export interface AP {
   client_count: number | null; radios: Radio[] | null; simulated: boolean; last_seen: string | null;
 }
 export interface ExpSummary { score: number | null; band: string; good: number; fair: number; poor: number; unscored: number }
+export interface BandExperience extends ExpSummary { clients: number; experience_band: string }
 export interface Client {
   id: number; site_name: string | null; mac: string; hostname: string | null; ip: string | null;
   ap_name: string | null; ssid: string | null; vlan: number | null; band: string | null; channel: string | null;

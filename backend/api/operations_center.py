@@ -252,11 +252,19 @@ def trends(db: Session = Depends(get_db), user: User = Depends(require_any_role(
     device_ids = {d.id for d in visible_inventory(db, sites, dashboard=True)}
     # Average each controller's reported client sessions per hour before summing the fleet.
     buckets: dict[tuple, list] = defaultdict(list)
-    for ts, site_id, count in db.execute(select(SiteSample.ts, SiteSample.site_id, SiteSample.clients_total)
+    experience = defaultdict(lambda: [0.0, 0])
+    for ts, site_id, count, score, good, fair, poor in db.execute(select(
+        SiteSample.ts, SiteSample.site_id, SiteSample.clients_total,
+        SiteSample.exp_score, SiteSample.exp_good, SiteSample.exp_fair, SiteSample.exp_poor)
                                         .where(SiteSample.site_id.in_(sites), SiteSample.ts >= t-timedelta(hours=24))):
-        buckets[(iso(ts)[:13], "clients", site_id)].append(count)
+        hour = iso(ts)[:13]
+        buckets[(hour, "clients", site_id)].append(count)
+        scored = (good or 0) + (fair or 0) + (poor or 0)
+        if score is not None and scored:
+            experience[hour][0] += score * scored
+            experience[hour][1] += scored
     if store is not None:
-        for metric in ("util_5g_percent", "cpu_percent"):
+        for metric in ("util_2g_percent", "util_5g_percent", "cpu_percent"):
             for r in store.query(device_id=None, metric_name=metric, since=t-timedelta(hours=24), limit=20000,
                                  source_type=source, entity_type="device"):
                 if r["value"] is not None and r["device_id"] in device_ids:
@@ -270,9 +278,11 @@ def trends(db: Session = Depends(get_db), user: User = Depends(require_any_role(
         row = {"hour": hk[11:13] + ":00"}
         if m.get("clients"):
             row["clients"] = round(sum(m["clients"]), 1)
-        for k in ("util_5g_percent", "cpu_percent"):
+        for k in ("util_2g_percent", "util_5g_percent", "cpu_percent"):
             if m.get(k):
                 row[k] = round(sum(m[k]) / len(m[k]), 1)
+        if experience[hk][1]:
+            row["experience_score"] = round(experience[hk][0] / experience[hk][1], 1)
         hours.append(row)
     days = defaultdict(lambda: {"plans": 0, "approved": 0, "rejected": 0})
     for p in db.scalars(select(ChangePlan).where(ChangePlan.created_at >= t - timedelta(days=14),

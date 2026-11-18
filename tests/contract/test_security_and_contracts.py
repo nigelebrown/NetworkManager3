@@ -356,7 +356,7 @@ def test_collection_capacity_admin_limits_and_persistence(client, admin):
     assert initial.status_code == 200
     assert initial.json()["limits"] == {"ap": 35, "switch": 35, "printer": 35}
     assert client.put(path, json={"concurrency": 8}).status_code == 401
-    assert client.put(path, headers=admin, json={"concurrency": 51}).status_code == 422
+    assert client.put(path, headers=admin, json={"concurrency": 101}).status_code == 422
     assert client.put(path, headers=admin, json={"concurrency": 6}).json() == {"concurrency": 6}
     assert client.put(path, headers=admin, json={"concurrency": 19, "family": "switch"}).status_code == 200
     assert client.put(path, headers=admin, json={"concurrency": 21, "family": "printer"}).status_code == 200
@@ -364,6 +364,11 @@ def test_collection_capacity_admin_limits_and_persistence(client, admin):
     assert saved["configured"] == 6
     assert saved["effective"] == 1
     assert saved["limits"] == {"ap": 6, "switch": 19, "printer": 21}
+    assert saved["policies"]["ap"]["mode"] == "manual"
+    assert client.put(path, headers=admin, json={"concurrency": 80, "family": "ap", "mode": "auto"}).status_code == 200
+    policy = client.get(path, headers=admin).json()["policies"]["ap"]
+    assert policy["mode"] == "auto" and policy["maximum"] == 80
+    assert client.put(path, headers=admin, json={"concurrency": 6, "family": "ap", "mode": "manual"}).status_code == 200
     resources = client.get("/api/v1/system/resources", headers=admin)
     assert resources.json()["worker"]["ap_poll_limit"] == saved["effective"]
 

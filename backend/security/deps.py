@@ -129,8 +129,15 @@ def client_ip(request: HTTPConnection) -> str:
 
 def rate_limit_api(conn: HTTPConnection) -> None:
     # HTTPConnection (not Request) so the app-wide dependency also resolves on WebSocket routes.
-    if not api_limiter.check(client_ip(conn)):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests")
+    key = client_ip(conn)
+    scheme, _, token = conn.headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer" and token:
+        payload = decode_access_token(token)
+        if payload and isinstance(payload.get("sub"), str):
+            key = f"{key}:user:{payload['sub']}"
+    if not api_limiter.check(key):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests",
+                            headers={"Retry-After": "60"})
 
 
 # ---- audit ------------------------------------------------------------------

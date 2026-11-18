@@ -7,6 +7,8 @@ export type PollFamily = "ap" | "switch" | "printer";
 export interface CollectionCapacity {
   configured: number; effective: number; max_concurrency: number; interval_seconds: number;
   limits: Record<PollFamily, number>;
+  policies: Record<PollFamily, { mode: "auto" | "manual"; effective: number; maximum: number;
+    reason: string | null; checked_at: string | null }>;
   performance: Record<PollFamily, {
     monitored: number; fresh: number; failures: number;
     batch: { count: number; seconds: number; finished_at: string } | null;
@@ -64,8 +66,8 @@ export const v1 = {
   resources: () => request<SystemResources>("/v1/system/resources"),
   databaseHealth: () => request<{ checked_at: string; management: DatabaseHealthRow; timeseries: DatabaseHealthRow }>("/v1/system/database-health"),
   collectionCapacity: () => request<CollectionCapacity>("/v1/system/collection-capacity"),
-  setCollectionCapacity: (concurrency: number, family: PollFamily = "ap") =>
-    request<{ concurrency: number }>("/v1/system/collection-capacity", { method: "PUT", ...j({ concurrency, family }) }),
+  setCollectionCapacity: (concurrency: number, family: PollFamily = "ap", mode: "auto" | "manual" = "manual") =>
+    request<{ concurrency: number }>("/v1/system/collection-capacity", { method: "PUT", ...j({ concurrency, family, mode }) }),
   features: () => request<Features>("/v1/system/features"),
   synthetic: () => request<{ correlation_id: string; event_id: string }>("/v1/system/synthetic-event", { method: "POST", ...j({}) }),
   trace: (cid: string) => request<Trace>(`/v1/system/synthetic-event/${cid}`),

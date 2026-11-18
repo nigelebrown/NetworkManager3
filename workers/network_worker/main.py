@@ -137,7 +137,6 @@ class Worker:
         def due_plans():
             now = datetime.now(timezone.utc)
             with session_scope() as db:
-                switch_limit = configured_poll_concurrency(db, "switch") if self.s.mode == "live" else 8
                 rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
                                          CollectionPlan.window_end_hour, InmDevice.family)
                     .join(InmDevice, InmDevice.id == CollectionPlan.device_id).where(
@@ -146,6 +145,9 @@ class Worker:
                         CollectionPlan.next_due_at <= now),
                 ).order_by(CollectionPlan.next_due_at.asc().nullsfirst(), CollectionPlan.id))
                 eligible = [row for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)]
+                from backend.infrastructure.poll_capacity import adjust_capacity
+                demand = sum(row.family == "switch" for row in eligible)
+                switch_limit = adjust_capacity(db, "switch", demand, 300) if self.s.mode == "live" else 8
                 switches = [row.id for row in eligible if row.family == "switch"][:switch_limit]
                 other = [row.id for row in eligible if row.family != "switch"][:1]
                 return switch_limit, switches, other
@@ -207,7 +209,12 @@ class Worker:
         while not self.stop.is_set():
             try:
                 with session_scope() as db:
-                    printer_limit = configured_poll_concurrency(db, "printer")
+                    from backend.infrastructure.poll_capacity import adjust_capacity
+                    from backend.database.models_printer_srs import PrinterMonitoring
+                    from sqlalchemy import select, func
+                    demand = db.scalar(select(func.count()).select_from(PrinterMonitoring).where(
+                        PrinterMonitoring.enabled.is_(True))) or 0
+                    printer_limit = adjust_capacity(db, "printer", demand, 60)
                 self.stats["printer_poll_limit"] = printer_limit
                 started = time.monotonic()
                 summary = await PS.run_due(session_scope, f"worker-{self.instance}",

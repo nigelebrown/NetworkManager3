@@ -115,6 +115,7 @@ def database_health(_: User = Depends(require_any_role("admin", "auditor"))):
 class ApPollCapacity(BaseModel):
     concurrency: int = Field(ge=1, le=MAX_POLL_CONCURRENCY, strict=True)
     family: Literal["ap", "switch", "printer"] = "ap"
+    mode: Literal["auto", "manual"] = "manual"
 
 
 @router.get("/system/collection-capacity")
@@ -128,6 +129,18 @@ def collection_capacity(db: Session = Depends(get_db),
     interval = get_settings().poll_interval_seconds
     sites = [site for site in visible_sites(db) if site.enabled and not site.simulated]
     limits = {family: configured_poll_concurrency(db, family) for family in POLL_CAPACITY_KEYS}
+    from ..infrastructure.poll_capacity import effective_capacity
+    policies = {}
+    for family, key in POLL_CAPACITY_KEYS.items():
+        config = db.get(AppSetting, key)
+        runtime = db.get(AppSetting, f"poll-capacity-runtime:{family}")
+        policies[family] = {
+            "mode": config.value.get("mode", "auto") if config else "auto",
+            "effective": effective_capacity(db, family),
+            "maximum": config.value["concurrency"] if config and "mode" in config.value else MAX_POLL_CONCURRENCY,
+            "reason": runtime.value.get("reason") if runtime else "Awaiting the next polling cycle",
+            "checked_at": runtime.value.get("checked_at") if runtime else None,
+        }
     heartbeat = db.get(ServiceHeartbeat, "network_worker")
     detail = (heartbeat.detail or {}) if heartbeat else {}
     observed = set(db.scalars(select(AccessPoint.site_id).distinct()))
@@ -161,6 +174,7 @@ def collection_capacity(db: Session = Depends(get_db),
     return {
         "configured": limits["ap"],
         "limits": limits,
+        "policies": policies,
         "performance": performance,
         "effective": poll_concurrency(db),
         "max_concurrency": MAX_POLL_CONCURRENCY,
@@ -182,11 +196,11 @@ def set_collection_capacity(body: ApPollCapacity, request: Request, db: Session 
     if row is None:
         row = AppSetting(key=key)
         db.add(row)
-    row.value = {"concurrency": body.concurrency}
+    row.value = {"concurrency": body.concurrency, "mode": body.mode}
     row.updated_at = datetime.now(timezone.utc)
     row.updated_by = user.username
     audit(db, f"{body.family}_poll_capacity_updated", username=user.username, target=key,
-          detail=f"concurrency {previous} -> {body.concurrency}", request=request)
+          detail=f"concurrency {previous} -> {body.concurrency}; mode={body.mode}", request=request)
     return {"concurrency": body.concurrency}
 
 

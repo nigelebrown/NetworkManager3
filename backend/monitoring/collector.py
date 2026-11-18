@@ -28,7 +28,7 @@ from .demo import DEMO_SITES, build_demo_snapshot
 log = logging.getLogger("sims.collector")
 POLL_CAPACITY_KEY = "ap-poll-capacity"
 DEFAULT_POLL_CONCURRENCY = 35
-MAX_POLL_CONCURRENCY = 50
+MAX_POLL_CONCURRENCY = 100
 POLL_CAPACITY_KEYS = {"ap": POLL_CAPACITY_KEY, "switch": "switch-poll-capacity", "printer": "printer-poll-capacity"}
 UNLINKED_POLL_INTERVAL = timedelta(minutes=15)
 UNLINKED_POLLS_PER_CYCLE = 2
@@ -257,7 +257,8 @@ def poll_site(db: Session, site: Site, transport: httpx.BaseTransport | None = N
 def poll_concurrency(db: Session) -> int:
     if get_settings().mode != "live" or db.get_bind().dialect.name != "postgresql":
         return 1
-    return configured_poll_concurrency(db, "ap")
+    from ..infrastructure.poll_capacity import effective_capacity
+    return effective_capacity(db, "ap")
 
 
 def configured_poll_concurrency(db: Session, family: str) -> int:
@@ -300,12 +301,14 @@ def prune_old(db: Session) -> None:
 def poll_worker_sites() -> int | None:
     """Prioritize controllers with observed APs and bound retries for empty controllers."""
     with session_scope() as db:
-        concurrency = poll_concurrency(db)
         if get_settings().mode != "live":
+            concurrency = 1
             site_ids = None
         else:
             observed_sites = set(db.scalars(select(AccessPoint.site_id).distinct()))
             site_ids = _worker_poll_order(visible_sites(db), observed_sites, utcnow())
+            from ..infrastructure.poll_capacity import adjust_capacity
+            concurrency = adjust_capacity(db, "ap", len(site_ids), get_settings().poll_interval_seconds)
     if site_ids is None:
         poll_all()
         return None

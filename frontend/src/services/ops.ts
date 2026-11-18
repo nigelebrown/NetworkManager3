@@ -39,7 +39,7 @@ export interface FleetCompliance {
     config_available: boolean; config_captured_at: string | null }[];
 }
 export interface Trends {
-  hourly: { hour: string; clients?: number; util_5g_percent?: number; cpu_percent?: number }[];
+  hourly: { hour: string; clients?: number; experience_score?: number; util_2g_percent?: number; util_5g_percent?: number; cpu_percent?: number }[];
   changes_by_day: { day: string; plans: number; approved: number; rejected: number }[];
   attribution: Record<string, number>; recommendations: Record<string, number>; audit_events_24h: number;
 }

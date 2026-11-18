@@ -33,8 +33,9 @@ def test_controller_worker_polls_sites_concurrently(monkeypatch):
         completed.append(site_id)
 
     monkeypatch.setattr(collector, "session_scope", lambda: nullcontext(SimpleNamespace(scalars=lambda _: [1, 2])))
-    monkeypatch.setattr(collector, "get_settings", lambda: SimpleNamespace(mode="live"))
-    monkeypatch.setattr(collector, "poll_concurrency", lambda db: 2)
+    from backend.infrastructure import poll_capacity
+    monkeypatch.setattr(collector, "get_settings", lambda: SimpleNamespace(mode="live", poll_interval_seconds=60))
+    monkeypatch.setattr(poll_capacity, "adjust_capacity", lambda db, family, demand, interval: 2)
     monkeypatch.setattr(collector, "visible_sites", lambda db: sites)
     monkeypatch.setattr(collector, "_poll_site_transaction", poll)
     monkeypatch.setattr(collector, "prune_old", lambda db: None)

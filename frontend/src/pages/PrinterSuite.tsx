@@ -68,9 +68,9 @@ export function PrinterOverview() {
   return <Shell title="Printer fleet overview" subtitle="Read-only SNMP monitoring, measured utilization, supplies and faults across the fleet.">
     <ErrorNote error={ov.error} />
     <section className="inm-status-overview" aria-label="Fleet summary">
-      <Kpi label="Printers" value={o?.total ?? "—"} hint={`${o?.monitored ?? 0} monitored read-only`} />
-      <Kpi label="Reachable" value={o?.reachable ?? "—"} hint={`${o?.unreachable ?? 0} unreachable`} />
-      <Kpi label="Median health" value={o?.health.median ?? "—"} hint={`${o?.health.with_evidence ?? 0} with evidence`} />
+      <Kpi label="Printers" value={o?.total ?? "—"} hint={o ? `${o.monitored} monitored read-only` : "Awaiting fleet data"} />
+      <Kpi label="Reachable" value={o?.reachable ?? "—"} hint={o ? `${o.unreachable} unreachable` : "Awaiting fleet data"} />
+      <Kpi label="Median health" value={o?.health.median ?? "—"} hint={o ? `${o.health.with_evidence} with evidence` : "Awaiting fleet data"} />
       <Kpi label="Recommendations" value={o?.recommendations_pending ?? "—"} hint="awaiting review" />
     </section>
     <div className="grid gap-4 lg:grid-cols-3">
@@ -81,7 +81,7 @@ export function PrinterOverview() {
       <Section title="Open faults">
         <ul className="space-y-1 text-sm">{faults.map(f => <li key={f.category + f.severity} className="flex justify-between">
           <span>{f.category.toLowerCase()} <Pill value={f.severity} tone={f.severity === "critical" ? "poor" : "fair"} /></span><b>{f.count}</b></li>)}
-          {!faults.length && <li className="text-slate-500">No open device-reported faults.</li>}</ul>
+          {!faults.length && <li className="text-slate-500">{o ? "No open device-reported faults." : "Fault status is awaiting fleet data."}</li>}</ul>
       </Section>
       <Section title="Collection" footer="Freshness = last successful poll within three polling intervals.">
         <ul className="space-y-1 text-sm">

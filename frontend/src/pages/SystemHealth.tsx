@@ -150,15 +150,16 @@ function ServerResourcesCard() {
 function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
   const capacity = useLoad(v1.collectionCapacity, [], 15000, ["system"]);
   const [values, setValues] = useState<Partial<Record<PollFamily, string>>>({});
+  const [modes, setModes] = useState<Partial<Record<PollFamily, "auto" | "manual">>>({});
   const [saving, setSaving] = useState<PollFamily | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const data = capacity.data;
 
-  const save = async (family: PollFamily, concurrency: number) => {
+  const save = async (family: PollFamily, concurrency: number, mode: "auto" | "manual") => {
     setSaving(family); setError(null); setMessage(null);
     try {
-      await v1.setCollectionCapacity(concurrency, family);
+      await v1.setCollectionCapacity(concurrency, family, mode);
       capacity.reload();
       setMessage("Saved. Applies at the start of the next worker polling cycle.");
     } catch (e) { setError(e instanceof Error ? e.message : "Saving collection capacity failed."); }
@@ -175,20 +176,31 @@ function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         {(["ap", "switch", "printer"] as const).map(family => {
           const label = { ap: "AP controllers", switch: "Switches", printer: "Printers" }[family];
-          const value = values[family] ?? data.limits[family];
+          const policy = data.policies[family];
+          const mode = modes[family] ?? policy.mode;
+          const value = values[family] ?? (mode === "auto" ? policy.maximum : data.limits[family]);
           return <form key={family} className="rounded border p-3" onSubmit={e => {
             e.preventDefault();
-            void save(family, Number(value));
+            void save(family, Number(value), mode);
           }}>
-            <label className="flex flex-col gap-1 text-sm">{label} · parallel polls
+            <div className="mb-2 flex justify-between text-sm"><strong>{label}</strong><span>{policy.effective} active slots</span></div>
+            <label className="mb-2 flex flex-col gap-1 text-sm">Control
+              <select className="rounded border border-slate-300 px-2 py-1" disabled={!isAdmin} value={mode}
+                onChange={e => setModes(current => ({ ...current, [family]: e.target.value as "auto" | "manual" }))}>
+                <option value="auto">Automatic</option><option value="manual">Manual</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">{mode === "auto" ? "Maximum parallel polls" : "Parallel polls"}
               {isAdmin ? <input className="rounded border border-slate-300 px-2 py-1" type="number" required
                 min={1} max={data.max_concurrency} value={value}
                 onChange={e => setValues(current => ({ ...current, [family]: e.target.value }))} />
                 : <strong>{value}</strong>}
             </label>
-            {isAdmin && <button className={`${btnPrimary} mt-2`} disabled={saving !== null || Number(value) === data.limits[family]}>
-              {saving === family ? "Saving…" : "Save limit"}
+            {isAdmin && <button className={`${btnPrimary} mt-2`} disabled={saving !== null ||
+              (mode === policy.mode && Number(value) === (mode === "auto" ? policy.maximum : data.limits[family]))}>
+              {saving === family ? "Saving…" : "Save control"}
             </button>}
+            <p className="mt-2 text-xs text-slate-500">{policy.mode === "auto" ? policy.reason : "Administrator sets polling capacity."}</p>
           </form>;
         })}
       </div>
@@ -209,12 +221,9 @@ function CollectionCapacityCard({ isAdmin }: { isAdmin: boolean }) {
         <p className="mt-1 text-xs text-slate-500">Fresh coverage uses two configured intervals for AP controllers and switches, and three for printers.</p>
       </div>
       {message && <p className="mt-2 text-sm" role="status">{message}</p>}
-      <p className="mt-3 text-sm">{data.overdue
-        ? "Successful controller polls are falling behind. Check VM headroom before increasing concurrency."
-        : data.controllers ? "No previously successful controller polls are overdue."
-          : "AP sizing recommendations need observations from enabled live controllers."}</p>
+      <p className="mt-3 text-sm">Automatic control reviews demand, completed polling batches, CPU load, available memory and database pressure once per minute. Capacity changes gradually within the configured maximum.</p>
     </>}
-    <p className="mt-2 text-sm">Syslog sizing needs sustained ingestion rate, dropped messages and delivery lag. Container replica counts are managed on the host.</p>
+    <p className="mt-2 text-sm">Polling capacity applies to concurrent jobs inside the worker. Syslog and database capacity appear in the environment monitoring panels.</p>
   </Card>;
 }
 

@@ -185,6 +185,14 @@ def test_dashboard_reports_inventory_coverage_and_both_bands(client, admin):
     s = client.get("/api/dashboard/summary", headers=admin).json()
     assert s["coverage"]["inventory_aps"] >= s["coverage"]["monitored_aps"] >= 1
     assert "avg_util_2g_percent" in s and "avg_util_5g_percent" in s
+    assert sum(b["clients"] for b in s["experience_by_band"]) == s["clients_total"]
+    assert {b["band"] for b in s["experience_by_band"]} == set(s["clients_by_band"])
+    assert sum(b["good"] + b["fair"] + b["poor"] + b["unscored"] for b in s["experience_by_band"]) == s["clients_total"]
+    assert sum(site["clients"] for site in s["experience_by_site"]) == s["clients_total"]
+    for cohort in s["firmware_comparison"]:
+        assert cohort["reporting_aps"] <= cohort["aps"]
+        assert sum(b["clients"] for b in cohort["by_band"]) == cohort["clients"]
+        assert all(b["band"] in s["clients_by_band"] for b in cohort["by_band"])
 
 
 # ------------------------------------------------------------------ inventory adoption (duplicate fix)
