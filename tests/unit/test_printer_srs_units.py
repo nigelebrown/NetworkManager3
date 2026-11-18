@@ -65,6 +65,20 @@ def test_poll_unreachable_records_no_values():
     assert not r.reachable and not r.snmp_ok and r.meters == {} and r.samples == []
 
 
+def test_poll_retains_counters_when_later_metrics_exceed_time_budget():
+    class SlowAlerts(C.EmulatedPrinterAgent):
+        async def walk(self, oid):
+            if oid == mib.PRT_ALERT_CODE:
+                await asyncio.sleep(1)
+            return await super().walk(oid)
+
+    reader = SlowAlerts(C.emulated_printer(impressions=500))
+    result = asyncio.run(C.poll(reader, mib.BUILTIN_PROFILES, metric_budget_seconds=0.05))
+    assert result.snmp_ok and result.meters["impressions_total"]["value"] == 500
+    assert result.error == "poll time budget reached; saved available metrics"
+    assert not result.faults_observed
+
+
 def test_counter_unit_must_be_known_before_labelling():
     vals = C.emulated_printer(impressions=500, counter_unit=11)   # hours: never relabelled as impressions
     for k in [k for k in vals if k.startswith("1.3.6.1.4.1.1347.")]:

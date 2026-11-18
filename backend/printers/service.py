@@ -377,13 +377,17 @@ def apply_poll(db: Session, printer: PrinterDevice, res: C.PollResult, *, poll_i
                                      raw={"source": f["source"]}))
             summary["faults_opened"] += 1
     for code, row in open_faults.items():
-        if code not in active:
+        if res.faults_observed and code not in active:
             row.ended_at = at
             summary["faults_closed"] += 1
-    mon.operational_state = res.operational_state
-    _period(db, printer.id, "OPERATIONAL", res.operational_state, at,
-            {"device_status": res.device_status, "faults": sorted(active)} if active else {"device_status": res.device_status})
-    printer.status = "fault" if any(f["severity"] == "critical" for f in res.faults) else "up"
+    if res.operational_state != "UNKNOWN":
+        mon.operational_state = res.operational_state
+        _period(db, printer.id, "OPERATIONAL", res.operational_state, at,
+                {"device_status": res.device_status, "faults": sorted(active)} if active else {"device_status": res.device_status})
+    critical = any(f["severity"] == "critical" for f in res.faults) or any(
+        row.ended_at is None and row.severity == "critical" for row in open_faults.values()
+    )
+    printer.status = "fault" if critical else "up"
 
     # capabilities
     caps = {c.capability: c for c in db.scalars(select(PrinterCapability).where(PrinterCapability.printer_id == printer.id))}
