@@ -138,7 +138,7 @@ class Worker:
             now = datetime.now(timezone.utc)
             with session_scope() as db:
                 rows = db.execute(select(CollectionPlan.id, CollectionPlan.window_start_hour,
-                                         CollectionPlan.window_end_hour, InmDevice.family)
+                                         CollectionPlan.window_end_hour, InmDevice.family, CollectionPlan.interval_seconds)
                     .join(InmDevice, InmDevice.id == CollectionPlan.device_id).where(
                     CollectionPlan.state == "ACTIVE",
                     or_(CollectionPlan.next_due_at.is_(None),
@@ -147,7 +147,8 @@ class Worker:
                 eligible = [row for row in rows if in_window(now, row.window_start_hour, row.window_end_hour)]
                 from backend.infrastructure.poll_capacity import adjust_capacity
                 demand = sum(row.family == "switch" for row in eligible)
-                switch_limit = adjust_capacity(db, "switch", demand, 300) if self.s.mode == "live" else 8
+                interval = min((row.interval_seconds for row in eligible if row.family == "switch"), default=300)
+                switch_limit = adjust_capacity(db, "switch", demand, interval) if self.s.mode == "live" else 8
                 switches = [row.id for row in eligible if row.family == "switch"][:switch_limit]
                 other = [row.id for row in eligible if row.family != "switch"][:1]
                 return switch_limit, switches, other

@@ -68,7 +68,7 @@ export default function ExecutiveDashboard() {
           <div className="flex justify-between"><dt>2.4 GHz channel use</dt><dd className="font-semibold">{pct(s?.avg_util_2g_percent)}</dd></div>
           <div className="flex justify-between"><dt>5 GHz channel use</dt><dd className="font-semibold">{pct(s?.avg_util_5g_percent)}</dd></div>
           <div className="flex justify-between"><dt>Average device CPU</dt><dd className="font-semibold">{pct(meanCpu)}</dd></div>
-          <div className="flex justify-between"><dt>Open incidents</dt><dd><Link className="inm-link font-semibold" to="/incidents">{n?.summary.active_alerts ?? "—"}</Link></dd></div>
+          <div className="flex justify-between"><dt>Open incidents</dt><dd><Link className="inm-link font-semibold" to="/device-alerts">{n?.summary.active_alerts ?? "—"}</Link></dd></div>
         </dl>
         <p className="mt-3 text-xs text-slate-500">CPU covers {cpu.length} reporting devices. Poll success measures collection reliability.</p>
       </Card>

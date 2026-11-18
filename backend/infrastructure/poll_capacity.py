@@ -83,7 +83,7 @@ def adjust_capacity(db, family, demand, interval):
     if chosen != current:
         from ..security.deps import audit
         audit(db, "poll_capacity_auto_adjusted", username="capacity-controller", target=family,
-              detail=f"concurrency {current} -> {chosen}; {reason}")
+              detail=f"concurrency {current} -> {chosen}; {reason}", actor_kind="service")
     return chosen
 
 
