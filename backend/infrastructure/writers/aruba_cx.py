@@ -235,6 +235,7 @@ class ArubaCxWriter:
     def __init__(self, creds: Credentials, *, verify: bool | str = True, timeout: float = 15.0,
                  transport: httpx.BaseTransport | None = None):
         self.creds = creds
+        self._restore_checkpoints: dict[str, bytes] = {}
         self.session = CxSession(creds.host, creds.username, creds.password, verify=verify, timeout=timeout,
                                  transport=transport, api_version=(creds.extra or {}).get("api_version"))
 
@@ -413,7 +414,6 @@ class ArubaCxWriter:
         except WriterError as exc:
             if exc.category != "DEVICE_REJECTED" or "duplicate checkpoint" not in str(exc).lower():
                 raise
-            original_error = exc
 
         # AOS-CX can reject a new name when an existing checkpoint has identical
         # contents. Reuse only our own checkpoint after comparing the full JSON.
@@ -429,11 +429,21 @@ class ArubaCxWriter:
                 saved = self._req("GET", f"/fullconfigs/{candidate}").json()
                 if saved == baseline:
                     return candidate
-        raise original_error
+        # Callers persist the full baseline before changing hardware. Keep this
+        # session's exact configuration for restore when firmware rejects native
+        # checkpoints with duplicate contents.
+        self._restore_checkpoints[name] = json.dumps(baseline, sort_keys=True).encode()
+        return name
 
     def rollback(self, checkpoint: str) -> None:
         if not re.match(r"^inm-cp-\d+$", checkpoint):
             raise WriterError("INVALID", "Unknown checkpoint.")
+        if checkpoint in self._restore_checkpoints:
+            baseline = self._restore_checkpoints[checkpoint]
+            self.restore(baseline)
+            if json.loads(self.backup()) != json.loads(baseline):
+                raise WriterError("ROLLBACK_FAILED", "Full configuration restore did not match its checkpoint baseline.")
+            return
         self._req("PUT", "/fullconfigs/running-config", params={"from": f"{self.prefix}/fullconfigs/{checkpoint}"})
 
     def save(self) -> None:
