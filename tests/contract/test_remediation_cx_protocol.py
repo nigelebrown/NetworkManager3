@@ -224,3 +224,20 @@ def test_duplicate_checkpoint_reuses_match_or_restores_exact_baseline(monkeypatc
         with pytest.raises(WriterError, match="did not match"):
             writer.rollback(checkpoint)
     assert all(path != "/fullconfigs/customer" for _, path in calls)
+
+
+@pytest.mark.parametrize("operation,reply", [
+    ({"op": "switch.port.access_vlan", "port": "1/1/1", "value": 4090},
+     {"vlan_mode": "access", "vlan_tag": {"4090": "/rest/v10.14/system/vlans/4090"}}),
+    ({"op": "switch.port.trunk_vlans", "port": "1/1/1", "value": [1, 4090]},
+     {"vlan_mode": "native-untagged", "vlan_tag": {"1": "/rest/v10.14/system/vlans/1"},
+      "vlan_trunks": {"1": "/rest/v10.14/system/vlans/1", "4090": "/rest/v10.14/system/vlans/4090"}}),
+    ({"op": "switch.port.qos_trust", "port": "1/1/1", "value": "dscp"},
+     {"qos_config": {"qos_trust": "dscp"}}),
+    ({"op": "switch.port.storm_control", "port": "1/1/1", "broadcast_kbps": 1000},
+     {"rate_limits": {"broadcast": 1000, "broadcast_units": "kbps"}}),
+])
+def test_hardware_configuration_reference_maps_and_nested_fields(monkeypatch, operation, reply):
+    writer = ArubaCxWriter(Credentials("10.60.0.2", "admin", SECRET))
+    monkeypatch.setattr(writer, "_req", lambda *args, **kwargs: httpx.Response(200, json=reply))
+    assert writer.readback(operation)[0]
