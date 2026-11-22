@@ -55,6 +55,15 @@ def firmware_train(firmware: str | None) -> str | None:
     return f"{int(m.group(1))}.{int(m.group(2))}" if m else None
 
 
+def _vlan_ids(references) -> list[int]:
+    if not references:
+        return []
+    values = references.values() if isinstance(references, dict) else references
+    if isinstance(values, str):
+        values = [values]
+    return sorted(int(str(value).rsplit("/", 1)[-1]) for value in values)
+
+
 def _port(p: str) -> str:
     if not isinstance(p, str) or not PORT_RE.match(p):
         raise WriterError("INVALID", f"Invalid port name {p!r}")
@@ -466,7 +475,7 @@ class ArubaCxWriter:
                      "json": {"vlan_mode": "access", "vlan_tag": self._vlan_url(v)}}]
         if k == "switch.port.trunk_vlans":
             native = int(op.get("native", 1))
-            return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}",
+            return [{"method": "PUT", "path": f"/system/interfaces/{_port(op['port'])}",
                      "json": {"vlan_mode": "native-untagged", "vlan_tag": self._vlan_url(native),
                               "vlan_trunks": [self._vlan_url(x) for x in v]}}]
         if k == "switch.port.admin_state":
@@ -490,14 +499,14 @@ class ArubaCxWriter:
             lim = {t: int(op[f"{t.replace('-', '_')}_kbps"]) for t in ("broadcast", "multicast", "unknown-unicast")
                    if op.get(f"{t.replace('-', '_')}_kbps") is not None}
             return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}",
-                     "json": {"rate_limits": lim, "rate_limits_units": {t: "kbps" for t in lim}}}]
+                     "json": {"rate_limits": {**lim, **{t + "_units": "kbps" for t in lim}}}}]
         if k == "switch.port.qos_trust":
-            return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}", "json": {"qos_trust": v}}]
+            return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}", "json": {"qos_config": {"qos_trust": v}}}]
         if k == "switch.system.ntp":
             vrf = op.get("vrf", "mgmt")
-            return [{"method": "POST", "path": "/system/ntp_associations",
+            return [{"method": "POST", "path": f"/system/vrfs/{vrf}/ntp_associations",
                      "json": {"address": v, "vrf": f"{self.prefix}/system/vrfs/{vrf}",
-                              "association_attributes": {"iburst": True, "prefer": bool(op.get("prefer"))}}}]
+                              "association_attributes": {"burst_mode": "iburst", "prefer": bool(op.get("prefer"))}}}]
         if k == "switch.system.dns":
             vrf = op.get("vrf", "mgmt")
             return [{"method": "PATCH", "path": f"/system/vrfs/{vrf}",
@@ -521,18 +530,25 @@ class ArubaCxWriter:
     def apply(self, op: dict) -> list[dict]:
         sent = []
         for call in self.render(op):
-            self._req(call["method"], call["path"], json=call["json"])
+            body = call["json"]
+            if op["op"] == "switch.port.trunk_vlans":
+                # PATCH merges reference maps. PUT the writable configuration
+                # to replace the allowed VLAN set while preserving other settings.
+                body = self._req("GET", call["path"], params={"selector": "writable"}).json()
+                body.update(call["json"])
+            self._req(call["method"], call["path"], json=body)
             sent.append(call)
         return sent
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
         if k == "switch.system.ntp":
-            d = self._req("GET", "/system/ntp_associations", params={"depth": 1}).json() or {}
+            d = self._req("GET", f"/system/vrfs/{op.get('vrf', 'mgmt')}/ntp_associations",
+                          params={"depth": 2, "selector": "configuration"}).json() or {}
             got = sorted(str(x.get("address")) for x in d.values() if isinstance(x, dict))
             return v in got, {"ntp_servers": got}
         if k == "switch.system.syslog":
-            d = self._req("GET", "/system/syslog_remotes", params={"depth": 1}).json() or {}
+            d = self._req("GET", "/system/syslog_remotes", params={"depth": 2, "selector": "configuration"}).json() or {}
             got = sorted(str(x.get("remote_host")) for x in d.values() if isinstance(x, dict))
             return v in got, {"syslog_servers": got}
         if k == "switch.system.dns":
@@ -563,11 +579,13 @@ class ArubaCxWriter:
             return got == (v == "disabled"), {"admin_disable": got}
         d = self._req("GET", path, params={"selector": "configuration"}).json()
         if k == "switch.port.access_vlan":
-            return (d.get("vlan_mode") == "access" and str(d.get("vlan_tag", "")).endswith(f"/{int(v)}"),
+            return (d.get("vlan_mode") == "access" and _vlan_ids(d.get("vlan_tag")) == [int(v)],
                     {"vlan_mode": d.get("vlan_mode"), "vlan_tag": d.get("vlan_tag")})
         if k == "switch.port.trunk_vlans":
-            got = sorted(int(str(x).rsplit("/", 1)[-1]) for x in (d.get("vlan_trunks") or []))
-            return got == sorted(v), {"vlan_mode": d.get("vlan_mode"), "vlan_trunks": got}
+            got = _vlan_ids(d.get("vlan_trunks"))
+            return (got == sorted(v) and d.get("vlan_mode") == "native-untagged"
+                    and _vlan_ids(d.get("vlan_tag")) == [int(op.get("native", 1))],
+                    {"vlan_mode": d.get("vlan_mode"), "vlan_trunks": got})
         if k == "switch.port.admin_state":
             return d.get("admin") == v, {"admin": d.get("admin")}
         if k == "switch.lldp":
@@ -581,7 +599,10 @@ class ArubaCxWriter:
         if k == "switch.port.storm_control":
             want = self.render(op)[0]["json"]["rate_limits"]
             got = {t: (d.get("rate_limits") or {}).get(t) for t in want}
-            return got == want, {"rate_limits": d.get("rate_limits")}
+            units = d.get("rate_limits") or {}
+            return (got == want and all(units.get(key + "_units") == "kbps" for key in want),
+                    {"rate_limits": d.get("rate_limits")})
         if k == "switch.port.qos_trust":
-            return d.get("qos_trust") == v, {"qos_trust": d.get("qos_trust")}
+            got = (d.get("qos_config") or {}).get("qos_trust")
+            return got == v, {"qos_trust": got}
         raise WriterError("UNSUPPORTED", f"No readback for {k}")
