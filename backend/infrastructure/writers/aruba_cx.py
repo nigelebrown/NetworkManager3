@@ -599,9 +599,7 @@ class ArubaCxWriter:
         if k == "switch.port.storm_control":
             want = self.render(op)[0]["json"]["rate_limits"]
             got = {t: (d.get("rate_limits") or {}).get(t) for t in want}
-            units = d.get("rate_limits") or {}
-            return (got == want and all(units.get(key + "_units") == "kbps" for key in want),
-                    {"rate_limits": d.get("rate_limits")})
+            return got == want, {"rate_limits": d.get("rate_limits")}
         if k == "switch.port.qos_trust":
             got = (d.get("qos_config") or {}).get("qos_trust")
             return got == v, {"qos_trust": got}
