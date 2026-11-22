@@ -406,9 +406,30 @@ class ArubaCxWriter:
         return json.dumps(cfg, sort_keys=True, indent=1).encode()
 
     def checkpoint(self) -> str:
-        name = f"inm-cp-{int(time.time())}"
-        self._req("PUT", f"/fullconfigs/{name}", params={"from": f"{self.prefix}/fullconfigs/running-config"})
-        return name
+        name = f"inm-cp-{time.time_ns()}"
+        try:
+            self._req("PUT", f"/fullconfigs/{name}", params={"from": f"{self.prefix}/fullconfigs/running-config"})
+            return name
+        except WriterError as exc:
+            if exc.category != "DEVICE_REJECTED" or "duplicate checkpoint" not in str(exc).lower():
+                raise
+            original_error = exc
+
+        # AOS-CX can reject a new name when an existing checkpoint has identical
+        # contents. Reuse only our own checkpoint after comparing the full JSON.
+        baseline = json.loads(self.backup())
+        checkpoints = self._req("GET", "/fullconfigs").json()
+        if isinstance(checkpoints, list):
+            for path in reversed(checkpoints):
+                if not isinstance(path, str):
+                    continue
+                candidate = path.rsplit("/", 1)[-1]
+                if not re.fullmatch(r"inm-cp-\d+", candidate):
+                    continue
+                saved = self._req("GET", f"/fullconfigs/{candidate}").json()
+                if saved == baseline:
+                    return candidate
+        raise original_error
 
     def rollback(self, checkpoint: str) -> None:
         if not re.match(r"^inm-cp-\d+$", checkpoint):
