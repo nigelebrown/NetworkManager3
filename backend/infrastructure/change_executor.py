@@ -219,12 +219,13 @@ def _lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> bool:
     try:
         ins = (sqlite_insert if dialect == "sqlite" else pg_insert)(JobLease).values(
             job=key, holder=holder, expires_at=until).on_conflict_do_nothing(index_elements=["job"])
-        created = db.execute(ins).rowcount == 1
+        created = db.execute(ins.returning(JobLease.holder)).scalar_one_or_none() == holder
         if not created:
             claimed = db.execute(update(JobLease).where(
                 JobLease.job == key, JobLease.expires_at <= now,
-            ).values(holder=holder, expires_at=until).execution_options(synchronize_session=False))
-            if claimed.rowcount != 1:
+            ).values(holder=holder, expires_at=until).returning(JobLease.holder)
+                .execution_options(synchronize_session=False)).scalar_one_or_none()
+            if claimed != holder:
                 db.rollback()
                 return False
         db.commit()  # ownership must be visible to other workers before ANY network call
@@ -240,8 +241,9 @@ def _renew_lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> No
     result = db.execute(update(JobLease).where(
         JobLease.job == f"device-write:{device_id}", JobLease.holder == holder,
         JobLease.expires_at > now,
-    ).values(expires_at=now + timedelta(seconds=ttl)).execution_options(synchronize_session=False))
-    if result.rowcount != 1:
+    ).values(expires_at=now + timedelta(seconds=ttl)).returning(JobLease.holder)
+        .execution_options(synchronize_session=False)).scalar_one_or_none()
+    if result != holder:
         db.rollback()
         raise WriterError("LEASE_LOST", "Configuration ownership expired or was taken over; stop device operations.")
     db.commit()
