@@ -235,7 +235,7 @@ class CxEmulator:
         for coll, keyf in (("ntp_associations", "address"), ("syslog_remotes", "remote_host")):
             if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "GET":
                 return httpx.Response(200, json=copy.deepcopy(self.state[coll]))
-            if p == f"/system/{coll}" and m == "POST":
+            if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "POST":
                 self.writes += 1
                 if not isinstance(body.get(keyf), str) or "vrf" not in body:
                     return httpx.Response(400, text=f"{keyf} and vrf are required")
