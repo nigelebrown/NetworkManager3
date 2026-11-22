@@ -193,7 +193,7 @@ def test_invalid_csrf_never_replays_state_changing_patch():
 
 
 @pytest.mark.parametrize("matches", [True, False])
-def test_duplicate_checkpoint_reuses_only_matching_inm_configuration(monkeypatch, matches):
+def test_duplicate_checkpoint_reuses_match_or_restores_exact_baseline(monkeypatch, matches):
     import json
     writer = ArubaCxWriter(Credentials("10.60.0.2", "admin", SECRET))
     baseline = {"hostname": "lab-switch", "vlans": [1]}
@@ -214,6 +214,13 @@ def test_duplicate_checkpoint_reuses_only_matching_inm_configuration(monkeypatch
     if matches:
         assert writer.checkpoint() == "inm-cp-123"
     else:
-        with pytest.raises(WriterError, match="duplicate checkpoint"):
-            writer.checkpoint()
+        restored = []
+        monkeypatch.setattr(writer, "restore", lambda data: restored.append(json.loads(data)))
+        checkpoint = writer.checkpoint()
+        assert checkpoint.startswith("inm-cp-")
+        writer.rollback(checkpoint)
+        assert restored == [baseline]
+        monkeypatch.setattr(writer, "backup", lambda: b'{"hostname": "different"}')
+        with pytest.raises(WriterError, match="did not match"):
+            writer.rollback(checkpoint)
     assert all(path != "/fullconfigs/customer" for _, path in calls)
