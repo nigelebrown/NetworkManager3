@@ -190,3 +190,30 @@ def test_invalid_csrf_never_replays_state_changing_patch():
     assert emu.logins == 1
     assert "csrf-missing:/system/interfaces/1/1/2" in emu.violations
     writer.close()
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_duplicate_checkpoint_reuses_only_matching_inm_configuration(monkeypatch, matches):
+    import json
+    writer = ArubaCxWriter(Credentials("10.60.0.2", "admin", SECRET))
+    baseline = {"hostname": "lab-switch", "vlans": [1]}
+    monkeypatch.setattr(writer, "backup", lambda: json.dumps(baseline).encode())
+    calls = []
+
+    def request(method, path, **kwargs):
+        calls.append((method, path))
+        if method == "PUT":
+            raise WriterError("DEVICE_REJECTED", "HTTP 400 duplicate checkpoint")
+        if path == "/fullconfigs":
+            return httpx.Response(200, json=["/rest/v10.14/fullconfigs/customer",
+                                            "/rest/v10.14/fullconfigs/inm-cp-123"])
+        assert path == "/fullconfigs/inm-cp-123"
+        return httpx.Response(200, json=baseline if matches else {"hostname": "different"})
+
+    monkeypatch.setattr(writer, "_req", request)
+    if matches:
+        assert writer.checkpoint() == "inm-cp-123"
+    else:
+        with pytest.raises(WriterError, match="duplicate checkpoint"):
+            writer.checkpoint()
+    assert all(path != "/fullconfigs/customer" for _, path in calls)
