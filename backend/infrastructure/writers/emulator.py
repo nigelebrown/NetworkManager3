@@ -20,7 +20,7 @@ from .aruba_instant import ArubaInstantWriter
 
 
 IFACE_WRITABLE = {"admin", "vlan_mode", "vlan_tag", "vlan_trunks", "description", "other_config", "stp_config",
-                  "rate_limits", "rate_limits_units", "qos_trust"}
+                  "rate_limits", "qos_config"}
 
 
 class CxEmulator:
@@ -233,7 +233,7 @@ class CxEmulator:
                     self.state = copy.deepcopy(body)
                     return httpx.Response(200)
         for coll, keyf in (("ntp_associations", "address"), ("syslog_remotes", "remote_host")):
-            if p == f"/system/{coll}" and m == "GET":
+            if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "GET":
                 return httpx.Response(200, json=copy.deepcopy(self.state[coll]))
             if p == f"/system/{coll}" and m == "POST":
                 self.writes += 1
@@ -294,13 +294,13 @@ class CxEmulator:
                 return httpx.Response(404)
             if m == "GET":
                 return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items() if k != "poe"})
-            if m == "PATCH":
+            if m in ("PATCH", "PUT"):
                 self.writes += 1
                 if not poe:
                     unknown = set(body) - IFACE_WRITABLE
                     if unknown:          # strict schema: an unknown attribute is a 400, as on AOS-CX
                         return httpx.Response(400, text=f"Unknown or read-only attribute(s): {sorted(unknown)}")
-                    if body.get("qos_trust") not in (None, "none", "cos", "dscp"):
+                    if (body.get("qos_config") or {}).get("qos_trust") not in (None, "none", "cos", "dscp"):
                         return httpx.Response(400, text="qos_trust must be none, cos or dscp")
                 if "vlan_tag" in body and body["vlan_tag"].rsplit("/", 1)[-1] not in self.state["vlans"]:
                     return httpx.Response(400, text="VLAN does not exist")
