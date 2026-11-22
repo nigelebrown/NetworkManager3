@@ -293,7 +293,8 @@ class CxEmulator:
             if it is None:
                 return httpx.Response(404)
             if m == "GET":
-                return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items() if k != "poe"})
+                return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items()
+                    if k != "poe" and (req.url.params.get("selector") != "writable" or k in IFACE_WRITABLE)})
             if m in ("PATCH", "PUT"):
                 self.writes += 1
                 if not poe:
