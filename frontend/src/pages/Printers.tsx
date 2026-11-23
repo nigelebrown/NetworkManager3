@@ -69,7 +69,7 @@ export function Printers() {
       <div>
         <PageHeader eyebrow="Sites & inventory" title="Printers" subtitle="Printer fleet inventory, observed consumables, page counters and read-only diagnostics. Predictions remain rule-based." />
         <p className="mt-1 text-sm text-slate-400">
-          HP, Epson, Kyocera, Sharp and other printer models. Equipment stays read-only.
+          HP, Epson, Kyocera, Sharp and other printer models. Monitoring uses read-only device access; verified device settings are available in each printer's Configuration tab.
           Manually entered measurements are never presented as automatically collected values.
         </p>
       </div>
@@ -314,7 +314,7 @@ export function PrinterDetails() {
         <div>Firmware: {d.firmware ?? "Not reported"}</div>
         <div>Location: {[d.area, d.division, d.station, d.section_unit, d.building].filter(Boolean).join(" / ") || "Not assigned"}</div>
       </div>
-      <p className="mt-3 text-xs text-amber-300">This module never configures printers. Manual readings are operator-reported. SNMPv3 discovery is a single read-only snapshot, not continuous polling.</p>
+      <p className="mt-3 text-xs text-amber-300">Manual readings are operator-reported. Discovery and monitoring use read-only access. Verified device settings are available from the printer Configuration tab.</p>
     </Card>}
     <div className="flex flex-wrap gap-2">
       {([["meter", "Record meter"], ["supply", "Record toner / ink"], ["cycle", "Cartridge / refill cycle"],

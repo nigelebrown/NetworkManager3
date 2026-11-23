@@ -89,7 +89,16 @@ const q = (o: Record<string, string | number | boolean | null | undefined>) => {
 };
 const id = (x: string) => `${P}/${encodeURIComponent(x)}`;
 
+export type PrinterChange = { id: string; state: string; operation: string; before: string; after: string;
+  created_at: string; created_by: string; finished_at?: string; result?: { readback_verified?: boolean; restored?: boolean } | null };
+export type PrinterConfiguration = { hardware_verified: boolean; writes_enabled: boolean; current_location: string | null;
+  read_error: string | null; history: PrinterChange[]; available: string[] };
+
 export const prn = {
+  configuration: (p: string) => request<PrinterConfiguration>(`${id(p)}/configuration`),
+  previewLocation: (p: string, location: string) => request<PrinterChange>(`${id(p)}/configuration/preview`, j({ location })),
+  applyConfiguration: (p: string, change: string) => request<PrinterChange>(`${id(p)}/configuration/${encodeURIComponent(change)}/apply`, j({})),
+  rollbackConfiguration: (p: string, change: string) => request<PrinterChange>(`${id(p)}/configuration/${encodeURIComponent(change)}/rollback`, j({})),
   list: (f: Record<string, string | number | boolean | undefined> = {}) => request<PrinterRow[]>(`${P}${q(f)}`),
   overview: () => request<Overview>(`${P}/overview`),
   live: () => request<{ printers: LiveRow[]; operations: Ops; observed_at: string }>(`${P}/live`),
