@@ -244,3 +244,85 @@ def test_snapshot_retrieval_failure_is_recorded_and_last_good_snapshot_stays_ver
     v = c.post(f"/api/v1/vault/artifacts/{good[0]['id']}/verify", headers=adm).json()
     assert v["integrity"] == "PASS", v
     X._EMULATORS[sw["id"]].fail_read = None
+
+
+@pytest.mark.parametrize("op", [
+    {"op": "ap.client_match", "value": "disabled"},
+    {"op": "ap.band_steering", "value": "balance-bands"},
+    {"op": "ap.airtime_fairness", "value": "fair-access"},
+    {"op": "ap.radio.tx_power", "min_dbm": 10, "max_dbm": 17},
+])
+def test_instant_arm_changes_preserve_unrelated_channel_width(op):
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    writer = emu.writer()
+    calls = writer.render(op)
+    assert all("no 80mhz-support" not in call.get("lines", []) for call in calls)
+
+
+def test_instant_rollback_restores_configured_override_not_dynamic_channel():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    emu.radio_overrides["5"] = {"channel": "0", "power": "0"}
+    writer = emu.writer()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.radio.channel", "band": "5", "value": 149, "power": 14})
+    writer.rollback(cp)
+    assert emu.radio_overrides["5"] == {"channel": "0", "power": "0"}
+
+
+def test_instant_checkpoint_requires_ssh_pin_before_any_write():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    from backend.infrastructure.writers import WriterError
+    emu = InstantEmulator()
+    writer = emu.writer()
+    writer.creds.ssh_fingerprint = None
+    with pytest.raises(WriterError, match="Pin the device SSH host key"):
+        writer.checkpoint()
+
+
+def test_instant_rollback_deletes_ssid_before_its_radius_server():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    writer = emu.writer()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.ssid.enterprise", "ssid": "INM-CERT-1X", "vlan": 100,
+                  "radius_name": "inm-cert", "radius_ip": "192.0.2.80", "_secret": "cert-12345678"})
+    sent = []
+    original = writer._ssh
+    def capture(*args):
+        sent.extend(args[-1])
+        return original(*args)
+    writer._ssh = capture
+    writer.rollback(cp)
+    assert sent.index("no wlan ssid-profile INM-CERT-1X") < sent.index("no wlan auth-server inm-cert")
+    assert "INM-CERT-1X" not in emu.text and "inm-cert" not in emu.text
+
+
+def test_instant_rollback_restores_implicit_80mhz_default():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    emu.text = emu.text.replace(" no 80mhz-support\\n", "")
+    writer = emu.writer()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.radio.width", "value": 20})
+    sent = []
+    original = writer._ssh
+    def capture(*args):
+        sent.extend(args[-1])
+        return original(*args)
+    writer._ssh = capture
+    writer.rollback(cp)
+    assert "80mhz-support" in sent
+    assert not any(line.startswith(("a-channel ", "g-channel ")) for line in sent)
+
+
+def test_instant_enterprise_and_cleanup_use_validated_cli_grammar():
+    from backend.aruba.ssh import _ALLOWED_CONFIG_LINES
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    writer = InstantEmulator().writer()
+    op = {"op": "ap.ssid.enterprise", "ssid": "INM-CERT-1X", "vlan": 100,
+          "radius_name": "inm-cert", "radius_ip": "192.0.2.80", "_secret": "cert-12345678"}
+    lines = writer.render(op)[0]["lines"] + ["no wlan ssid-profile INM-CERT-1X", "no wlan auth-server inm-cert"]
+    assert all(any(p.fullmatch(line.strip()) for p in _ALLOWED_CONFIG_LINES) for line in lines)
+    assert not any(p.fullmatch("key secret\\nreload") for p in _ALLOWED_CONFIG_LINES)
