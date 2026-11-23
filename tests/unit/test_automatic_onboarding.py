@@ -212,7 +212,7 @@ def test_fresh_authenticated_discovery_enrolls_selected_profile_and_preserves_si
     ids, profiles = env
     from backend.database.models_inm import InmSite
     with session_scope() as db:
-        site = InmSite(name="Existing physical site")
+        site = InmSite(name="Existing physical site", source_type="REAL")
         db.add(site); db.flush()
         d = db.get(InmDevice, ids[0])
         d.site_id = site.id
