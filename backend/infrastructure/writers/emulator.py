@@ -362,6 +362,7 @@ class InstantEmulator:
             "show ap debug system-status": "EMULATED SYSTEM: CPU 10%",
         }
         self.radios = [{"band": "5", "channel": "36", "tx_power_dbm": 15}, {"band": "2.4", "channel": "1", "tx_power_dbm": 12}]
+        self.radio_overrides = {"5": {"channel": "36", "power": "15"}, "2.4": {"channel": "1", "power": "12"}}
         self.fail_on: str | None = None
         self.lie = False
         self.fingerprint = "SHA256:emulated"
@@ -375,6 +376,12 @@ class InstantEmulator:
                 return None
 
             def show(self, cmd, iap_ip=None):
+                if cmd == "show ap-env":
+                    values = ["name:emulated"]
+                    for band, prefix in (("5", "a"), ("2.4", "g")):
+                        setting = emu.radio_overrides[band]
+                        values += [f"{prefix}_chan:{setting['channel']}", f"{prefix}_tx_power:{setting['power']}"]
+                    return {"Command output": "\\n".join(values)}
                 if cmd in emu.diagnostic_text:
                     from ...aruba.client import validate_command
                     validate_command(cmd)
@@ -448,7 +455,8 @@ class InstantEmulator:
             if ln.startswith(("a-channel", "g-channel")):
                 _, ch, pw_ = ln.split()
                 r = next(x for x in self.radios if x["band"] == ("5" if ln[0] == "a" else "2.4"))
-                r["channel"], r["tx_power_dbm"] = ch, int(pw_)
+                r["channel"], r["tx_power_dbm"] = ch, float(pw_)
+                self.radio_overrides[r["band"]] = {"channel": ch, "power": pw_}
                 continue
             if ln.startswith("no wlan "):
                 self._drop_block(ln[3:])
