@@ -342,3 +342,18 @@ def test_certification_stops_when_rollback_does_not_restore_baseline(env):
         "read.backup_full_config", "switch.vlan.define", "config.restore"]
     assert result["results"][1]["evidence"]["rollback_restored"] is False
     assert result["results"][-1]["passed"] is True
+
+
+def test_instant_backup_uses_stable_full_fidelity_read_without_redaction():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    emu.text += "ams-key vault-test-secret\n"
+    writer = emu.writer()
+    commands = []
+    original = writer.client.show
+    def capture(command, **kwargs):
+        commands.append(command)
+        return original(command, **kwargs)
+    writer.client.show = capture
+    assert b"ams-key vault-test-secret" in writer.backup()
+    assert commands == ["show running-config no-encrypt"]
