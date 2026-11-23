@@ -231,7 +231,7 @@ _ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
     r"^no (band-steering-mode|air-time-fairness-mode|wide-bands|min-tx-power|max-tx-power)$",
     r"^(no )?wlan (ssid-profile|auth-server) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
     r"^essid [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$", r"^type employee$", r"^enable$",
-    r"^vlan [0-9]{1,4}$", r"^opmode (wpa2-aes|wpa3-aes-ccm-128)$",
+    r"^vlan [0-9]{1,4}$", r"^no vlan$", r"^opmode (wpa2-aes|wpa3-aes-ccm-128)$",
     r"^auth-server [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
     r"^ip (?:[0-9]{1,3}\.){3}[0-9]{1,3}$",
     r"^(port|acctport) [0-9]{1,5}$", r"^key [A-Za-z0-9!@#%^*_+=.,:\-]{1,128}$",
