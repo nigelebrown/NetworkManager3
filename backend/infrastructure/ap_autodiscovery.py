@@ -140,23 +140,27 @@ def approve_fingerprints(db: Session, items: list[dict], actor: str) -> list[dic
 
 
 # ------------------------------------------------------------------ discovery
-def _candidate_profiles(db: Session, device: InmDevice):
+def _candidate_profiles(db: Session, device: InmDevice, credential_ids: list[str] | None = None):
     from ..database.models_onboarding import OnboardingCredential, OnboardingDeviceCredential
     binding = db.get(OnboardingDeviceCredential, device.id)
-    if binding:
-        p = db.get(OnboardingCredential, binding.credential_id)
-        if p is not None and p.enabled:
-            return [p]
-    return list(db.scalars(select(OnboardingCredential).where(
-        OnboardingCredential.device_family == "access_point", OnboardingCredential.enabled.is_(True))
+    profiles = list(db.scalars(select(OnboardingCredential).where(
+        OnboardingCredential.device_family == device.family, OnboardingCredential.enabled.is_(True))
         .order_by(OnboardingCredential.created_at)))
+    if credential_ids is not None:
+        profiles = [p for p in profiles if p.id in credential_ids]
+    if binding:
+        profiles.sort(key=lambda p: p.id != binding.credential_id)
+    return profiles
 
 
 def _bind(db: Session, device: InmDevice, profile, actor: str) -> None:
     from ..database.models_onboarding import OnboardingDeviceCredential
-    if db.get(OnboardingDeviceCredential, device.id) is None:
+    binding = db.get(OnboardingDeviceCredential, device.id)
+    if binding is None:
         db.add(OnboardingDeviceCredential(device_id=device.id, credential_id=profile.id, bound_by=actor))
-        db.flush()
+    elif binding.credential_id != profile.id:
+        binding.credential_id, binding.bound_by, binding.bound_at = profile.id, actor, _now()
+    db.flush()
 
 
 def _rest_members(ip: str, username: str, password: str) -> tuple[list[dict], dict]:
@@ -200,14 +204,16 @@ def _ensure_site(db: Session, vc_ip: str, profile, name_hint: str | None) -> Sit
                     description="Registered automatically by AP auto-onboarding")
         db.add(site)
         db.flush()
-    elif not site.api_username:
+    else:
         site.api_username, site.api_password_enc = profile.username, profile.password_enc
     return site
 
 
 def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, auto_enable_rest: bool = False,
              progress: Callable[[dict], None] | None = None,
-             rest_members=_rest_members, ssh_members=_ssh_members, enable_rest=None, poll=None) -> dict:
+             rest_members=_rest_members, ssh_members=_ssh_members, enable_rest=None, poll=None,
+             auto_trust_new_hosts: bool = False, credential_ids: list[str] | None = None,
+             key_scanner=None) -> dict:
     from ..api.quick_devices import _permit_probe
     from ..security.crypto import decrypt_secret
     from .persistence.inventory import sync_inventory
@@ -248,11 +254,12 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
             results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip, "result": "TARGET_NOT_ALLOWED",
                             "detail": str(getattr(exc, "detail", exc))[:160]})
             continue
-        profiles = _candidate_profiles(db, d)
+        profiles = _candidate_profiles(db, d, credential_ids)
         if not profiles:
             results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip, "result": "NO_CREDENTIAL"})
             continue
         members, transport, used, rest_state, last = None, None, None, None, "UNREACHABLE"
+        observed_key = None
         for p in profiles:
             pw = decrypt_secret(p.password_enc)
             try:
@@ -262,12 +269,40 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
             except Exception as exc:
                 last = _classify_rest_error(exc)
                 rest_state = last
-                if last == "AUTH_REJECTED":
-                    continue
             fp = pinned_fingerprint(db, ip)
+            first_use = False
+            if auto_trust_new_hosts:
+                try:
+                    from ..aruba import ssh
+                    if observed_key is None:
+                        observed_key = (key_scanner or ssh.scan_host_key)(ip)
+                    current_fp = observed_key["fingerprint"]
+                    if fp and fp != current_fp:
+                        _put(db, f"ssh-hostkey-pending:{ip}",
+                             {**observed_key, "changed_from": fp, "scanned_at": _now().isoformat()}, actor)
+                        last = "SSH_HOST_KEY_CHANGED"
+                        break
+                    first_use = not fp
+                    fp = current_fp
+                except Exception:
+                    last = "SSH_UNREACHABLE"
+                    continue
             if fp:
                 try:
                     members, transport = ssh_members(ip, p.username, pw, fp)
+                    if not members:
+                        members, last = None, "IDENTITY_UNVERIFIED"
+                        continue
+                    if first_use:
+                        _put(db, f"ssh-hostkey:{ip}", {
+                            **observed_key, "approved_by": actor, "approved_at": _now().isoformat(),
+                            "trust": "FIRST_USE_AUTHENTICATED"}, actor)
+                        pending_row = db.get(AppSetting, f"ssh-hostkey-pending:{ip}")
+                        if pending_row:
+                            db.delete(pending_row)
+                        from ..security.deps import audit
+                        audit(db, "onboarding_ssh_first_use_authenticated", username=actor, target=ip,
+                              detail="Saved credential login and cluster read succeeded; first SSH key pinned")
                     used = p
                     break
                 except Exception as exc:
@@ -345,53 +380,17 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
 
 
 # ------------------------------------------------------------------ background job wrapper
-def start_job(actor: str, *, device_ids: list[str] | None, auto_enable_rest: bool) -> dict:
+def start_job(actor: str, *, device_ids: list[str] | None, auto_enable_rest: bool,
+              auto_trust_new_hosts: bool = True, credential_ids: list[str] | None = None) -> dict:
     from ..database.session import session_scope
-    if not _LOCK.acquire(blocking=False):
-        raise RuntimeError("An AP auto-onboarding run is already in progress.")
-
-    def run():
-        try:
-            with session_scope() as db:
-                _put(db, JOB_KEY, {"state": "RUNNING", "started_at": _now().isoformat(), "by": actor,
-                                   "done": 0, "total": 0}, actor)
-
-            def progress(p):
-                with session_scope() as pdb:
-                    cur = _get(pdb, JOB_KEY) or {}
-                    _put(pdb, JOB_KEY, {**cur, **p}, actor)
-
-            with session_scope() as db:
-                out = discover(db, actor, device_ids=device_ids, auto_enable_rest=auto_enable_rest,
-                               progress=progress)
-                from ..security.deps import audit
-                audit(db, "ap_auto_onboarding", username=actor, target="access_points",
-                      detail=f"counts={out['counts']} clusters={len(out['clusters'])} auto_enable_rest={auto_enable_rest}")
-            with session_scope() as db:
-                _put(db, JOB_KEY, {"state": "SUCCEEDED", **out}, actor)
-        except Exception as exc:
-            log.exception("AP auto-onboarding failed")
-            with session_scope() as db:
-                cur = _get(db, JOB_KEY) or {}
-                _put(db, JOB_KEY, {**cur, "state": "FAILED", "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-                                   "finished_at": _now().isoformat()}, actor)
-        finally:
-            _LOCK.release()
-
-    threading.Thread(target=run, name="ap-autodiscovery", daemon=True).start()
-    return {"state": "STARTED"}
+    from . import automatic_onboarding as AO
+    with session_scope() as db:
+        return AO.queue(db, actor, device_ids=device_ids, auto_enable_rest=auto_enable_rest,
+                        auto_trust_new_hosts=auto_trust_new_hosts, credential_ids=credential_ids)
 
 
 def job_status(db: Session) -> dict:
-    status = _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
-    # The worker thread belongs to this API process. Its lock cannot survive a restart.
-    if status["state"] == "RUNNING" and not _LOCK.locked():
-        return {
-            **status,
-            "state": "FAILED",
-            "error": "The API stopped before this run completed. Start a new run from AP Fleet.",
-        }
-    return status
+    return _get(db, JOB_KEY) or {"state": "NEVER_RUN"}
 
 
 def wanted_ips(db: Session, device_ids: list[str] | None = None) -> list[str]:
