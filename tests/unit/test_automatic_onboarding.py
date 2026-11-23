@@ -206,3 +206,21 @@ def test_legacy_interrupted_run_is_requeued_without_losing_saved_clusters(env):
         status=AD.job_status(db)
         assert status["done"]==1 and "device_ids" in status
         assert status["device_ids"]==ids[:2]
+
+
+def test_fresh_authenticated_discovery_enrolls_selected_profile_and_preserves_site(env):
+    ids, profiles = env
+    from backend.database.models_inm import InmSite
+    with session_scope() as db:
+        site = InmSite(name="Existing physical site")
+        db.add(site); db.flush()
+        d = db.get(InmDevice, ids[0])
+        d.site_id = site.id
+        AO.save_policy(db, {"enabled": True, "credential_ids": [profiles[1]]}, "tester")
+        result = {"status": "FOUND", "enrollable": True, "management_ip": "10.9.8.10",
+                  "serial_number": "s0", "hostname": "Device-0", "model": "AP-505"}
+        assert AO.enroll_authenticated_result(db, profiles[0], result, "Other site", "tester") is None
+        assert AO.enroll_authenticated_result(db, profiles[1], {**result, "status": "AUTH_FAILED"}, "Other site", "tester") is None
+        saved = AO.enroll_authenticated_result(db, profiles[1], result, "Other site", "tester")
+        assert saved == ids[0] and db.get(InmDevice, saved).site_id == site.id
+        assert db.get(OnboardingDeviceCredential, saved).credential_id == profiles[1]
