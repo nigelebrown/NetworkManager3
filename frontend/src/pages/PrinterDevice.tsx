@@ -248,10 +248,10 @@ function DeviceConfiguration({ id }: { id: string }) {
   const ready = !!cfg.data?.hardware_verified && !!cfg.data?.writes_enabled && cfg.data?.current_location != null;
   const finish = (r: PrinterChange) => {
     setResult(r); setPreview(null); cfg.reload();
-    return r.state === "APPLIED_VERIFIED" ? "Printer location saved and verified."
-      : r.state === "ROLLED_BACK" ? "Original printer location restored and verified."
-      : r.state === "FAILED_RESTORED" ? "The change failed. The original location is restored."
-      : "The result could not be verified. Recovery is required; inspect the saved change below.";
+    if (r.state === "APPLIED_VERIFIED") return "Printer location saved and verified.";
+    if (r.state === "ROLLED_BACK") return "Original printer location restored and verified.";
+    throw new Error(r.state === "FAILED_RESTORED" ? "The change failed. The original location is restored."
+      : "The result could not be verified. Recovery is required; inspect the saved change below.");
   };
   return <Box title="Device configuration">
     <Notice error={act.error} message={act.message} />
@@ -281,11 +281,11 @@ function DeviceConfiguration({ id }: { id: string }) {
             finish(await prn.applyConfiguration(id, preview.id)))}>Apply location change</button>
         </div>}
       </div>}
-      {result && <div className="mt-3 text-sm" role="status">Result: <b>{result.state.replaceAll("_", " ")}</b></div>}
+      {result && <div className="mt-3 text-sm" role="status">Result: <b>{result.state.replace(/_/g, " ")}</b></div>}
       {!!cfg.data.history.length && <div className="mt-4">
         <h3 className="mb-2 font-semibold">Configuration history</h3>
         <Rows head={["When", "Location change", "Result", "Action"]} empty="No device changes yet." rows={cfg.data.history.map(r => [
-          new Date(r.created_at).toLocaleString(), <span>{r.before || "(empty)"} → {r.after || "(empty)"}</span>, r.state.replaceAll("_", " "),
+          new Date(r.created_at).toLocaleString(), <span>{r.before || "(empty)"} → {r.after || "(empty)"}</span>, r.state.replace(/_/g, " "),
           ["APPLIED_VERIFIED", "RECOVERY_REQUIRED"].includes(r.state) && <button className={btn2} disabled={act.busy || !cfg.data?.writes_enabled}
             onClick={() => act.run(async () => finish(await prn.rollbackConfiguration(id, r.id)))}>Restore original location</button>,
         ])} />
