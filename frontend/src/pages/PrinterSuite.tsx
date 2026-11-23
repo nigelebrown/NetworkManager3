@@ -2,7 +2,7 @@
  * Printer Intelligence workspaces (SRS navigation). Every figure comes from the API with its source,
  * coverage and confidence. Missing data is shown as missing — never as zero. Printers stay read-only.
  */
-import { ReactNode, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ErrorNote } from "../components/ui";
@@ -136,13 +136,15 @@ export function PrinterInventory() {
 }
 
 function DiscoveryJobs({ onDone }: { onDone: () => void }) {
+  const recent = useLoad(prn.discoveryJobs, [], 0);
+  const settings = useLoad(prn.settings, [], 0);
   const creds = useLoad(prn.credentialProfiles, [], 0);
   const [target, setTarget] = useState("");
   const [cred, setCred] = useState("");
   const [jobId, setJobId] = useState(() => sessionStorage.getItem("printer-discovery-job") ?? "");
   const [queued, setQueued] = useState<Job | null>(null);
   const current = useLoad(() => jobId ? prn.job(jobId) : Promise.resolve(null), [jobId], 2000);
-  const job = current.data?.id === jobId ? current.data : queued;
+  const job = current.data?.id === jobId ? current.data : queued?.id === jobId ? queued : null;
   const setJob = (j: Job) => { setQueued(j); setJobId(j.id); sessionStorage.setItem("printer-discovery-job", j.id); };
   const [pick, setPick] = useState<Record<string, boolean>>({});
   const act = useAction();
@@ -150,19 +152,33 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
     const t = target.trim();
     const body: Record<string, unknown> = { credential_profile_id: cred };
     if (t.includes("/")) body.management_range = t; else body.management_ips = t.split(/[\s,;]+/).filter(Boolean);
-    const j = await prn.discover(body); setJob(j);
+    const j = await prn.discover(body); setJob(j); recent.reload();
     return `Discovery queued. Progress refreshes automatically and resumes when you reopen this page.${j.warnings?.length ? " " + j.warnings.join(" ") : ""}`;
   });
+  useEffect(() => {
+    if (!jobId && recent.data?.length) {
+      setJobId(recent.data[0].id); sessionStorage.setItem("printer-discovery-job", recent.data[0].id);
+    }
+  }, [jobId, recent.data]);
+  const blocked = (version: string) => version === "1" ? settings.data?.snmp_policy?.allow_v1 === false
+    : version === "2c" ? settings.data?.snmp_policy?.allow_v2c === false : false;
   const found: any[] = job?.result?.printers ?? [];  // eslint-disable-line @typescript-eslint/no-explicit-any
   return <Section title="Discovery job" footer="Read-only GET/GETNEXT. SNMPv3 authPriv preferred; v2c only where policy allows; v1 off by default.">
     <div className="flex flex-wrap items-end gap-2">
       <label className="text-sm">Credential profile<select className={inputCls} value={cred} onChange={e => setCred(e.target.value)}>
-        <option value="">Choose…</option>{(creds.data ?? []).map(c => <option key={c.id} value={c.id}>{c.name} (SNMPv{c.version})</option>)}</select></label>
+        <option value="">Choose…</option>{(creds.data ?? []).map(c => <option key={c.id} value={c.id} disabled={blocked(c.version)}>{c.name} (SNMPv{c.version}){blocked(c.version) ? " — disabled by printer policy" : ""}</option>)}</select></label>
       <label className="grow text-sm">CIDR (/22–/32) or IP list<input className={inputCls} value={target} onChange={e => setTarget(e.target.value)} placeholder="10.103.44.0/24 or 10.103.44.21, 10.103.44.22" /></label>
       <button className={btn} disabled={act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") || !cred || !target.trim()} onClick={start}>{act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") ? `Scanning… ${job?.progress ?? 0}/${job?.total ?? "?"}` : "Start discovery"}</button>
       {job && ["QUEUED", "RUNNING"].includes(job.status) && <button className={btn2} onClick={() => prn.cancelJob(job.id).then(setJob)}>Cancel</button>}
     </div>
-    <ErrorNote error={creds.error || current.error} />
+    <ErrorNote error={creds.error || current.error || recent.error || settings.error} />
+    <p className="mt-2 text-xs">Version access is controlled under <Link className="inm-link" to="/printers/profiles">SNMP &amp; MIB profiles</Link>.</p>
+    {!!recent.data?.length && <label className="mt-3 block text-sm">Previous discoveries
+      <select className={inputCls} value={jobId} onChange={e => { setJobId(e.target.value); sessionStorage.setItem("printer-discovery-job", e.target.value); }}>
+        <option value="">Choose a saved scan…</option>
+        {recent.data.map(j => <option key={j.id} value={j.id}>{j.target} · {j.status} · {j.found} found · {new Date(j.created_at).toLocaleString()}</option>)}
+      </select>
+    </label>}
     <Notice error={act.error} message={act.message} />
     {job && <p role="status" className="mt-2 text-sm">{job.status}: {job.progress}/{job.total} checked · {found.length} printers found</p>}
     {job?.status === "SUCCEEDED" && !found.length && <p className="mt-2 text-sm">No printers identified. Expand the per-address results below to see why.</p>}
