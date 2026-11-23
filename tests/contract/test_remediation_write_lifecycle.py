@@ -357,3 +357,35 @@ def test_instant_backup_uses_stable_full_fidelity_read_without_redaction():
     writer.client.show = capture
     assert b"ams-key vault-test-secret" in writer.backup()
     assert commands == ["show running-config no-encrypt"]
+
+
+@pytest.mark.parametrize("full_fidelity", [False, True])
+def test_instant_transient_configuration_read_retried_without_writes(monkeypatch, full_fidelity):
+    from backend.aruba.errors import ArubaCommandError
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    emu = InstantEmulator()
+    writer = emu.writer()
+    original = writer.client.show
+    calls = []
+    def transient(command, **kwargs):
+        calls.append(command)
+        if len(calls) < 3:
+            raise ArubaCommandError("non-JSON response (HTTP 503)")
+        return original(command, **kwargs)
+    writer.client.show = transient
+    before = emu.text
+    assert writer._read_configuration(full_fidelity=full_fidelity)
+    assert len(calls) == 3 and emu.text == before
+
+
+def test_instant_channel_rollback_checks_override_readback():
+    from backend.infrastructure.writers import WriterError
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    emu = InstantEmulator()
+    writer = emu.writer()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.radio.channel", "band": "5", "value": 149, "power": 14})
+    emu.lie = True
+    with pytest.raises(WriterError, match="Radio override rollback"):
+        writer.rollback(cp)
