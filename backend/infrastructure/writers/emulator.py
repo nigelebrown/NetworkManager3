@@ -381,7 +381,7 @@ class InstantEmulator:
                     for band, prefix in (("5", "a"), ("2.4", "g")):
                         setting = emu.radio_overrides[band]
                         values += [f"{prefix}_chan:{setting['channel']}", f"{prefix}_tx_power:{setting['power']}"]
-                    return {"Command output": "\\n".join(values)}
+                    return {"Command output": "\n".join(values)}
                 if cmd in emu.diagnostic_text:
                     from ...aruba.client import validate_command
                     validate_command(cmd)
