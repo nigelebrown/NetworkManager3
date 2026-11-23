@@ -489,6 +489,16 @@ def _check_profile_policy(db: Session, profile_id: str) -> str:
     return version
 
 
+@router.get("/discovery/jobs")
+def recent_discoveries(db: Session = Depends(get_db), user: User = admin):
+    jobs = db.scalars(select(PrinterJob).where(PrinterJob.kind == "DISCOVERY")
+                      .order_by(PrinterJob.created_at.desc()).limit(20))
+    return [{"id": j.id, "status": j.status, "target": j.params.get("target", ""),
+             "created_at": S.iso(j.created_at), "progress": j.progress, "total": j.total,
+             "found": len((j.result or {}).get("printers", []))}
+            for j in jobs]
+
+
 @router.post("/discovery", status_code=202)
 def start_discovery(body: DiscoveryJobInput, request: Request, background: BackgroundTasks, db: Session = Depends(get_db),
                     user: User = admin):
