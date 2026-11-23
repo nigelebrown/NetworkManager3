@@ -95,6 +95,7 @@ export type PrinterConfiguration = { hardware_verified: boolean; writes_enabled:
   read_error: string | null; history: PrinterChange[]; available: string[] };
 
 export const prn = {
+  discoveryJobs: () => request<{ id: string; status: string; target: string; created_at: string; progress: number; total: number; found: number }[]>(`${P}/discovery/jobs`),
   configuration: (p: string) => request<PrinterConfiguration>(`${id(p)}/configuration`),
   previewLocation: (p: string, location: string) => request<PrinterChange>(`${id(p)}/configuration/preview`, j({ location })),
   applyConfiguration: (p: string, change: string) => request<PrinterChange>(`${id(p)}/configuration/${encodeURIComponent(change)}/apply`, j({})),
