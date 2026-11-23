@@ -84,8 +84,8 @@ def test_new_switch_and_wireless_operations_end_to_end_with_secret_hygiene(env):
     assert r["outcome"] == "APPLIED_VERIFIED", r
     emu = X._EMULATORS[sw["id"]]
     port = emu.state["interfaces"]["1/1/5"]
-    assert port["description"] == "Printer room" and port["qos_trust"] == "dscp"
-    assert port["stp_config"]["bpdu_guard_enable"] is True and port["rate_limits"] == {"broadcast": 2000}
+    assert port["description"] == "Printer room" and port["qos_config"]["qos_trust"] == "dscp"
+    assert port["stp_config"]["bpdu_guard_enable"] is True and port["rate_limits"] == {"broadcast": 2000, "broadcast_units": "kbps"}
     assert emu.state["vrfs"]["mgmt"]["dns_name_servers"] == {"0": "10.10.0.53", "1": "10.10.0.54"}
     # policy: plans may not carry secrets; bad values refused before any device contact
     for bad in ({"op": "ap.ssid.create", "ssid": "Guest", "vlan": 30, "passphrase": "x" * 12},
@@ -326,3 +326,19 @@ def test_instant_enterprise_and_cleanup_use_validated_cli_grammar():
     lines = writer.render(op)[0]["lines"] + ["no wlan ssid-profile INM-CERT-1X", "no wlan auth-server inm-cert"]
     assert all(any(p.fullmatch(line.strip()) for p in _ALLOWED_CONFIG_LINES) for line in lines)
     assert not any(p.fullmatch("key secret\\nreload") for p in _ALLOWED_CONFIG_LINES)
+
+
+def test_certification_stops_when_rollback_does_not_restore_baseline(env):
+    from backend.database.models_inm import InmDevice
+    from backend.infrastructure.writers.emulator import CxEmulator
+    _, _, _, sw, _ = env
+    emu = CxEmulator()
+    writer = emu.writer()
+    writer.rollback = lambda checkpoint: None
+    with session_scope() as db:
+        result = X.run_certification(db, db.get(InmDevice, sw["id"]),
+                                     actor="test", test={"test_port": "1/1/20"}, writer=writer)
+    assert [r["operation"] for r in result["results"]] == [
+        "read.backup_full_config", "switch.vlan.define", "config.restore"]
+    assert result["results"][1]["evidence"]["rollback_restored"] is False
+    assert result["results"][-1]["passed"] is True
