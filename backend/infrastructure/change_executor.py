@@ -559,6 +559,8 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
             for op in TEST_OPS[device.family](test):
                 public_op = {k: v for k, v in op.items() if k != "_secret"}
                 ev = {"op": public_op}
+                cp = None
+                restored = False
                 try:
                     cp = writer.checkpoint()
                     ev["rendered"] = writer.render(public_op)     # masked: evidence never contains a secret
@@ -580,10 +582,16 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                     passed = False
                     try:
                         _renew_lease(db, device.id, holder)
-                        writer.rollback(cp)
-                    except Exception:
-                        pass
+                        if cp is not None:
+                            writer.rollback(cp)
+                        restored = _norm(writer.backup(), device.family) == _norm(base, device.family)
+                        ev["rollback_restored"] = restored
+                    except Exception as rollback_exc:
+                        ev["rollback_error"] = type(rollback_exc).__name__
                 results.append({"operation": op["op"], "passed": passed, "evidence": ev})
+                if not restored:
+                    # Never run the next test against an unverified baseline.
+                    break
             # full-configuration restore: write the captured baseline back and prove it reads back identically
             ev = {}
             try:
