@@ -33,6 +33,36 @@ def save_policy(db, value, actor):
     return policy(db)
 
 
+def enroll_authenticated_result(db, profile_id, result, site_name, actor):
+    """Called only with a fresh successful server-side identity probe."""
+    cfg = policy(db)
+    if not cfg["enabled"] or result.get("status") != "FOUND" or not result.get("enrollable"):
+        return None
+    if cfg["credential_ids"] is not None and profile_id not in cfg["credential_ids"]:
+        return None
+    from ..database.models_onboarding import OnboardingCredential
+    from ..database.models_inm import InmSite
+    from ..api.quick_devices import QuickDevice, record_observation
+    profile = db.get(OnboardingCredential, profile_id)
+    if not profile or not profile.enabled or not result.get("serial_number"):
+        return None
+    existing = db.scalar(select(InmDevice).where(InmDevice.source_type == "REAL",
+        InmDevice.vendor == "Aruba", InmDevice.serial_number == result["serial_number"]))
+    physical_site = db.get(InmSite, existing.site_id) if existing and existing.site_id else None
+    payload = QuickDevice(family=profile.device_family,
+        site_name=physical_site.name if physical_site else site_name,
+        hostname=result.get("hostname") or result["management_ip"],
+        serial_number=result["serial_number"], model=result.get("model") or "Unknown",
+        firmware=result.get("firmware"), management_ip=result["management_ip"], status="up", metrics={})
+    saved = record_observation(db, payload, actor, None, evidence="PROBED",
+                               notes="automatic enrollment after saved credential authentication")
+    _bind_device = db.get(InmDevice, saved["id"])
+    AD._bind(db, _bind_device, profile, actor)
+    audit(db, "automatic_discovery_registered", username=actor, target=saved["id"],
+          detail="Authenticated discovery identity registered; monitoring enrollment queued")
+    return saved["id"]
+
+
 def _targets(db):
     return list(db.scalars(select(InmDevice).where(
         InmDevice.source_type == "REAL", InmDevice.lifecycle != "merged",
