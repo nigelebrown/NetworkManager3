@@ -193,7 +193,10 @@ class ArubaInstantWriter:
     def checkpoint(self) -> str:
         """Instant has no device checkpoint: capture the running config + radio state as the restore point."""
         import json
-        self._cp = {"running": self._running(), "radios": self._radios()}
+        if not self.creds.ssh_fingerprint:
+            raise WriterError("PRECONDITION", "Pin the device SSH host key before configuration tests.")
+        self._cp = {"running": self._running(), "radios": self._radios(),
+                    "radio_overrides": self._radio_overrides()}
         return "instant-prior-state:" + str(abs(hash(json.dumps(self._cp["radios"], sort_keys=True, default=str))))
 
     def export_checkpoint(self) -> dict:
@@ -211,34 +214,53 @@ class ArubaInstantWriter:
         ap = next((a for a in snap.aps if a.get("ip") == self.ap_ip), None)
         return list((ap or {}).get("radios") or [])
 
+    def _radio_overrides(self) -> dict | None:
+        """Capture configured overrides, not ARM's current dynamically selected RF values."""
+        from ...aruba.errors import ArubaError
+        try:
+            payload = self.client.show("show ap-env", iap_ip=self.ap_ip)
+        except ArubaError:
+            return None
+        text = payload.get("Command output") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not re.search(r"(?im)^name\\s*:", text):
+            return None
+        values = dict(re.findall(r"(?im)^([ag]_(?:chan|tx_power))\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\s*$", text))
+        return {band: {"channel": values.get(f"{prefix}_chan", "0"),
+                       "power": values.get(f"{prefix}_tx_power", "0")}
+                for band, prefix in (("5", "a"), ("2.4", "g"))}
+
     def rollback(self, checkpoint: str) -> None:
         prior = getattr(self, "_cp", None)
         if not prior:
             raise WriterError("ROLLBACK_UNAVAILABLE", "No captured prior state.")
-        arm = arm_block(prior["running"])
-        lines = ["arm", "client-match" if arm.get("client-match") else "no client-match"]
-        for k in ("band-steering-mode", "air-time-fairness-mode", "wide-bands"):
-            if k in arm:
-                lines.append(f"{k} {arm[k]}")
-        for k in ("min-tx-power", "max-tx-power"):
-            if k in arm:
-                lines.append(f"{k} {arm[k]}")
-        lines += ["no 80mhz-support", "exit"]
-        self._ssh_lines(lines)
-        # SSID / RADIUS blocks created or changed by the change: delete new ones, re-apply prior ones
-        cur_text = self._running()
-        undo: list[str] = []
-        for hdr in sorted(set(re.findall(r"^(wlan (?:ssid-profile|auth-server) \S+)$", cur_text, re.M))):
-            before, after = cli_block(prior["running"], hdr), cli_block(cur_text, hdr)
-            if before is None:
-                undo.append(f"no {hdr}")
-            elif before != after:
-                undo += [hdr, *[ln for ln in before if not ln.startswith("key ")], "exit"]
-        if undo:
-            self._ssh_lines(undo)
+        before_text, cur_text = prior["running"], self._running()
+        before_arm, cur_arm = arm_block(before_text), arm_block(cur_text)
+        lines = []
+        for key in ("client-match", "band-steering-mode", "air-time-fairness-mode",
+                    "wide-bands", "min-tx-power", "max-tx-power", "80mhz-support"):
+            if before_arm.get(key) == cur_arm.get(key):
+                continue
+            old = before_arm.get(key)
+            if key in ("client-match", "80mhz-support"):
+                # 80 MHz is enabled by default; its positive command removes a
+                # temporary explicit disable when the original config omitted it.
+                enabled = old if old is not None else key == "80mhz-support"
+                lines.append(key if enabled else f"no {key}")
+            else:
+                lines.append(f"{key} {old}" if old is not None else f"no {key}")
+        if lines:
+            self._ssh_lines(["arm", *lines, "exit"])
+
+        # Delete dependent SSIDs before their newly created RADIUS servers.
+        for kind in ("ssid-profile", "auth-server"):
+            headers = re.findall(rf"^(wlan {kind} \\S+)$", cur_text, re.M)
+            undo = [f"no {hdr}" for hdr in headers if cli_block(before_text, hdr) is None]
+            if undo:
+                self._ssh_lines(undo)
+
         from ...aruba.configuration import SsidChange, build_ssid_payload, parse_running_config
         from ...aruba.errors import ArubaError
-        before = {x["profile"]: x for x in parse_running_config(prior["running"])["ssids"]}
+        before = {x["profile"]: x for x in parse_running_config(before_text)["ssids"]}
         now = {x["profile"]: x for x in parse_running_config(self._running())["ssids"]}
         for prof, old in before.items():
             if isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
@@ -246,11 +268,16 @@ class ArubaInstantWriter:
                     self.client.config_post("ssid", build_ssid_payload(SsidChange(profile=prof, vlan=old["vlan"]), creating=False))
                 except ArubaError as exc:
                     raise WriterError("ROLLBACK_FAILED", str(exc)[:200]) from None
-        for r in prior["radios"]:
-            ch, pw = r.get("channel"), r.get("tx_power_dbm")
-            if ch and str(ch).rstrip("+-E").isdigit() and pw:
-                cmd = "a-channel" if str(r.get("band", "")).startswith("5") else "g-channel"
-                self._ssh_lines([f"{cmd} {int(str(ch).rstrip('+-E'))} {int(pw)}"], exec_mode=True, host=self.ap_ip)
+        overrides = prior.get("radio_overrides")
+        if overrides is not None:
+            current = self._radio_overrides()
+            if current is None:
+                raise WriterError("ROLLBACK_FAILED", "Cannot verify configured radio overrides.")
+            for band, old in overrides.items():
+                if old != current.get(band):
+                    cmd = "a-channel" if band == "5" else "g-channel"
+                    self._ssh_lines([f"{cmd} {old['channel']} {old['power']}"],
+                                    exec_mode=True, host=self.ap_ip)
 
     def save(self) -> None:
         """Instant `commit apply` already persists cluster configuration."""
@@ -304,12 +331,24 @@ class ArubaInstantWriter:
             lines.append("wide-bands none" if int(v) == 20 else "wide-bands 5ghz")
         else:
             raise WriterError("UNSUPPORTED", f"{k} is not supported by {self.key}")
-        lines += ["no 80mhz-support", "exit"]
+        if k == "ap.radio.width":
+            lines.append("no 80mhz-support")
+        lines.append("exit")
         return [{"transport": "SSH-CONFIG", "host": self.creds.host,
                  "lines": ["configure terminal", *lines, "end", "commit apply"]}]
 
     def apply(self, op: dict) -> list[dict]:
         from ...aruba.errors import ArubaError
+        prior = getattr(self, "_cp", None)
+        if op.get("op") == "ap.radio.channel" and (not prior or prior.get("radio_overrides") is None):
+            raise WriterError("PRECONDITION", "Capture configured radio overrides before changing a channel.")
+        if op.get("op") in ("ap.ssid.create", "ap.ssid.enterprise"):
+            text = self._running()
+            headers = [f"wlan ssid-profile {op['ssid']}"]
+            if op.get("op") == "ap.ssid.enterprise":
+                headers.append(f"wlan auth-server {op['radius_name']}")
+            if any(cli_block(text, header) is not None for header in headers):
+                raise WriterError("PRECONDITION", "SSID or RADIUS profile already exists; refusing to overwrite it.")
         calls = self.render(op)
         for c in calls:
             if c["transport"] == "REST":
@@ -352,7 +391,7 @@ class ArubaInstantWriter:
             got = str((r or {}).get("channel") or "").rstrip("+-E")
             return got == str(int(v)), {"channel": got or None}
         arm = arm_block(self._running())
-        if arm.get("80mhz-support"):
+        if k == "ap.radio.width" and arm.get("80mhz-support"):
             return False, {"error": "80 MHz support is enabled on the device", **arm}
         want = {"ap.client_match": ("client-match", v == "enabled"),
                 "ap.band_steering": ("band-steering-mode", "disable" if v == "disabled" else v),
