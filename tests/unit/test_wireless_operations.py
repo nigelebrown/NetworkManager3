@@ -229,7 +229,7 @@ def test_cluster_poll_adopts_imported_ap_instead_of_duplicating(client, admin):
 
 
 # ------------------------------------------------------------------ auto-onboarding (mocked device I/O)
-def test_autodiscovery_status_recovers_abandoned_run(app_env):
+def test_autodiscovery_status_is_not_failed_by_api_local_lock(app_env):
     from backend.database.session import create_schema, session_scope
     from backend.infrastructure import ap_autodiscovery as AD
 
@@ -243,9 +243,9 @@ def test_autodiscovery_status_recovers_abandoned_run(app_env):
         with AD._LOCK:
             assert AD.job_status(db) == saved
         recovered = AD.job_status(db)
-        assert recovered["state"] == "FAILED"
+        assert recovered["state"] == "RUNNING"
         assert (recovered["done"], recovered["total"]) == (15, 247)
-        assert "Start a new run" in recovered["error"]
+        assert "error" not in recovered
 
 
 def test_autodiscovery_registers_cluster_once_and_links_members(app_env):
