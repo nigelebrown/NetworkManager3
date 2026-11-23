@@ -118,6 +118,8 @@ export const prn = {
   addMaintenance: (p: string, b: Record<string, unknown>) => request<{ id: number; linked_faults: number }>(`${id(p)}/maintenance-records`, j(b)),
   job: (x: string) => request<Job>(`${P}/jobs/${encodeURIComponent(x)}`),
   cancelJob: (x: string) => request<Job>(`${P}/jobs/${encodeURIComponent(x)}/cancel`, j({})),
+  discoveryPlan: (b: Record<string, unknown>) => request<{ addresses: number; batches: number; concurrency: number }>(`${P}/discovery/plan`, j(b)),
+  controlDiscovery: (id: string, action: "pause" | "resume") => request<Job>(`${P}/jobs/${id}/${action}`, j({})),
   discover: (b: Record<string, unknown>) => request<Job & { warnings: string[] }>(`${P}/discovery`, j(b)),
   approve: (jobId: string, b: Record<string, unknown>) => request<{ created: string[]; updated: string[] }>(`${P}/discovery/${jobId}/approve`, j(b)),
   importPreview: (text: string) => { const f = new FormData(); f.set("text", text); return request<any>(`${P}/import/preview`, { method: "POST", body: f }); },  // eslint-disable-line @typescript-eslint/no-explicit-any
