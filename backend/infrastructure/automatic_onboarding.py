@@ -47,7 +47,7 @@ def enroll_authenticated_result(db, profile_id, result, site_name, actor):
     if not profile or not profile.enabled or not result.get("serial_number"):
         return None
     existing = db.scalar(select(InmDevice).where(InmDevice.source_type == "REAL",
-        InmDevice.vendor == "Aruba", InmDevice.serial_number == result["serial_number"]))
+        InmDevice.vendor == "Aruba", func.lower(InmDevice.serial_number) == result["serial_number"].lower()))
     physical_site = db.get(InmSite, existing.site_id) if existing and existing.site_id else None
     payload = QuickDevice(family=profile.device_family,
         site_name=physical_site.name if physical_site else site_name,
