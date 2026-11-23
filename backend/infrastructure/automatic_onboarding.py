@@ -70,6 +70,43 @@ def queue(db, actor, *, device_ids=None, auto_enable_rest=False,
     return {"state": "QUEUED", "run_id": job["run_id"], "total": len(ids)}
 
 
+def _bootstrap_switch(db, d, profile, actor, options):
+    from ..aruba import ssh
+    from ..aruba.rest_enablement import enable_cx_rest_api
+    from ..security.crypto import decrypt_secret
+    from ..config import get_settings
+    from .change_executor import control
+    if not options.get("auto_enable_rest") or not get_settings().device_writes_permitted or control(db).emergency_stop:
+        return False
+    ip = str(d.mgmt_addresses[0])
+    observed = ssh.scan_host_key(ip)
+    pinned = AD.pinned_fingerprint(db, ip)
+    if pinned and pinned != observed["fingerprint"]:
+        AD._put(db, f"ssh-hostkey-pending:{ip}", {
+            **observed, "changed_from": pinned, "scanned_at": AD._now().isoformat()}, actor)
+        return False
+    if not pinned and not options.get("auto_trust_new_hosts", True):
+        return False
+    fp = pinned or observed["fingerprint"]
+    password = decrypt_secret(profile.password_enc)
+    with ssh.SshShowClient(ip, profile.username, password, fp, timeout=12) as client:
+        version = client.show("show version")
+        output = str(version.get("Command output") or "")
+        if "arubaos-cx" not in output.lower():
+            return False
+    if not pinned:
+        AD._put(db, f"ssh-hostkey:{ip}", {**observed,
+            "approved_by": actor, "approved_at": AD._now().isoformat(),
+            "trust": "FIRST_USE_AUTHENTICATED"}, actor)
+    try:
+        enable_cx_rest_api(ip, profile.username, password, fp, vrf="default")
+    except Exception:
+        return False
+    audit(db, "automatic_switch_rest_bootstrap", username=actor, target=d.id,
+          detail="Authenticated SSH; fixed REST bootstrap on default VRF")
+    return True
+
+
 def _switch(db, d, actor, options, probe=None):
     from ..api.onboarding_workflow import _probe
     from ..api.quick_devices import _permit_probe
@@ -87,7 +124,12 @@ def _switch(db, d, actor, options, probe=None):
     result = {"device_id": d.id, "hostname": d.hostname, "ip": str(ip), "result": "NO_CREDENTIAL"}
     for profile in profiles:
         try:
-            observed = (probe or _probe)(profile, ip)
+            try:
+                observed = (probe or _probe)(profile, ip)
+            except Exception:
+                if not _bootstrap_switch(db, d, profile, actor, options):
+                    raise
+                observed = (probe or _probe)(profile, ip)
             actual = observed.get("serial_number")
             if actual and d.serial_number and not d.serial_number.startswith("UNKNOWN-") and actual != d.serial_number:
                 return {**result, "result": "IDENTITY_MISMATCH", "detail": "Reported switch serial differs from inventory."}
@@ -137,6 +179,12 @@ def tick(session_factory, owner, *, batch_size=2, process=None):
         with session_factory() as db:
             job = AD._get(db, AD.JOB_KEY) or {}
             cfg = policy(db)
+            if job.get("state") == "RUNNING" and "device_ids" not in job:
+                queue(db, job.get("by", "automatic-onboarding"),
+                      device_ids=[d.id for d in _targets(db) if d.family == "access_point"],
+                      auto_enable_rest=False, auto_trust_new_hosts=True,
+                      credential_ids=cfg.get("credential_ids"))
+                job = AD._get(db, AD.JOB_KEY)
             if job.get("state") not in ("QUEUED", "RUNNING") or "device_ids" not in job:
                 if not cfg["enabled"]:
                     return {"idle": True}
