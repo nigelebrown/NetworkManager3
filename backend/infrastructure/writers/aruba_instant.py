@@ -296,11 +296,15 @@ class ArubaInstantWriter:
             current = self._radio_overrides()
             if current is None:
                 raise WriterError("ROLLBACK_FAILED", "Cannot verify configured radio overrides.")
+            changed = False
             for band, old in overrides.items():
                 if old != current.get(band):
+                    changed = True
                     cmd = "a-channel" if band == "5" else "g-channel"
                     self._ssh_lines([f"{cmd} {old['channel']} {old['power']}"],
                                     exec_mode=True, host=self.ap_ip)
+            if changed and self._radio_overrides() != overrides:
+                raise WriterError("ROLLBACK_FAILED", "Radio override rollback readback does not match the baseline.")
 
     def save(self) -> None:
         """Instant `commit apply` already persists cluster configuration."""
