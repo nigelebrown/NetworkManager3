@@ -226,6 +226,8 @@ class KeyApproval(BaseModel):
 
 class AutoOnboard(Targets):
     auto_enable_rest: bool = False
+    auto_trust_new_hosts: bool = True
+    credential_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
 
 
 @router.post("/autodiscover/scan-keys")
@@ -266,7 +268,8 @@ def approve_keys(body: KeyApproval, request: Request, db: Session = Depends(get_
 def autodiscover(body: AutoOnboard, request: Request, db: Session = Depends(get_db),
                  admin: User = Depends(require_role("admin"))):
     try:
-        out = AD.start_job(admin.username, device_ids=body.device_ids, auto_enable_rest=body.auto_enable_rest)
+        out = AD.start_job(admin.username, device_ids=body.device_ids, auto_enable_rest=body.auto_enable_rest,
+                           auto_trust_new_hosts=body.auto_trust_new_hosts, credential_ids=body.credential_ids)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     audit(db, "ap_auto_onboarding_started", username=admin.username, target="access_points",
@@ -277,6 +280,35 @@ def autodiscover(body: AutoOnboard, request: Request, db: Session = Depends(get_
 @router.get("/autodiscover/status")
 def autodiscover_status(db: Session = Depends(get_db), _: User = Depends(require_role("operator"))):
     return AD.job_status(db)
+
+
+
+class AutomaticOnboardingPolicy(BaseModel):
+    enabled: bool = False
+    credential_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    auto_trust_new_hosts: bool = True
+    auto_enable_rest: bool = False
+
+
+@router.get("/autodiscover/policy")
+def onboarding_policy(db: Session = Depends(get_db), _: User = Depends(require_role("admin"))):
+    from ..infrastructure import automatic_onboarding as AO
+    return AO.policy(db)
+
+
+@router.put("/autodiscover/policy")
+def update_onboarding_policy(body: AutomaticOnboardingPolicy, request: Request,
+                             db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..infrastructure import automatic_onboarding as AO
+    from ..database.models_onboarding import OnboardingCredential
+    if body.credential_ids is not None:
+        profiles = list(db.scalars(select(OnboardingCredential).where(
+            OnboardingCredential.id.in_(body.credential_ids), OnboardingCredential.enabled.is_(True))))
+        if len({p.id for p in profiles}) != len(set(body.credential_ids)):
+            raise HTTPException(422, "Choose enabled saved credential profiles")
+    out = AO.save_policy(db, body.model_dump(), user.username)
+    db.commit()
+    return out
 
 
 # ---------------------------------------------------------------------------------------- AP health report
