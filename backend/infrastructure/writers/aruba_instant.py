@@ -286,7 +286,9 @@ class ArubaInstantWriter:
         before = {x["profile"]: x for x in parse_running_config(before_text)["ssids"]}
         now = {x["profile"]: x for x in parse_running_config(self._running())["ssids"]}
         for prof, old in before.items():
-            if isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
+            if old.get("vlan") is None and now.get(prof, {}).get("vlan") is not None:
+                self._ssh_lines([f"wlan ssid-profile {prof}", "no vlan", "exit"])
+            elif isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
                 try:
                     self.client.config_post("ssid", build_ssid_payload(SsidChange(profile=prof, vlan=old["vlan"]), creating=False))
                 except ArubaError as exc:
