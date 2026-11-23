@@ -67,6 +67,11 @@ def pinned_fingerprint(db: Session, ip: str) -> str | None:
     for row in db.scalars(select(AppSetting).where(AppSetting.key.startswith("onboarding-ssh-pin:"))):
         if isinstance(row.value, dict) and row.value.get("ip") == ip and row.value.get("fingerprint"):
             return row.value["fingerprint"]
+    from ..database.models_phases import DeviceAccess
+    for access in db.scalars(select(DeviceAccess)):
+        device = db.get(InmDevice, access.device_id)
+        if (device and str(ip) in (device.mgmt_addresses or [])) or access.vc_host == str(ip):
+            return access.ssh_fingerprint
     return None
 
 
