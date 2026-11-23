@@ -551,8 +551,9 @@ def start_discovery(body: DiscoveryJobInput, request: Request, background: Backg
     db.commit()
     if total <= 8:
         background.add_task(S.run_job, session_scope, j.id, _owner())
-    return _job_json(j) | {"warnings": ["Large networks run in resumable background batches; results appear as batches finish."]
-                          if total > 1024 else []}
+    return _job_json(j) | {"warnings": (["Large networks run in resumable background batches; results appear as batches finish."]
+                          if total > 1024 else []) + (["SNMPv1/v2c sends the community in clear text; prefer SNMPv3 authPriv."]
+                          if any(v != "3" for v in params["snmp_versions"]) else [])}
 
 
 @router.post("/jobs/{job_id}/{action}")
