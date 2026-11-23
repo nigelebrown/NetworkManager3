@@ -139,7 +139,11 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
   const creds = useLoad(prn.credentialProfiles, [], 0);
   const [target, setTarget] = useState("");
   const [cred, setCred] = useState("");
-  const [job, setJob] = useState<Job | null>(null);
+  const [jobId, setJobId] = useState(() => sessionStorage.getItem("printer-discovery-job") ?? "");
+  const [queued, setQueued] = useState<Job | null>(null);
+  const current = useLoad(() => jobId ? prn.job(jobId) : Promise.resolve(null), [jobId], 2000);
+  const job = current.data?.id === jobId ? current.data : queued;
+  const setJob = (j: Job) => { setQueued(j); setJobId(j.id); sessionStorage.setItem("printer-discovery-job", j.id); };
   const [pick, setPick] = useState<Record<string, boolean>>({});
   const act = useAction();
   const start = () => act.run(async () => {
@@ -147,8 +151,7 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
     const body: Record<string, unknown> = { credential_profile_id: cred };
     if (t.includes("/")) body.management_range = t; else body.management_ips = t.split(/[\s,;]+/).filter(Boolean);
     const j = await prn.discover(body); setJob(j);
-    const done = await waitJob(j.id); setJob(done);
-    return `${done.status}: ${done.result?.printers?.length ?? 0} printer(s) identified, ${(done.errors ?? []).length} address(es) not identified.${j.warnings?.length ? " " + j.warnings.join(" ") : ""}`;
+    return `Discovery queued. Progress refreshes automatically and resumes when you reopen this page.${j.warnings?.length ? " " + j.warnings.join(" ") : ""}`;
   });
   const found: any[] = job?.result?.printers ?? [];  // eslint-disable-line @typescript-eslint/no-explicit-any
   return <Section title="Discovery job" footer="Read-only GET/GETNEXT. SNMPv3 authPriv preferred; v2c only where policy allows; v1 off by default.">
@@ -156,10 +159,13 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
       <label className="text-sm">Credential profile<select className={inputCls} value={cred} onChange={e => setCred(e.target.value)}>
         <option value="">Choose…</option>{(creds.data ?? []).map(c => <option key={c.id} value={c.id}>{c.name} (SNMPv{c.version})</option>)}</select></label>
       <label className="grow text-sm">CIDR (/22–/32) or IP list<input className={inputCls} value={target} onChange={e => setTarget(e.target.value)} placeholder="10.103.44.0/24 or 10.103.44.21, 10.103.44.22" /></label>
-      <button className={btn} disabled={act.busy || !cred || !target.trim()} onClick={start}>{act.busy ? `Scanning… ${job?.progress ?? 0}/${job?.total ?? "?"}` : "Start discovery"}</button>
+      <button className={btn} disabled={act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") || !cred || !target.trim()} onClick={start}>{act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") ? `Scanning… ${job?.progress ?? 0}/${job?.total ?? "?"}` : "Start discovery"}</button>
       {job && ["QUEUED", "RUNNING"].includes(job.status) && <button className={btn2} onClick={() => prn.cancelJob(job.id).then(setJob)}>Cancel</button>}
     </div>
+    <ErrorNote error={creds.error || current.error} />
     <Notice error={act.error} message={act.message} />
+    {job && <p role="status" className="mt-2 text-sm">{job.status}: {job.progress}/{job.total} checked · {found.length} printers found</p>}
+    {job?.status === "SUCCEEDED" && !found.length && <p className="mt-2 text-sm">No printers identified. Expand the per-address results below to see why.</p>}
     {job && found.length > 0 && <>
       <Table head={["", "IP", "Manufacturer", "Model (reported)", "Serial", "Confidence", "Profile", "Existing"]}
         rows={found.map(p => [<input type="checkbox" aria-label={`Select ${p.management_ip}`} checked={!!pick[p.management_ip]} disabled={!p.serial_number}
