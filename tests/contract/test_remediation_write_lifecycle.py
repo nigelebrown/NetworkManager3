@@ -389,3 +389,17 @@ def test_instant_channel_rollback_checks_override_readback():
     emu.lie = True
     with pytest.raises(WriterError, match="Radio override rollback"):
         writer.rollback(cp)
+
+
+def test_instant_rollback_restores_inherited_ssid_vlan():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    from backend.infrastructure.change_executor import _norm
+    emu = InstantEmulator()
+    emu._cli(["wlan ssid-profile Native", "essid Native", "exit"])
+    writer = emu.writer()
+    before = writer.backup()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.ssid.vlan", "ssid": "Native", "value": 4090})
+    assert writer.readback({"op": "ap.ssid.vlan", "ssid": "Native", "value": 4090})[0]
+    writer.rollback(cp)
+    assert _norm(writer.backup(), "access_point") == _norm(before, "access_point")
