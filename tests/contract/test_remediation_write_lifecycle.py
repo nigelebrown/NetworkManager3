@@ -403,3 +403,18 @@ def test_instant_rollback_restores_inherited_ssid_vlan():
     assert writer.readback({"op": "ap.ssid.vlan", "ssid": "Native", "value": 4090})[0]
     writer.rollback(cp)
     assert _norm(writer.backup(), "access_point") == _norm(before, "access_point")
+
+
+def test_instant_rollback_restores_named_ssid_vlan():
+    from backend.infrastructure.writers.emulator import InstantEmulator
+    from backend.infrastructure.change_executor import _norm
+    from backend.aruba.ssh import _ALLOWED_CONFIG_LINES
+    emu = InstantEmulator()
+    emu._cli(["wlan ssid-profile Named", "essid Named", "vlan Staff-VLAN-799", "exit"])
+    writer = emu.writer()
+    before = writer.backup()
+    cp = writer.checkpoint()
+    writer.apply({"op": "ap.ssid.vlan", "ssid": "Named", "value": 4090})
+    writer.rollback(cp)
+    assert _norm(writer.backup(), "access_point") == _norm(before, "access_point")
+    assert any(p.fullmatch("vlan Staff-VLAN-799") for p in _ALLOWED_CONFIG_LINES)
