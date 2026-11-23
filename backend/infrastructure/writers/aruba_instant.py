@@ -188,7 +188,21 @@ class ArubaInstantWriter:
 
     # ---- vault / checkpoint --------------------------------------------------------------
     def backup(self) -> bytes:
-        return self._running().encode()
+        """Full-fidelity vault input, never a redacted UI view or rotating ciphertext.
+
+        Instant randomizes some encrypted fields on every show. Read the
+        documented no-encrypt form so equality checks include the actual secrets;
+        the executor seals these bytes before persistence.
+        """
+        from ...aruba import parsers
+        from ...aruba.errors import ArubaError
+        try:
+            text = parsers.output_text(self.client.show("show running-config no-encrypt"))
+        except ArubaError as exc:
+            raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
+        if not text or not re.search(r"(?m)^arm\s*$", text):
+            raise WriterError("BACKUP_UNVERIFIED", "Full Instant configuration was not returned.")
+        return text.encode()
 
     def checkpoint(self) -> str:
         """Instant has no device checkpoint: capture the running config + radio state as the restore point."""
