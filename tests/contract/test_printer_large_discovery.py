@@ -74,6 +74,7 @@ def test_selected_profile_fallback_and_matched_monitoring_assignment(env, monkey
     good = agent("10.103.58.1", serial="PROFILE-OK")
     calls, closed = [], []
     class Reader:
+        source = good.source
         def __init__(self, cid):
             self.cid = cid
         async def get(self, oid):
