@@ -5,7 +5,7 @@ import ipaddress
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from ..database.models import Site
 from ..database.models_inm import InmDevice
