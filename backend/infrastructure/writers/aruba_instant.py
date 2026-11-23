@@ -222,9 +222,9 @@ class ArubaInstantWriter:
         except ArubaError:
             return None
         text = payload.get("Command output") if isinstance(payload, dict) else None
-        if not isinstance(text, str) or not re.search(r"(?im)^name\\s*:", text):
+        if not isinstance(text, str) or not re.search(r"(?im)^name\s*:", text):
             return None
-        values = dict(re.findall(r"(?im)^([ag]_(?:chan|tx_power))\\s*:\\s*(-?\\d+(?:\\.\\d+)?)\\s*$", text))
+        values = dict(re.findall(r"(?im)^([ag]_(?:chan|tx_power))\s*:\s*(-?\d+(?:\.\d+)?)\s*$", text))
         return {band: {"channel": values.get(f"{prefix}_chan", "0"),
                        "power": values.get(f"{prefix}_tx_power", "0")}
                 for band, prefix in (("5", "a"), ("2.4", "g"))}
@@ -253,7 +253,7 @@ class ArubaInstantWriter:
 
         # Delete dependent SSIDs before their newly created RADIUS servers.
         for kind in ("ssid-profile", "auth-server"):
-            headers = re.findall(rf"^(wlan {kind} \\S+)$", cur_text, re.M)
+            headers = re.findall(rf"^(wlan {kind} \S+)$", cur_text, re.M)
             undo = [f"no {hdr}" for hdr in headers if cli_block(before_text, hdr) is None]
             if undo:
                 self._ssh_lines(undo)
