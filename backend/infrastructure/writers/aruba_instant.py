@@ -288,6 +288,10 @@ class ArubaInstantWriter:
         for prof, old in before.items():
             if old.get("vlan") is None and now.get(prof, {}).get("vlan") is not None:
                 self._ssh_lines([f"wlan ssid-profile {prof}", "no vlan", "exit"])
+            elif isinstance(old.get("vlan"), str) and now.get(prof, {}).get("vlan") != old["vlan"]:
+                if not NAME_RE.fullmatch(old["vlan"]):
+                    raise WriterError("ROLLBACK_FAILED", "Unsupported prior VLAN name.")
+                self._ssh_lines([f"wlan ssid-profile {prof}", f"vlan {old['vlan']}", "exit"])
             elif isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
                 try:
                     self.client.config_post("ssid", build_ssid_payload(SsidChange(profile=prof, vlan=old["vlan"]), creating=False))
@@ -371,6 +375,10 @@ class ArubaInstantWriter:
         prior = getattr(self, "_cp", None)
         if op.get("op") == "ap.radio.channel" and (not prior or prior.get("radio_overrides") is None):
             raise WriterError("PRECONDITION", "Capture configured radio overrides before changing a channel.")
+        if op.get("op") == "ap.ssid.vlan":
+            previous = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}")).get("vlan")
+            if previous and not (previous.isdigit() or NAME_RE.fullmatch(previous)):
+                raise WriterError("PRECONDITION", "Prior SSID VLAN cannot be safely restored.")
         if op.get("op") in ("ap.ssid.create", "ap.ssid.enterprise"):
             text = self._running()
             headers = [f"wlan ssid-profile {op['ssid']}"]
