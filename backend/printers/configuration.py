@@ -27,9 +27,11 @@ def validate_location(value: str) -> str:
     return value
 
 
-def verified(db, printer_id: str) -> bool:
+def verified(db, printer) -> bool:
     rows = db.scalars(select(AppSetting).where(AppSetting.key.like("printer-test:%")))
-    return any(r.value.get("printer_id") == printer_id and
+    return any(r.value.get("printer_id") == printer.id and
+               r.value.get("serial") == printer.serial_number and
+               r.value.get("firmware") == printer.firmware and
                r.value.get("operation") == "system.location" and
                r.value.get("status") == "PASSED" and
                r.value.get("result", {}).get("restored") is True for r in rows)
@@ -38,7 +40,7 @@ def verified(db, printer_id: str) -> bool:
 def _guard(db, printer):
     if not get_settings().device_writes_permitted or control(db).emergency_stop:
         raise HTTPException(403, "Printer configuration writes are locked or emergency stop is active")
-    if not verified(db, printer.id):
+    if not verified(db, printer):
         raise HTTPException(409, "A successful hardware write and rollback test is required for this printer")
     mon = db.get(PrinterMonitoring, printer.id)
     if not mon or not mon.credential_profile_id:
@@ -85,7 +87,7 @@ async def _set_location(reader, value):
 
 
 async def view(db, printer):
-    supported = verified(db, printer.id)
+    supported = verified(db, printer)
     mon = db.get(PrinterMonitoring, printer.id)
     result = {"hardware_verified": supported,
               "writes_enabled": bool(get_settings().device_writes_permitted and not control(db).emergency_stop),
