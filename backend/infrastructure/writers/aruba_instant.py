@@ -115,13 +115,30 @@ class ArubaInstantWriter:
         except Exception:
             pass
 
-    def _running(self) -> str:
+    def _read_configuration(self, *, full_fidelity: bool = False) -> str:
+        """Retry only idempotent configuration reads after transient transport/503 errors."""
+        import time
+        from ...aruba import parsers
         from ...aruba.configuration import fetch_running_config
-        from ...aruba.errors import ArubaError
-        try:
-            return fetch_running_config(self.client)
-        except ArubaError as exc:
-            raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
+        from ...aruba.errors import ArubaConnectionError, ArubaError
+        for attempt in range(3):
+            try:
+                if not full_fidelity:
+                    return fetch_running_config(self.client)
+                text = parsers.output_text(self.client.show("show running-config no-encrypt"))
+                if not text or not re.search(r"(?m)^arm\s*$", text):
+                    raise WriterError("BACKUP_UNVERIFIED", "Full Instant configuration was not returned.")
+                return text
+            except ArubaError as exc:
+                transient = isinstance(exc, ArubaConnectionError) or "HTTP 503" in str(exc)
+                if transient and attempt < 2:
+                    time.sleep(attempt + 1)
+                    continue
+                raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
+        raise WriterError("CONNECTION_LOST", "Configuration read retries exhausted.")
+
+    def _running(self) -> str:
+        return self._read_configuration()
 
     def _ssh_lines(self, lines: list[str], *, exec_mode: bool = False, host: str | None = None) -> None:
         from ...aruba.errors import ArubaError
@@ -194,15 +211,7 @@ class ArubaInstantWriter:
         documented no-encrypt form so equality checks include the actual secrets;
         the executor seals these bytes before persistence.
         """
-        from ...aruba import parsers
-        from ...aruba.errors import ArubaError
-        try:
-            text = parsers.output_text(self.client.show("show running-config no-encrypt"))
-        except ArubaError as exc:
-            raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
-        if not text or not re.search(r"(?m)^arm\s*$", text):
-            raise WriterError("BACKUP_UNVERIFIED", "Full Instant configuration was not returned.")
-        return text.encode()
+        return self._read_configuration(full_fidelity=True).encode()
 
     def checkpoint(self) -> str:
         """Instant has no device checkpoint: capture the running config + radio state as the restore point."""
