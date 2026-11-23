@@ -302,7 +302,7 @@ def test_instant_rollback_deletes_ssid_before_its_radius_server():
 def test_instant_rollback_restores_implicit_80mhz_default():
     from backend.infrastructure.writers.emulator import InstantEmulator
     emu = InstantEmulator()
-    emu.text = emu.text.replace(" no 80mhz-support\\n", "")
+    emu.text = emu.text.replace(" no 80mhz-support\n", "")
     writer = emu.writer()
     cp = writer.checkpoint()
     writer.apply({"op": "ap.radio.width", "value": 20})
@@ -325,7 +325,7 @@ def test_instant_enterprise_and_cleanup_use_validated_cli_grammar():
           "radius_name": "inm-cert", "radius_ip": "192.0.2.80", "_secret": "cert-12345678"}
     lines = writer.render(op)[0]["lines"] + ["no wlan ssid-profile INM-CERT-1X", "no wlan auth-server inm-cert"]
     assert all(any(p.fullmatch(line.strip()) for p in _ALLOWED_CONFIG_LINES) for line in lines)
-    assert not any(p.fullmatch("key secret\\nreload") for p in _ALLOWED_CONFIG_LINES)
+    assert not any(p.fullmatch("key secret\nreload") for p in _ALLOWED_CONFIG_LINES)
 
 
 def test_certification_stops_when_rollback_does_not_restore_baseline(env):
