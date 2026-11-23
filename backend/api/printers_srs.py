@@ -2,8 +2,8 @@
 
 Read endpoints use platform RBAC (viewer and above) with site scoping: a site-scoped user only sees
 printers assigned to a granted site. Changes to monitoring, profiles, MIBs, catalogue and records are
-admin-only; recommendation decisions need an approver or admin. Every change is audited. Nothing here
-writes to a printer: polls and diagnostic walks are read-only GET/GETNEXT jobs.
+admin-only; recommendation decisions need an approver or admin. Every change is audited. Monitoring
+polls and diagnostic walks are read-only GET/GETNEXT jobs. Explicit verified configuration actions use a separate journalled service.
 """
 from __future__ import annotations
 
@@ -1392,3 +1392,41 @@ def decide_identity(printer_id: str, change_id: int, body: IdentityDecision, req
     audit(db, "printer_identity_decided", username=user.username, target=p.id,
           detail=f"{c.field}: {c.old_value} → {c.new_value} decision={c.decision}", request=request)
     return {"id": c.id, "decision": c.decision}
+
+
+# ---- verified printer configuration ---------------------------------------------------------------
+class PrinterLocationChange(BaseModel):
+    location: str = Field(max_length=255)
+
+    @field_validator("location")
+    @classmethod
+    def printable_location(cls, value: str) -> str:
+        from ..printers.configuration import validate_location
+        return validate_location(value)
+
+
+@router.get("/{printer_id}/configuration")
+async def printer_configuration(printer_id: str, db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.view(db, _visible(db, printer_id))
+
+
+@router.post("/{printer_id}/configuration/preview", status_code=201)
+async def printer_configuration_preview(printer_id: str, body: PrinterLocationChange,
+                                        db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.preview(db, _visible(db, printer_id), body.location, user.username)
+
+
+@router.post("/{printer_id}/configuration/{plan_id}/apply")
+async def printer_configuration_apply(printer_id: str, plan_id: str,
+                                      db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.execute(db, _visible(db, printer_id), plan_id, user.username)
+
+
+@router.post("/{printer_id}/configuration/{plan_id}/rollback")
+async def printer_configuration_rollback(printer_id: str, plan_id: str,
+                                         db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.execute(db, _visible(db, printer_id), plan_id, user.username, rollback=True)
