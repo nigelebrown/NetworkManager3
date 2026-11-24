@@ -2,7 +2,8 @@
 from types import SimpleNamespace
 import pytest
 from backend.security import deps
-from backend.database.models import AuditChainHead,AuditLog
+from backend.database.models_inm import AuditChainHead
+from backend.database.models import AuditLog
 
 @pytest.mark.parametrize("dialect",["postgresql","sqlite"])
 def test_audit_uses_database_transaction_lock_on_postgres(monkeypatch,dialect):
