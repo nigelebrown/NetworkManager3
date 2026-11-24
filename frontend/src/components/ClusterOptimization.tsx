@@ -25,6 +25,7 @@ export default function ClusterOptimization({ onChanged }: { onChanged: () => vo
       <option value="">Select a cluster…</option>{(fleet.data?.clusters ?? []).filter(c => c.key !== "unlinked").map(c =>
         <option key={c.key} value={c.key}>{c.name} — {c.aps_total} APs, {c.tiers.BRONZE ?? 0} Bronze</option>)}</select></div>
     <div className="inm-cardbody space-y-3 text-sm">
+      {(view.error || fleet.error) && <p role="alert" className="text-red-700">{view.error || fleet.error}</p>}
       {!key && <p className="text-slate-600">Choose a cluster to see, for every AP, why it performs poorly, the channel change the analysis proposes, and what is blocking optimization. You can then propose enrollment for all eligible APs in one step — each AP still gets its own approval.</p>}
       {v && <>
         {!!v.platform_blockers.length && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900"><b>Why nothing will be changed automatically right now:</b>
@@ -39,7 +40,7 @@ export default function ClusterOptimization({ onChanged }: { onChanged: () => vo
             <td><Pill value={a.state} tone={STATE_TONE(a.state)} /> <Pill value={a.tier} tone={TIER_TONE[a.tier]} /></td>
             <td className="whitespace-nowrap text-xs">ch {a.radio_2g.channel ?? "?"} {pct(a.radio_2g.util_percent)} · ch {a.radio_5g.channel ?? "?"} {pct(a.radio_5g.util_percent)}</td>
             <td className="max-w-xs text-xs">{a.headline}</td>
-            <td className="text-xs">{a.proposals.filter(Boolean).map((p, i) => <div key={i}>{p!.band}: {p!.from ?? "?"} → <b>{p!.to}</b></div>)}{!a.proposals.length && "—"}</td>
+            <td className="text-xs">{a.proposals.filter(Boolean).map((p, i) => <div key={i}>{p!.band}: {p!.from ?? "?"} → <b>{p!.to === 0 ? "Native ARM" : p!.to}</b></div>)}{!a.proposals.length && "—"}</td>
             <td className="max-w-xs text-xs">{a.enrollment && <Pill value={`${a.enrollment.mode} ${a.enrollment.status}`} tone="fair" />}
               {a.blockers.map(b => <div key={b} className="text-amber-800">• {b}</div>)}</td>
             <td><button className="inm-btn-secondary" onClick={() => setDiag({ id: a.device_id, name: a.name })}>Diagnose</button></td></tr>)}</tbody></table></div>
