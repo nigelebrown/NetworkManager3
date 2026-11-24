@@ -194,3 +194,28 @@ def test_degradation_rollback_uses_exact_journal_and_reports_only_verified_resto
             assert captured[0].expected_config_hash==post.plaintext_sha256
         else:
             assert "REQUIRES_REVIEW" in e.status_reason
+
+
+def test_first_use_ssh_requires_saved_login_and_matching_aruba_identity(client,admin,arm_device,monkeypatch):
+    from backend.infrastructure import automatic_onboarding as AO
+    from backend.aruba import ssh
+    did,m=arm_device
+    monkeypatch.setattr("backend.api.quick_devices._permit_probe",lambda ip:None)
+    raw=outputs();closed=[];calls=[]
+    class Reader:
+        def __init__(self,host,user,password,fp,**kw):
+            assert host=="10.9.8.10" and fp=="SHA256:measured"
+        def show(self,cmd):
+            calls.append(cmd)
+            if cmd=="show version": return {"Command output":"ArubaOS (MODEL:505), Version 8.10.0.21"}
+            from backend.aruba.arm import COMMANDS
+            return {"Command output":raw[next(k for k,v in COMMANDS.items() if v==cmd)]}
+        def close(self): closed.append(True)
+    monkeypatch.setattr(ssh,"scan_host_key",lambda *a,**kw:{"fingerprint":"SHA256:measured","key_type":"rsa"})
+    monkeypatch.setattr(ssh,"SshShowClient",Reader)
+    with session_scope() as db:
+        AO.save_policy(db,{"enabled":True,"auto_trust_new_hosts":True,"credential_ids":None},"test")
+        value=AM.collect(db,db.get(InmDevice,did))
+        assert value["state"]=="MEASURED" and value["transport"]=="PINNED_SSH_DIRECT_AP"
+        assert AD.pinned_fingerprint(db,"10.9.8.10")=="SHA256:measured"
+    assert calls[:2]==["show ap-env","show version"] and closed
