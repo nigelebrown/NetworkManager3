@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import re
 from sqlalchemy import select
-from ..database.models import AccessPoint, AppSetting, Site
+from ..database.models import AppSetting, Site
 from ..database.models_inm import InmDevice
 from ..database.models_onboarding import OnboardingCredential, OnboardingDeviceCredential
 from ..aruba import arm
@@ -36,6 +36,27 @@ def request(db, device_id, actor):
                                 "collection_state":"QUEUED"},actor)
     audit(db,"arm_measurement_requested",username=actor,target=device_id,detail="Fixed read-only ARM commands; no device writes")
     return {"state":"QUEUED","device_id":device_id}
+
+
+
+def _identity(reader, outputs, device, target_ip=None):
+    """Default MAC names and renamed APs are valid when local serial identity agrees."""
+    name = re.search(r"(?im)^name\s*:\s*(.+)$", outputs.get("environment", ""))
+    if name and name[1].strip().casefold() == (device.hostname or "").casefold():
+        return {"verified": True, "method": "AP_ENV_NAME"}
+    # show summary reports the local AP serial, unlike a cluster member list.
+    summary = output_text(reader.show("show summary", iap_ip=target_ip) if target_ip else reader.show("show summary"))
+    if len(summary) > 100000:
+        raise ValueError("Identity output exceeds limit")
+    serial = re.search(r"(?im)^Serial Number\s*:\s*(\S+)\s*$", summary)
+    actual_ip = re.search(r"(?im)^IP Address\s*:\s*(\S+)\s*$", summary)
+    expected = (device.serial_number or "").strip()
+    verified = bool(serial and expected and serial[1].casefold() == expected.casefold())
+    if target_ip:
+        verified = verified and bool(actual_ip and actual_ip[1] == target_ip)
+    return {"verified": verified, "method": "LOCAL_SERIAL_NUMBER",
+            "serial_number": serial[1] if serial else None,
+            "management_ip": actual_ip[1] if actual_ip else None}
 
 
 def collect(db, device, actor="arm-collector", *, client=None):
@@ -78,15 +99,15 @@ def collect(db, device, actor="arm-collector", *, client=None):
                     candidate=SshShowClient(ip,username,password,observed["fingerprint"],timeout=8)
                     try:
                         environment=output_text(candidate.show("show ap-env"))
-                        name=re.search(r"(?im)^name\s*:\s*(.+)$",environment)
                         version=output_text(candidate.show("show version"))
-                        if not name or name[1].strip().casefold()!=(device.hostname or "").casefold() or "aruba" not in version.lower():
+                        identity=_identity(candidate, {"environment":environment}, device)
+                        if not identity["verified"] or "aruba" not in version.lower():
                             raise ValueError("Authenticated AP identity did not match inventory")
                         AD._put(db,"ssh-hostkey:"+ip,{**observed,"approved_by":actor,
                             "approved_at":datetime.now(timezone.utc).isoformat(),
                             "trust":"FIRST_USE_AUTHENTICATED_ARM"},actor)
                         audit(db,"arm_ssh_first_use_authenticated",username=actor,target=device.id,
-                              detail="Saved credentials, AP name and Aruba identity verified before pinning first SSH key")
+                              detail="Saved credentials and local AP identity verified before pinning first SSH key")
                         db.commit()  # release the audit-chain row before any further network I/O
                         client=candidate
                         outputs["environment"]=environment
@@ -107,6 +128,7 @@ def collect(db, device, actor="arm-collector", *, client=None):
             client = ArubaClient(ArubaTarget(host,site.vc_port if site else 4343,username,password),
                                  timeout=8,verify=get_settings().tls_verify_arg)
             transport = "REST_TARGETED_AP" if target_ip else "REST_DIRECT_AP"
+    identity = {"verified":False,"method":"UNAVAILABLE"}
     try:
         for key,command in arm.COMMANDS.items():
             try:
@@ -118,20 +140,24 @@ def collect(db, device, actor="arm-collector", *, client=None):
                 errors[key] = type(exc).__name__
                 if not outputs:  # one unreachable AP must not consume five command timeouts
                     break
+        if outputs:
+            try:
+                identity = _identity(client, outputs, device, target_ip)
+            except Exception as exc:
+                errors["identity_read"] = type(exc).__name__
     finally:
         if owned:
             client.close()
     now = datetime.now(timezone.utc)
     old = snapshot(db,device.id)
     parsed = arm.parse(outputs)
-    observed_name=re.search(r"(?im)^name\s*:\s*(.+)$",outputs.get("environment",""))
-    if not observed_name or observed_name[1].strip().casefold()!=(device.hostname or "").casefold():
+    if outputs and not identity["verified"]:
         parsed["state"]="TARGET_UNVERIFIED"
-        errors["identity"]="AP name did not match the requested inventory target"
+        errors["identity"]="Local AP identity did not match the requested inventory target"
     # Direct command data is a measurement, not proof that all configuration operations are writable.
     value = {**parsed,"device_id":device.id,"observed_at":now.isoformat(),"transport":transport,
              "collection_state":"SUCCEEDED" if parsed["state"]=="MEASURED" else "FAILED",
-             "errors":errors,"last_attempt_at":now.isoformat(),"next_due_at":(now+timedelta(minutes=10)).isoformat()}
+             "errors":errors,"identity":identity,"last_attempt_at":now.isoformat(),"next_due_at":(now+timedelta(minutes=10)).isoformat()}
     previous = old.get("recent",[])
     if old.get("observed_at") and old.get("state")=="MEASURED":
         previous = [*previous,{"observed_at":old["observed_at"],"assignments":old.get("assignments",[]),
@@ -162,9 +188,14 @@ def tick(session_factory, owner, limit=2):
                 next_due = state.get("next_due_at")
                 if not queued and next_due and datetime.fromisoformat(next_due)>now:
                     continue
-                ap = db.get(AccessPoint,d.legacy_ap_id)
                 site = db.get(Site,d.legacy_site_id) if d.legacy_site_id else None
-                if not queued and (not ap or (ap.status or "").lower() not in ("up","online") or not site or not site.enabled or not site.last_poll_ok):
+                binding = db.get(OnboardingDeviceCredential,d.id)
+                profile = db.get(OnboardingCredential,binding.credential_id) if binding else None
+                # A local SSH measurement does not depend on a successful VC REST poll.
+                # Imported APs with saved credentials must also get their first attempt.
+                if not queued and ((site and not site.enabled) or
+                    not d.mgmt_addresses or d.vendor.lower() != "aruba" or
+                    not ((profile and profile.enabled) or (site and site.enabled and not site.simulated))):
                     continue
                 due.append((not queued,state.get("last_attempt_at",""),d.id))
             ids = [x[2] for x in sorted(due)[:limit]]
