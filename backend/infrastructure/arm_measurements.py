@@ -4,6 +4,7 @@ import ipaddress
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import re
 from sqlalchemy import select
 from ..database.models import AccessPoint, AppSetting, Site
 from ..database.models_inm import InmDevice
@@ -58,10 +59,40 @@ def collect(db, device, actor="arm-collector", *, client=None):
     transport = "TEST_INJECTED" if client else None
     if client is None:
         fp = AD.pinned_fingerprint(db,ip)
+        if not fp:
+            from .automatic_onboarding import policy
+            from ..aruba.ssh import scan_host_key
+            cfg=policy(db)
+            selected=cfg.get("credential_ids")
+            first_use_allowed=(cfg.get("enabled") and cfg.get("auto_trust_new_hosts") and
+                               (profile is None or selected is None or profile.id in selected))
+            if first_use_allowed:
+                try:
+                    observed=scan_host_key(ip,timeout=8)
+                    candidate=SshShowClient(ip,username,password,observed["fingerprint"],timeout=8)
+                    try:
+                        environment=output_text(candidate.show("show ap-env"))
+                        name=re.search(r"(?im)^name\s*:\s*(.+)$",environment)
+                        version=output_text(candidate.show("show version"))
+                        if not name or name[1].strip().casefold()!=(device.hostname or "").casefold() or "aruba" not in version.lower():
+                            raise ValueError("Authenticated AP identity did not match inventory")
+                        AD._put(db,"ssh-hostkey:"+ip,{**observed,"approved_by":actor,
+                            "approved_at":datetime.now(timezone.utc).isoformat(),
+                            "trust":"FIRST_USE_AUTHENTICATED_ARM"},actor)
+                        audit(db,"arm_ssh_first_use_authenticated",username=actor,target=device.id,
+                              detail="Saved credentials, AP name and Aruba identity verified before pinning first SSH key")
+                        client=candidate
+                        outputs["environment"]=environment
+                        transport="PINNED_SSH_DIRECT_AP"
+                    except Exception:
+                        candidate.close()
+                        raise
+                except Exception as exc:
+                    errors["ssh_first_use"]=type(exc).__name__
         if fp:
             client = SshShowClient(ip,username,password,fp,timeout=8)
             transport = "PINNED_SSH_DIRECT_AP"
-        else:
+        elif client is None:
             # A directly authenticated AP REST session gives exact measurement attribution.
             host=site.vc_host if site and site.vc_host else ip
             _permit_probe(ipaddress.IPv4Address(host))
@@ -86,7 +117,6 @@ def collect(db, device, actor="arm-collector", *, client=None):
     now = datetime.now(timezone.utc)
     old = snapshot(db,device.id)
     parsed = arm.parse(outputs)
-    import re
     observed_name=re.search(r"(?im)^name\s*:\s*(.+)$",outputs.get("environment",""))
     if not observed_name or observed_name[1].strip().casefold()!=(device.hostname or "").casefold():
         parsed["state"]="TARGET_UNVERIFIED"
