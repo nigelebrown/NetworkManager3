@@ -275,6 +275,7 @@ services:
       INM_READONLY_DEVICE_CIDRS: ${INM_READONLY_DEVICE_CIDRS:-}
       INM_ON_PREMISES_MANAGEMENT: ${INM_ON_PREMISES_MANAGEMENT:-false}
       INM_SCHEDULED_COLLECTION: ${INM_SCHEDULED_COLLECTION:-true}
+      INM_SCHEDULED_DEVICE_LOGS: ${INM_SCHEDULED_DEVICE_LOGS:-false}
     volumes:
       - app-data:/data
       # Non-secret host-applied exact-IP approval status: read-only in API/worker.
