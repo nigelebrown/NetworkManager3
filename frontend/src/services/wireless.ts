@@ -112,7 +112,11 @@ export const wl = {
   pendingKeys: () => request<{ ip: string; fingerprint: string; key_type: string; scanned_at: string; changed_from?: string | null }[]>("/v1/wireless/autodiscover/pending-keys"),
   approveKeys: (items: { ip: string; fingerprint: string }[]) => post<{ ip: string; approved: boolean; reason?: string }[]>(
     "/v1/wireless/autodiscover/approve-keys", { items, confirm: "APPROVE HOST KEYS" }),
-  autodiscover: (auto_enable_rest: boolean, device_ids?: string[]) => post<{ state: string }>("/v1/wireless/autodiscover", { auto_enable_rest, device_ids }),
+  onboardingPolicy: () => request<{ enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }>("/v1/wireless/autodiscover/policy"),
+  saveOnboardingPolicy: (body: { enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }) =>
+    request("/v1/wireless/autodiscover/policy", { method: "PUT", body: JSON.stringify(body) }),
+  onboardingProfiles: () => request<{ id: string; name: string; device_family: string; enabled: boolean }[]>("/v1/onboarding/credentials"),
+  autodiscover: (auto_enable_rest: boolean, device_ids?: string[], credential_ids?: string[]) => post<{ state: string }>("/v1/wireless/autodiscover", { auto_enable_rest, device_ids, credential_ids, auto_trust_new_hosts: true }),
   autodiscoverStatus: () => request<{ state: string; done?: number; total?: number; clusters_saved?: number; counts?: Record<string, number>;
     clusters?: { name: string; vc_ip: string; members: number; transport: string; rest_state: string; first_poll_ok?: boolean; first_poll_error?: string | null }[];
     results?: { device_id: string; hostname: string; ip?: string; result: string; detail?: string | null }[]; error?: string;

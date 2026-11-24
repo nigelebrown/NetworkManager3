@@ -598,6 +598,17 @@ def discover_devices(body: DiscoveryRequest, request: Request,
             status, note = _discovery_failure(exc)
             found.append({"management_ip": str(address), "status": status,
                           "result_note": note, "enrollable": False})
+    from ..infrastructure import automatic_onboarding as AO
+    for row in found:
+        if row.get("status") == "FOUND" and row.get("enrollable"):
+            try:
+                with db.begin_nested():
+                    device_id = AO.enroll_authenticated_result(
+                        db, profile.id, row, body.site_name.strip(), admin.username)
+                    if device_id:
+                        row.update(existing_device_id=device_id, automatically_registered=True)
+            except Exception as exc:
+                row["automatic_onboarding_error"] = type(exc).__name__
     job = OnboardingDiscovery(credential_id=profile.id, site_name=body.site_name.strip(),
                              scope=body.scope, device_family=profile.device_family,
                              results=found, created_by=admin.username, status="SCANNED")

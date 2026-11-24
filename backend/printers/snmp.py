@@ -41,6 +41,23 @@ def permitted_target(host: str, ranges: str | None = None) -> bool:
         return False
 
 
+def permitted_network(network: ipaddress.IPv4Network, ranges: str | None = None) -> bool:
+    """Validate a complete CIDR without expanding millions of target addresses."""
+    if not isinstance(network, ipaddress.IPv4Network):
+        return False
+    if ranges is None and os.environ.get("INM_ON_PREMISES_MANAGEMENT") == "true" and get_settings().mode == "live":
+        nets = [ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    else:
+        raw = os.environ.get("INM_READONLY_DEVICE_CIDRS", "") if ranges is None else ranges
+        try:
+            nets = [ipaddress.IPv4Network(n.strip(), strict=True) for n in raw.split(",") if n.strip()]
+        except ValueError:
+            return False
+        if not nets or len(nets) > 20 or any(not n.is_private or n.prefixlen < 24 for n in nets):
+            return False
+    return any(network.subnet_of(n) for n in ipaddress.collapse_addresses(nets))
+
+
 def parse_printer_marker(unit: int | None, count: int | None) -> dict[str, Any] | None:
     if count is None or count < 0 or unit is None:
         return None
