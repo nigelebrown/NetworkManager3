@@ -800,7 +800,7 @@ def ap_extras(db: Session, d, controller) -> dict:
             "signal_distribution": {"by_band": dist, "source": "connected stations (show clients, RSSI)"},
             "client_match": obs.get("client_match") or {"state": "NOT_COLLECTED", "reason": "not collected yet"},
             "gaps": obs.get("gaps", []) if obs else ["no AP observations collected yet"],
-            "format_verification": "Hardware output format verification pending"}
+            "format_verification": "UNVERIFIED: hardware output format verification pending"}
 
 
 # ---------------------------------------------------------------------------------------- diagnosis + AI
