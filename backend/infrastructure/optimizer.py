@@ -201,6 +201,9 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                     out["shadow_evaluated"]+=1
                     continue
                 out["rolled_back_degraded"]+=_check_outcome(db,device,e,actor)
+                if out["rolled_back_degraded"] or e.status_reason=="QUALITY_DEGRADED_ROLLBACK_FAILED":
+                    db.commit()
+                    break
                 if e.status!="ARMED":
                     continue
                 existing=db.scalar(select(ChangePlan).where(ChangePlan.device_id==device.id,
@@ -233,6 +236,9 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                 if plan.state=="APPROVED":
                     r=X.execute_plan(db,plan,actor=actor)
                     out["executed"]+=int(r.get("outcome")=="APPLIED_VERIFIED")
+                    if r.get("outcome")!="APPLIED_VERIFIED":
+                        e.status="PAUSED"
+                        e.status_reason="OPTIMIZER_EXECUTION_"+str(r.get("outcome") or r.get("decision") or "FAILED")
                     db.commit()
                     break
                 else:
