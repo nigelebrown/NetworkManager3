@@ -94,28 +94,81 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
             assert page.locator("#inm-main-content").inner_text().strip(), route
         page.goto(URL + "/")
         page.get_by_role("heading", name="Network command center").wait_for()
+        # The current printer overview links to the inventory workspace. Exercise
+        # the durable discovery/approval UI with synthetic responses: no SNMP
+        # packets are sent, and the fixture is never approved on the real API.
         page.route("**/api/printers/credential-profiles", lambda route: route.fulfill(json=[
             {"id": "ci-profile", "name": "CI printers", "version": "2c"},
         ]))
+        job_printer = {
+            "management_ip": "192.0.2.21", "hostname": "CI Discovery Printer",
+            "manufacturer": "HP", "model": "CI Printer", "serial_number": "CI-DISCOVERY-001",
+            "confidence": "HIGH", "profile": "ci-profile", "existing_printer_id": None,
+        }
+        discovery_body = {"credential_profile_id": "ci-profile", "management_range": "192.0.2.20/30"}
+        job = {
+            "id": "ci-discovery", "kind": "DISCOVERY", "status": "SUCCEEDED",
+            "params": discovery_body, "progress": 2, "total": 2,
+            "result": {"printers": [job_printer]}, "errors": [], "warnings": [],
+            "requested_by": "admin",
+        }
+        calls = []
+
+        def start_discovery(route):
+            calls.append(("discover", route.request.method, route.request.post_data_json))
+            route.fulfill(json=job)
+
+        def approve_discovery(route):
+            calls.append(("approve", route.request.method, route.request.post_data_json))
+            route.fulfill(json={"created": ["ci-printer"], "updated": []})
+
+        page.route("**/api/printers/discovery", start_discovery)
+        page.route("**/api/printers/jobs/ci-discovery", lambda route: route.fulfill(json=job))
+        page.route("**/api/printers/discovery/ci-discovery/approve", approve_discovery)
         page.goto(URL + "/printers")
-        page.get_by_role("button", name="Discover printers", exact=True).click()
+        page.get_by_role("heading", name="Printer fleet overview").wait_for()
+        page.get_by_role("navigation", name="Printer workspaces").get_by_role("link", name="Inventory").click()
+        page.get_by_role("heading", name="Printer inventory").wait_for()
+        page.get_by_label("Credential profile", exact=True).select_option("ci-profile")
+        page.get_by_label("CIDR (/22–/32) or IP list").fill("192.0.2.20/30")
+        page.get_by_role("button", name="Start discovery").click()
+        selection = page.get_by_label("Select 192.0.2.21")
+        selection.wait_for()
+        assert calls == [("discover", "POST", discovery_body)]
+        approve = page.get_by_role("button", name="Approve selected for monitoring")
+        assert approve.is_disabled()
+        selection.check()
+        approve.click()
+        page.get_by_text("1 registered, 0 updated; monitoring enabled (read-only).", exact=True).wait_for()
+        assert calls == [
+            ("discover", "POST", discovery_body),
+            ("approve", "POST", {"items": [{
+                key: job_printer[key] for key in
+                ("management_ip", "manufacturer", "model", "serial_number", "hostname")
+            }]}),
+        ]
+        page.screenshot(path=str(EVID / "printer-discovery-approval.png"), full_page=True)
+
+        # Preserve the real database registration check from the original smoke
+        # test via the still-supported one-off discovery panel.
+        page.get_by_text("Manual registration, credential profiles and one-off SNMP checks", exact=True).click()
         page.route("**/api/printers/credential-profiles/ci-profile/discover", lambda route: route.fulfill(json={
             "scanned": 2,
-            "printers": [{"management_ip": "10.190.1.21", "hostname": "CI Test Printer",
-                          "system_description": "Simulated Printer-MIB device", "meter": None}],
+            "printers": [{"management_ip": "192.0.2.25", "hostname": "CI Test Printer",
+                          "system_description": "HP CI Printer", "meter": None}],
         }))
-        page.get_by_label("Management IP or CIDR").fill("10.190.1.20/30")
-        page.get_by_label("Saved profile").select_option("ci-profile")
-        page.get_by_role("button", name="Discover", exact=True).click()
-        page.get_by_role("button", name="Review and register").click()
-        assert page.get_by_label("Management IPv4").input_value() == "10.190.1.21"
-        assert page.get_by_label("Hostname").input_value() == "CI Test Printer"
-        page.get_by_label("Model", exact=True).fill("CI Printer")
-        page.get_by_label("Serial number").fill("CI-PRINTER-001")
-        page.get_by_label("Branch", exact=True).fill("CI Branch")
-        page.get_by_role("button", name="Register printer").click()
-        page.get_by_text("CI-PRINTER-001", exact=True).wait_for()
-        assert page.get_by_text("CI Branch", exact=True).is_visible()
+        page.get_by_role("button", name="Discover printers", exact=True).click()
+        panel = page.locator("#printer-discovery")
+        panel.get_by_label("Management IPs or CIDR").fill("192.0.2.24/30")
+        panel.get_by_label("Saved profile").select_option("ci-profile")
+        panel.get_by_role("button", name="Discover", exact=True).click()
+        panel.get_by_role("button", name="Review and register").click()
+        panel.get_by_label("Model", exact=True).fill("CI Printer")
+        panel.get_by_label("Serial number").fill("CI-PRINTER-001")
+        panel.get_by_role("button", name="Register printer").click()
+        page.get_by_text("Printer registered. You can assign its location in Printer inventory.", exact=True).wait_for()
+        page.reload()
+        page.get_by_text("CI-PRINTER-001", exact=True).first.wait_for()
         page.screenshot(path=str(EVID / "printer-discovery-registration.png"), full_page=True)
 
         page.goto(URL + "/")
