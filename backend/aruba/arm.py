@@ -191,8 +191,8 @@ def assessments(snapshot, *, now=None):
                     ["Use a spectrum survey to identify the interference source; compare client impact before changing RF policy."],
                     {"samples":len(nonwifi),"above_30_percent":sum(v>=30 for v in nonwifi)})
     if cfg.get("80Mhz Support") not in (None,"disable"):
-        finding("arm_width","medium","Review wide-channel policy for this deployment",
-                "ARM permits 80 MHz; the application's approved policy supports 20/40 MHz.",
-                ["Review density, client capabilities, and approved channel widths before submitting a policy change."],
+        finding("arm_width","info","Wide-channel capability differs from application change policy",
+                "80 MHz capability is enabled; this does not prove the radio operates at 80 MHz or that client performance is poor. Application change plans currently support 20/40 MHz.",
+                ["Record the initial baseline exception. Check actual operating width and site requirements before changing a healthy ARM configuration."],
                 {"80Mhz Support":cfg["80Mhz Support"]})
     return findings
