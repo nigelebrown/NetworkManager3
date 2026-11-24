@@ -112,3 +112,82 @@ def test_scope_and_role_are_enforced_for_arm_configuration(client,admin,arm_devi
     assert client.post(f"/api/v1/wireless/arm/{did}/collect",headers=viewer).status_code==403
     assert client.put("/api/v1/wireless/arm-reference/5g",headers=viewer,
         json={"source_device_id":did,"label":"Reference"}).status_code==403
+
+
+def test_allow_evaluations_do_not_consume_the_hardware_action_budget(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment,ExecutionDecision,ChangeExecution
+    from backend.infrastructure import change_executor as X
+    did,m=arm_device
+    monkeypatch.setenv("INM_AUTOMATIC_OPTIMIZATION","true")
+    monkeypatch.setattr(X,"certification_map",lambda db,d:{"ap.radio.channel":"CERTIFIED_WRITE"})
+    with session_scope() as db:
+        d=db.get(InmDevice,did)
+        art=X.seal_artifact(db,d,b"test-only complete configuration",trigger="MANUAL",actor="tester",source="DEVICE_READ")
+        e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED")
+        db.add(e);db.flush()
+        op={"op":"ap.radio.channel","band":"5","value":0,"power":0,"arm_managed":True}
+        first,_=O.evaluate(db,d,op,actor="test")
+        second,_=O.evaluate(db,d,op,actor="test")
+        assert first["decision"]==second["decision"]=="ALLOW"
+        for i in range(2):
+            p=ChangePlan(device_id=did,title="Measured adjustment",operations=[op],capability_report=[],
+                plan_hash="test-hash",source="AUTO_OPTIMIZER",requester="requester",state="APPLIED_VERIFIED")
+            db.add(p);db.flush()
+            db.add(ChangeExecution(plan_id=p.id,device_id=did,environment="HARDWARE",outcome="APPLIED_VERIFIED",
+                steps=[],executed_by="tester",finished_at=datetime.now(timezone.utc)-timedelta(minutes=5)))
+        db.flush()
+        denied,_=O.evaluate(db,d,op,actor="test")
+        assert denied["decision"]=="DENY"
+        assert next(g for g in denied["guard_evaluation"] if g["guard"]=="daily_budget")["pass"] is False
+
+
+@pytest.mark.parametrize("journal_present,execution_outcome,expected",[(True,"APPLIED_VERIFIED",1),(False,"APPLIED_VERIFIED",0),(True,"ABORTED",0)])
+def test_degradation_rollback_uses_exact_journal_and_reports_only_verified_restore(client,admin,arm_device,monkeypatch,journal_present,execution_outcome,expected):
+    from backend.database.models_phases import OptimizationEnrollment,ChangeExecution
+    from backend.infrastructure import change_executor as X,runtime
+    did,m=arm_device
+    applied=datetime.now(timezone.utc)-timedelta(hours=2)
+    class Store:
+        def query(self,*,metric_name,**kw):
+            rows=[]
+            for after in (False,True):
+                for minute in range(2,42,2):
+                    rows.append({"metric_name":metric_name,"quality":"OBSERVED",
+                        "observed_at":applied+(timedelta(minutes=minute) if after else -timedelta(minutes=minute)),
+                        "value":5 if metric_name=="client_count" else 60 if after else 90})
+            return rows
+    monkeypatch.setattr(runtime,"telemetry_store",lambda:Store())
+    captured=[]
+    def execute(db,p,**kw):
+        captured.append(p)
+        return {"outcome":execution_outcome}
+    monkeypatch.setattr(X,"execute_plan",execute)
+    with session_scope() as db:
+        d=db.get(InmDevice,did)
+        post=X.seal_artifact(db,d,b"exact execution post",trigger="POST_CHANGE",actor="tester",source="DEVICE_READ")
+        X.seal_artifact(db,d,b"unrelated newer backup",trigger="MANUAL",actor="tester",source="DEVICE_READ")
+        p=ChangePlan(device_id=did,title="Native ARM adjustment",operations=[{"op":"ap.radio.channel","band":"5","value":0,"power":0,"arm_managed":True}],
+            capability_report=[],plan_hash="test",source="AUTO_OPTIMIZER",requester="requester",state="APPLIED_VERIFIED",rollback_plan={})
+        db.add(p);db.flush()
+        ex=ChangeExecution(plan_id=p.id,device_id=did,environment="HARDWARE",outcome="APPLIED_VERIFIED",
+            steps=[],executed_by="tester",post_artifact_id=post.id,finished_at=applied)
+        db.add(ex);db.flush()
+        e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",firmware_bound=d.firmware,
+            mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],value_constraints={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",independent_approver_id="reviewer",
+            status="ARMED",last_action_id=p.id)
+        db.add(e);db.flush()
+        if journal_present:
+            X._journal_open(db,ex.id,p.id,did,"HARDWARE","INVERSE_OPERATIONS",
+                {"writer_checkpoint":{"radio_overrides":{"5":{"channel":"149","power":"18"}}}},"test")
+        count=O._check_outcome(db,d,e,"test")
+        assert count==expected and e.status=="PAUSED"
+        if captured:
+            assert captured[0].operations==[{"op":"ap.radio.channel","band":"5","value":149,"power":18.0}]
+            assert captured[0].expected_config_hash==post.plaintext_sha256
+        else:
+            assert "REQUIRES_REVIEW" in e.status_reason
