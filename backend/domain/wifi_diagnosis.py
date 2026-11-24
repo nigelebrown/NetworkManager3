@@ -63,7 +63,7 @@ def diagnose_ap(ap: dict[str, Any], neighbours: list[dict[str, Any]], clients: l
             acts = []
             if co:
                 why += f"; {len(co)} other AP(s) in this cluster share channel {ch} ({', '.join(co[:4])}" \
-                       f"{'…' if len(co) > 4 else ''}) — co-channel contention"
+                       f"{'…' if len(co) > 4 else ''}) — channel reuse; RF proximity/interference is not established"
                 if target:
                     acts.append(f"Move {label} from channel {ch} to {target} (least used by neighbours).")
             if band == "2":
@@ -74,7 +74,7 @@ def diagnose_ap(ap: dict[str, Any], neighbours: list[dict[str, Any]], clients: l
                 acts += ["Use 20 MHz (or 40 MHz where neighbours allow) — never 80 MHz on this estate.",
                          "Check client count and application load at peak; add/shift coverage for dense rooms."]
             out.append(_f(sev, f"util_{band}", f"{label} channel congestion", why + ".", acts, "RF plan",
-                          "high" if co else "medium",
+                          "medium" if co else "low",
                           {"operation": "ap.radio.channel", "band": label, "from": ch, "to": target} if target else None,
                           {"util_percent": util, "channel": ch, "co_channel_aps": co}))
         elif ch and target and band == "2" and ch not in CHANNELS_2G:
@@ -103,11 +103,11 @@ def diagnose_ap(ap: dict[str, Any], neighbours: list[dict[str, Any]], clients: l
     if clients:
         snr = [c["snr_db"] for c in clients if c.get("snr_db") is not None]
         weak = [s for s in snr if s < 15]
-        if snr and len(weak) / len(snr) >= 0.3:
+        if len(snr) >= 5 and len(weak) / len(snr) >= 0.3:
             out.append(_f("high" if len(weak) / len(snr) >= 0.5 else "medium", "coverage",
                           "Many clients have weak signal (coverage edge / sticky clients)",
                           f"{len(weak)} of {len(snr)} connected clients have SNR below 15 dB.",
-                          ["Enable ClientMatch / sticky-client steering and a minimum-RSSI (e.g. -75 dBm) on the SSID.",
+                          ["Enable ClientMatch / sticky-client steering and a minimum-RSSI only after verifying client capabilities and coverage; avoid disconnecting edge clients.",
                            "Check AP placement and mounting (ceiling, not inside cabinets); add coverage where clients sit.",
                            "Avoid raising transmit power to fix this — it increases co-channel interference."],
                           "RF plan", "medium", None, {"weak_clients": len(weak), "clients_with_snr": len(snr)}))
@@ -171,8 +171,8 @@ def diagnose_client(c: dict[str, Any], ap: dict[str, Any] | None, cluster_aps: i
         sticky = roams == 0 and cluster_aps > 1
         out.append(_f("high", "weak_signal", "Weak signal at the client",
                       f"SNR {snr} dB on {c.get('ap') or 'its AP'} (good is 25 dB or more)."
-                      + (" The client has not roamed although other APs exist — likely a sticky client." if sticky else ""),
-                      (["Enable ClientMatch / minimum-RSSI so the client is steered to a closer AP."] if sticky else []) +
+                      + (" No roam was observed; this alone does not prove a sticky client or client movement." if sticky else ""),
+                      (["Check ClientMatch history, client capabilities and measured neighbour SNR before changing steering thresholds."] if sticky else []) +
                       ["Check where the user sits relative to the AP; add/move coverage if it is a desk area.",
                        "Update the client's Wi-Fi driver; disable aggressive power saving."],
                       "RF plan / client", "high" if sticky else "medium"))
@@ -181,7 +181,7 @@ def diagnose_client(c: dict[str, Any], ap: dict[str, Any] | None, cluster_aps: i
                       ["Usable, but sensitive to interference; check the AP's channel utilisation."], "RF plan", "medium"))
     if band == "2.4GHz" and (snr or 0) >= 25:
         out.append(_f("medium", "band", "Client is on 2.4 GHz with a strong signal",
-                      "2.4 GHz is slower and more congested; this client could likely use 5 GHz.",
+                      "This client uses 2.4 GHz. Its 5 GHz capability and RF coverage have not been established.",
                       ["Enable band steering on the SSID; confirm the device supports 5 GHz."], "RF plan / client", "medium"))
     if speed is not None and speed < 24 and (snr or 0) >= 25:
         out.append(_f("medium", "low_rate", "Low data rate despite good signal",
