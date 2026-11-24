@@ -124,10 +124,13 @@ def record_aaa(body: AaaSession, request: Request, db: Session = Depends(get_db)
 def change_timeline(device_id: str, db: Session = Depends(get_db),
                     user: User = Depends(require_any_role("admin", "auditor", "operator"))):
     d = real_device(db, device_id)
+    from .production_ops import _require_hardware_log_scope
+    _require_hardware_log_scope(db, user, d)
     attrs = list(db.scalars(select(ChangeAttribution).where(ChangeAttribution.device_id == d.id)
                             .order_by(ChangeAttribution.change_at.desc(), ChangeAttribution.created_at.desc())))
     superseded = {a.supersedes_id for a in attrs if a.supersedes_id}
-    logs = list(db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id == d.id)
+    logs = list(db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id == d.id,
+                           DeviceLogEvent.transport_quality != "AUTHENTICATED_POLL")
                            .order_by(DeviceLogEvent.observed_at.desc()).limit(200)))
     sources = set()
     if logs:
