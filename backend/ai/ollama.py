@@ -49,7 +49,7 @@ class OllamaClient:
     def __init__(self, base_url: str, model: str | None, timeout: float, transport: httpx.BaseTransport | None = None):
         self.model = model
         self._http = httpx.Client(base_url=base_url, timeout=httpx.Timeout(timeout, connect=5.0),
-                                  transport=transport or _TRANSPORT)
+                                  transport=transport or _TRANSPORT, trust_env=False)
 
     def close(self) -> None:
         self._http.close()
@@ -78,7 +78,8 @@ class OllamaClient:
         data = self._request("GET", "/api/tags")
         return sorted({m.get("name", "") for m in data.get("models", []) if isinstance(m, dict) and m.get("name")})
 
-    def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int = 700) -> str:
+    def chat(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int = 700,
+             context_window: int | None = None, timeout_seconds: float | None = None, retry_empty: bool = True) -> str:
         """One non-streaming chat call.
 
         "Thinking" (reasoning) models can spend the whole token budget on hidden reasoning and return an empty answer.
@@ -89,12 +90,16 @@ class OllamaClient:
             raise OllamaError("No model selected. An admin can choose one on the Assistant page.")
         body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": False, "think": False,
                                 "options": {"temperature": 0.2, "num_predict": max_tokens}}
+        if context_window is not None:
+            body["options"]["num_ctx"] = context_window
         if json_mode:
             body["format"] = "json"
 
+        request_options = {"timeout":httpx.Timeout(timeout_seconds,connect=5.0)} if timeout_seconds is not None else {}
+
         def call() -> dict[str, Any]:
             try:
-                return self._request("POST", "/api/chat", json=body)
+                return self._request("POST", "/api/chat", json=body, **request_options)
             except OllamaError as exc:
                 if exc.status == 400 and "think" in body:  # model does not accept the think option
                     del body["think"]
@@ -104,7 +109,7 @@ class OllamaClient:
         data = call()
         msg = data.get("message") or {}
         text = msg.get("content")
-        if (not isinstance(text, str) or not text.strip()) and msg.get("thinking"):
+        if (not isinstance(text, str) or not text.strip()) and msg.get("thinking") and retry_empty:
             body["options"]["num_predict"] = max_tokens * 4  # reasoning ate the budget: give it room, once
             data = call()
             text = (data.get("message") or {}).get("content")
