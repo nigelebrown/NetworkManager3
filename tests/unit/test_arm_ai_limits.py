@@ -29,3 +29,19 @@ def test_arm_explanation_does_not_expand_a_hidden_thinking_budget():
             c.chat([{"role":"user","content":"facts"}],max_tokens=100,timeout_seconds=60,retry_empty=False)
     finally:c.close()
     assert len(seen)==1
+
+
+def test_arm_ai_summary_omits_raw_configuration_and_prioritizes_verified_state():
+    from backend.api.ap_operations import _arm_ai_facts
+    facts={"arm":{"freshness":"FRESH","channels":[{"band":"5","channel":165,"util_percent":9,"quality_percent":99}],
+                  "config":{"unused":"x"*100000},"history":["x"*100000]},
+           "rule_findings":[{"severity":"info","title":"healthy","why":"keep ARM"}],"allowed_changes":[]}
+    compact=_arm_ai_facts(facts)
+    assert len(json.dumps(compact))<1200 and compact["radios"][0]["channel"]==165
+    assert compact["findings"]==[] and compact["allowed_changes"]==[]
+
+def test_arm_ai_does_not_present_stale_radios_as_current_measurements():
+    from backend.api.ap_operations import _arm_ai_facts
+    compact=_arm_ai_facts({"arm":{"freshness":"STALE","channels":[{"channel":165}]},
+                          "allowed_changes":[{"to":36}]})
+    assert compact["radios"]==[] and compact["allowed_changes"]==[]
