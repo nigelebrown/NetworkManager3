@@ -116,7 +116,15 @@ def download(change_id: int, token: str, filename: str, request: Request, db: Se
     ok = (images.link_valid(token, change_id, filename) and ch is not None and ch.kind == "firmware_stage"
           and ch.status in ("applied", "applied_unverified") and images.link_window_open(ch.applied_at)
           and filename in {i.get("filename") for i in (ch.plan or {}).get("images", [])})
-    path = images.image_path(filename) if ok else None
+    path = None
+    if ok:
+        item = next((i for i in (ch.plan or {}).get("images", []) if i.get("filename") == filename), None)
+        if item:
+            try:
+                path = images.verify_image(filename, item.get("sha256"), item.get("size_bytes"))
+            except images.ImageError:
+                audit(db, "firmware_download_integrity_refused", username=None, target=f"image:{filename}",
+                      detail=f"change #{change_id}", request=request, success=False)
     if path is None:
         raise HTTPException(404, "Not found")  # same answer for every failure: reveals nothing
     audit(db, "firmware_download", username=None, target=f"image:{filename}",
