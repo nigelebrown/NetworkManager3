@@ -242,3 +242,19 @@ def test_optimizer_pauses_when_execution_is_not_verified(client,admin,arm_device
         assert result["executed"]==0 and result["failed"]==0 and result["denied"]==0
         db.refresh(e)
         assert e.status=="PAUSED" and "ABORTED" in e.status_reason
+
+
+def test_optimizer_does_not_report_missing_arm_data_as_healthy(client,admin,arm_device):
+    from backend.database.models_phases import OptimizationEnrollment
+    did,m=arm_device
+    with session_scope() as db:
+        d=db.get(InmDevice,did)
+        e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED")
+        db.add(e);db.flush()
+        AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
+        result=O.run_optimizer(db,actor="test")
+        assert result["insufficient_evidence"]==1 and result["no_adjustment_needed"]==0 and result["executed"]==0
