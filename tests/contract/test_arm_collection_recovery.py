@@ -85,3 +85,18 @@ def test_failed_vc_rest_poll_does_not_stop_direct_ap_measurements(client,admin,a
         db.get(InmDevice,did).legacy_site_id=site.id
     AM.tick(session_scope,"test-vc-outage",limit=2)
     assert did in calls
+
+
+def test_switch_at_ap_address_is_reported_as_wrong_device_not_missing_rf(client,admin,arm_device,monkeypatch):
+    from backend.aruba.errors import ArubaCommandError
+    did,_=arm_device
+    monkeypatch.setattr("backend.api.quick_devices._permit_probe",lambda ip:None)
+    class Reader:
+        def show(self,cmd):
+            if cmd=="show version":return {"Command output":"ArubaOS-CX\nVersion : PL.10.10.1100"}
+            raise ArubaCommandError("Invalid input: ap")
+    with session_scope() as db:
+        value=AM.collect(db,db.get(InmDevice,did),client=Reader())
+        assert value["state"]=="DEVICE_TYPE_MISMATCH"
+        assert "ArubaOS-CX" in value["errors"]["device_type"]
+        assert value["collection_state"]=="FAILED" and not value["channels"]
