@@ -62,6 +62,7 @@ def _identity(reader, outputs, device, target_ip=None):
 def collect(db, device, actor="arm-collector", *, client=None):
     """SSH always targets the individual AP, never labels VC measurements as a member's."""
     from ..api.quick_devices import _permit_probe
+    from ..aruba.errors import ArubaCommandError
     from ..aruba.ssh import SshShowClient
     from ..aruba.client import ArubaClient, ArubaTarget
     from ..config import get_settings
@@ -139,6 +140,13 @@ def collect(db, device, actor="arm-collector", *, client=None):
             except Exception as exc:
                 errors[key] = type(exc).__name__
                 if not outputs:  # one unreachable AP must not consume five command timeouts
+                    if key == "rf" and isinstance(exc, ArubaCommandError):
+                        try:
+                            version = output_text(client.show("show version",iap_ip=target_ip) if target_ip else client.show("show version"))
+                            if "arubaos-cx" in version.lower():
+                                errors["device_type"] = "Expected an Instant AP; this management address reports ArubaOS-CX"
+                        except Exception:
+                            pass
                     break
         if outputs:
             try:
@@ -154,6 +162,8 @@ def collect(db, device, actor="arm-collector", *, client=None):
     if outputs and not identity["verified"]:
         parsed["state"]="TARGET_UNVERIFIED"
         errors["identity"]="Local AP identity did not match the requested inventory target"
+    if errors.get("device_type"):
+        parsed["state"]="DEVICE_TYPE_MISMATCH"
     # Direct command data is a measurement, not proof that all configuration operations are writable.
     value = {**parsed,"device_id":device.id,"observed_at":now.isoformat(),"transport":transport,
              "collection_state":"SUCCEEDED" if parsed["state"]=="MEASURED" else "FAILED",
