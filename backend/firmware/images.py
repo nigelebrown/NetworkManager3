@@ -89,6 +89,34 @@ def image_path(filename: str) -> Path | None:
     return p if p.parent == image_dir().resolve() and p.is_file() else None
 
 
+def verify_image(filename: str, expected_sha256: str, expected_size: int) -> Path:
+    """Verify exact planned bytes, not merely a matching file name or version.
+
+    This checks content integrity only. It is not vendor-signature verification.
+    """
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ImageError("Image lacks a complete SHA-256 digest; create a new upgrade plan.")
+    if type(expected_size) is not int or not 1024 <= expected_size <= get_settings().max_firmware_mb * CHUNK:
+        raise ImageError("Image size is not within the configured limit.")
+    path = image_path(filename)
+    if path is None:
+        raise ImageError("The planned firmware file is missing.")
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(CHUNK):
+                size += len(chunk)
+                if size > expected_size:
+                    raise ImageError("Firmware file no longer matches the approved size.")
+                digest.update(chunk)
+    except OSError:
+        raise ImageError("The planned firmware file could not be read.") from None
+    if size != expected_size or not hmac.compare_digest(digest.hexdigest(), expected_sha256):
+        raise ImageError("Firmware file integrity check failed; upload a verified image and re-plan.")
+    return path
+
+
 # ---- download links ------------------------------------------------------------------------------
 def token_for(change_id: int, filename: str) -> str:
     return hmac.new(get_settings().jwt_secret.encode(), f"fw:{change_id}:{filename}".encode(), hashlib.sha256).hexdigest()
