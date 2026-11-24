@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database.models import AppSetting
 from ..database.models_inm import InmDevice
 from ..database.models_phases import (ChangePlan, ChangeExecution, CollectionPlan, ConfigArtifact, ExecutionDecision,
                                       OptimizationEnrollment, OptimizationSitePolicy)
@@ -173,7 +174,15 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
         return {**out,"busy":1}
     try:
         enrollments=list(db.scalars(select(OptimizationEnrollment).where(
-            OptimizationEnrollment.status=="ARMED").order_by(OptimizationEnrollment.created_at).limit(50)))
+            OptimizationEnrollment.status=="ARMED").order_by(OptimizationEnrollment.created_at).limit(2000)))
+        from .ap_autodiscovery import _get,_put
+        cursor=int((_get(db,"optimizer:cursor") or {}).get("offset",0))
+        if enrollments:
+            cursor=cursor%len(enrollments)
+            ordered=enrollments[cursor:]+enrollments[:cursor]
+            enrollments=ordered[:50]
+            _put(db,"optimizer:cursor",{"offset":cursor+len(enrollments)},actor)
+            db.commit()
         for e in enrollments:
             did=e.device_id
             try:
@@ -263,9 +272,9 @@ def _check_outcome(db: Session, device: InmDevice, e: OptimizationEnrollment, ac
         return 0
     rows=store.query(device_id=device.id,metric_name="experience_score",
         since=applied-timedelta(hours=1),limit=1000)
-    def window(lo,hi):
+    def window(lo,hi,series=None):
         out=[]
-        for r in rows:
+        for r in (rows if series is None else series):
             ts=r.get("observed_at")
             if isinstance(ts,str): ts=datetime.fromisoformat(ts.replace("Z","+00:00"))
             if ts and lo<=_utc(ts)<hi:
@@ -281,6 +290,12 @@ def _check_outcome(db: Session, device: InmDevice, e: OptimizationEnrollment, ac
         return (max(times)-min(times)).total_seconds() if len(times)>=2 else 0
     if result["status"]=="INSUFFICIENT_EVIDENCE" or span(before)<900 or span(after)<900:
         plan.rollback_plan={**(plan.rollback_plan or {}),"outcome":{**result,"status":"INSUFFICIENT_EVIDENCE"}}
+        return 0
+    counts=store.query(device_id=device.id,metric_name="client_count",since=applied-timedelta(hours=1),limit=1000)
+    cb=[r["value"] for r in window(applied-timedelta(hours=1),applied,counts) if r.get("value") is not None]
+    ca=[r["value"] for r in window(applied,t,counts) if r.get("value") is not None]
+    if len(cb)<5 or len(ca)<5 or abs(sum(cb)/len(cb)-sum(ca)/len(ca))>max(2,0.2*sum(cb)/len(cb)):
+        plan.rollback_plan={**(plan.rollback_plan or {}),"outcome":{**result,"status":"INSUFFICIENT_EVIDENCE","confounders":["CLIENT_POPULATION_UNMATCHED"]}}
         return 0
     degraded=result["status"]=="DEGRADED" and (result.get("quality_delta") or 0)<=-10
     plan.rollback_plan={**(plan.rollback_plan or {}),"outcome_checked":True,"outcome":result}
