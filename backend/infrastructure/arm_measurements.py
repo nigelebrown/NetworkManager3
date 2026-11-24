@@ -81,6 +81,7 @@ def collect(db, device, actor="arm-collector", *, client=None):
                             "trust":"FIRST_USE_AUTHENTICATED_ARM"},actor)
                         audit(db,"arm_ssh_first_use_authenticated",username=actor,target=device.id,
                               detail="Saved credentials, AP name and Aruba identity verified before pinning first SSH key")
+                        db.commit()  # release the audit-chain row before any further network I/O
                         client=candidate
                         outputs["environment"]=environment
                         transport="PINNED_SSH_DIRECT_AP"
