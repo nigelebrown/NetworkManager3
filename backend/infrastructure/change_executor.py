@@ -359,9 +359,9 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
         return {"decision": "DENY", "decision_id": dec.id, "denial_reason": dec.denial_reason, "guards": dec.guards,
                 "device_writes": 0, "adapter_called": False, "environment": env}
     # single execution: APPROVED -> EXECUTING compare-and-set
-    res = db.execute(update(ChangePlan).where(ChangePlan.id == plan.id, ChangePlan.state == "APPROVED")
-                     .values(state="EXECUTING").execution_options(synchronize_session=False))
-    if res.rowcount != 1:
+    claimed_plan = db.scalar(update(ChangePlan).where(ChangePlan.id == plan.id, ChangePlan.state == "APPROVED")
+                     .values(state="EXECUTING").returning(ChangePlan.id).execution_options(synchronize_session=False))
+    if claimed_plan is None:
         _release(db, device.id, holder)
         return {"decision": "DENY", "denial_reason": "Plan is already executing or executed.", "device_writes": 0,
                 "adapter_called": False, "environment": env}
