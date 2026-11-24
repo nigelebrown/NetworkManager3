@@ -173,7 +173,7 @@ def assessments(snapshot, *, now=None):
             # Even a justified candidate is manual review: do not fight native ARM's client-aware decisions.
             proposal = ({"operation":"ap.radio.channel","band":band+" GHz","from":ch,"to":target["channel"],
                          "power":a.get("power_dbm"),"basis":"ARM RF and quality history; manual override requires review"}
-                        if target and a.get("seconds_since_channel_change",0)>=900 else None)
+                        if target and (a.get("seconds_since_channel_change") or 0)>=900 else None)
             finding("arm_quality_"+band,"medium","Persistent ARM quality or retry degradation",
                     f"{band} GHz channel {ch} shows repeated poor quality or retries in ARM's own history.",
                     ["Check connected-client experience, ARM history reasons, client-aware deferrals and scanning before overriding ARM.",
