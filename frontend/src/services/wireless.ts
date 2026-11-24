@@ -57,7 +57,7 @@ export interface Finding { id: string; severity: "high" | "medium" | "low" | "in
   owner: string; confidence: string; proposal: { operation: string; band: string; from: number | null; to: number | null; power?: number; arm_managed?: boolean; basis?: string } | null }
 export interface Diagnosis { subject: Record<string, unknown>; headline: string; findings: Finding[];
   proposals: Finding["proposal"][]; method: string;
-  arm?: { state: string; observed_at?: string; collection_state?: string; last_attempt_at?: string;
+  arm?: { state: string; freshness?: string; observed_at?: string; collection_state?: string; last_attempt_at?: string;
     transport?: string; unavailable?: string[]; errors?: Record<string,string>;
     channels: { band: string; channel: number; util_percent: number; quality_percent: number;
       retry_percent: number; noise_floor_dbm: number; interference_index: number | null }[];
