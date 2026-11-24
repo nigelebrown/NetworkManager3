@@ -119,13 +119,14 @@ def test_allow_evaluations_do_not_consume_the_hardware_action_budget(client,admi
     from backend.infrastructure import change_executor as X
     did,m=arm_device
     monkeypatch.setenv("INM_AUTOMATIC_OPTIMIZATION","true")
+    monkeypatch.setattr(O,"get_settings",lambda:SimpleNamespace(device_write_lock=False,allow_config_changes=True))
     monkeypatch.setattr(X,"certification_map",lambda db,d:{"ap.radio.channel":"CERTIFIED_WRITE"})
     with session_scope() as db:
         d=db.get(InmDevice,did)
         art=X.seal_artifact(db,d,b"test-only complete configuration",trigger="MANUAL",actor="tester",source="DEVICE_READ")
         e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
             firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
-            value_constraints={},cooldown_seconds=3600,max_actions_per_day=2,
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
             expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
             independent_approver_id="reviewer",status="ARMED")
         db.add(e);db.flush()
@@ -160,7 +161,9 @@ def test_degradation_rollback_uses_exact_journal_and_reports_only_verified_resto
                         "observed_at":applied+(timedelta(minutes=minute) if after else -timedelta(minutes=minute)),
                         "value":5 if metric_name=="client_count" else 60 if after else 90})
             return rows
-    monkeypatch.setattr(runtime,"telemetry_store",lambda:Store())
+    factory=lambda:Store()
+    factory.cache_clear=lambda:None
+    monkeypatch.setattr(runtime,"telemetry_store",factory)
     captured=[]
     def execute(db,p,**kw):
         captured.append(p)
