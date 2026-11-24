@@ -15,7 +15,8 @@ MAX_MESSAGE_CHARS = 1200
 MAX_LOG_BYTES = 256_000
 _PRIVATE = re.compile(
     r"(?i)\b(password|passwd|passphrase|secret|token|authorization|api[_-]?key|"
-    r"radius[_-]?key|sid|session[_-]?id)\b\s*[:=]\s*[^\s,;]+"
+    r"radius[_-]?key|sid|session[_-]?id|community|psk)\b"
+    r"""['"]?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;]+)"""
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+")
 _URL_CRED = re.compile(r"(?i)(https?://)([^\s/@:]+):([^\s/@]+)@")
