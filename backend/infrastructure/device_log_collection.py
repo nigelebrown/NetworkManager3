@@ -94,7 +94,7 @@ def persist(db, device, entries, kind, scope, address, collected):
             level = "unknown"
         if not message:
             continue
-        identity = [device.id if scope == "device" else address, scope, kind,
+        identity = [device.id, address, scope, kind,
                     timestamp, message, actor, action, level]
         digest = hashlib.sha256(json.dumps(identity, ensure_ascii=True).encode()).hexdigest()
         text = ("[Device-reported time: " + timestamp[:100] + "] " if timestamp else "") + message
