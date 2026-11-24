@@ -219,3 +219,26 @@ def test_first_use_ssh_requires_saved_login_and_matching_aruba_identity(client,a
         assert value["state"]=="MEASURED" and value["transport"]=="PINNED_SSH_DIRECT_AP"
         assert AD.pinned_fingerprint(db,"10.9.8.10")=="SHA256:measured"
     assert calls[:2]==["show ap-env","show version"] and closed
+
+
+def test_optimizer_pauses_when_execution_is_not_verified(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment
+    from backend.infrastructure import change_executor as X
+    did,m=arm_device
+    monkeypatch.setenv("INM_AUTOMATIC_OPTIMIZATION","true")
+    monkeypatch.setattr(O,"get_settings",lambda:SimpleNamespace(device_write_lock=False,allow_config_changes=True))
+    monkeypatch.setattr(X,"certification_map",lambda db,d:{"ap.radio.channel":"CERTIFIED_WRITE"})
+    monkeypatch.setattr(X,"execute_plan",lambda *a,**kw:{"decision":"ALLOW","outcome":"ABORTED"})
+    with session_scope() as db:
+        d=db.get(InmDevice,did)
+        X.seal_artifact(db,d,b"test-only full configuration",trigger="MANUAL",actor="tester",source="DEVICE_READ")
+        e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED",standing_approval=True)
+        db.add(e);db.flush();eid=e.id
+        result=O.run_optimizer(db,actor="test")
+        assert result["executed"]==0 and result["failed"]==0 and result["denied"]==0
+        db.refresh(e)
+        assert e.status=="PAUSED" and "ABORTED" in e.status_reason
