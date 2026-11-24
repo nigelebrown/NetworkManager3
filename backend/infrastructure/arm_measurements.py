@@ -170,7 +170,7 @@ def collect(db, device, actor="arm-collector", *, client=None):
     return value
 
 
-def tick(session_factory, owner, limit=2):
+def tick(session_factory, owner, limit=4):
     holder = owner+"-"+uuid.uuid4().hex[:8]
     with session_factory() as db:
         if not _lease(db,"arm-measurement-scheduler",holder,ttl=180):
