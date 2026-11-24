@@ -21,7 +21,13 @@ PREFIX = "arm-rf:"
 
 def snapshot(db, device_id):
     row = db.get(AppSetting, PREFIX+device_id)
-    return dict(row.value) if row else {"state":"NOT_COLLECTED","source":arm.SOURCE,"device_id":device_id}
+    value=dict(row.value) if row else {"state":"NOT_COLLECTED","source":arm.SOURCE,"device_id":device_id}
+    try:
+        age=(datetime.now(timezone.utc)-datetime.fromisoformat(value.get("observed_at",""))).total_seconds()
+        value["freshness"]="FRESH" if value.get("state")=="MEASURED" and 0<=age<=900 else "STALE"
+    except (ValueError,TypeError):
+        value["freshness"]="MISSING"
+    return value
 
 
 def request(db, device_id, actor):
