@@ -167,9 +167,24 @@ def port_intent(eff: dict, ports: list[str]) -> dict[str, dict]:
 
 
 # ---- facts from captured configuration ------------------------------------------------------------------------
+def _reference_ids(ref) -> list[int]:
+    """Read legacy string/list and current CX reference-map forms."""
+    values = ref.values() if isinstance(ref, dict) else ref
+    if isinstance(values, (str, int)):
+        values = [values]
+    if values is None:
+        return []
+    ids = set()
+    for value in values:
+        tail = str(value).rsplit("/", 1)[-1]
+        if tail.isdigit() and 1 <= int(tail) <= 4094:
+            ids.add(int(tail))
+    return sorted(ids)
+
+
 def _tail_id(ref) -> int | None:
-    s = str(ref or "").rsplit("/", 1)[-1]
-    return int(s) if s.isdigit() else None
+    ids = _reference_ids(ref)
+    return ids[0] if len(ids) == 1 else None
 
 
 def cx_facts(cfg: dict) -> dict:
@@ -184,7 +199,7 @@ def cx_facts(cfg: dict) -> dict:
         poe = (it.get("poe") or {}).get("config") or {}
         ports[str(it.get("name") or name)] = {
             "vlan_mode": it.get("vlan_mode"), "access_vlan": _tail_id(it.get("vlan_tag")),
-            "trunk_vlans": sorted(x for x in (_tail_id(v) for v in it.get("vlan_trunks") or []) if x),
+            "trunk_vlans": _reference_ids(it.get("vlan_trunks")),
             "admin_state": it.get("admin") or it.get("admin_state") or "up",
             "description": it.get("description") or "",
             "bpdu_guard": "enabled" if (it.get("stp_config") or {}).get("bpdu_guard_enable") else "disabled",
