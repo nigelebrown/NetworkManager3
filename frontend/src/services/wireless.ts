@@ -54,9 +54,17 @@ export interface HealthReport {
 }
 export interface Snapshot { id: string; label: string; generated_at: string; scope: string; source: string; tiers: Record<Tier, number>; saved_by: string }
 export interface Finding { id: string; severity: "high" | "medium" | "low" | "info"; title: string; why: string; actions: string[];
-  owner: string; confidence: string; proposal: { operation: string; band: string; from: number | null; to: number | null } | null }
+  owner: string; confidence: string; proposal: { operation: string; band: string; from: number | null; to: number | null; power?: number; arm_managed?: boolean; basis?: string } | null }
 export interface Diagnosis { subject: Record<string, unknown>; headline: string; findings: Finding[];
   proposals: Finding["proposal"][]; method: string;
+  arm?: { state: string; observed_at?: string; collection_state?: string; last_attempt_at?: string;
+    transport?: string; unavailable?: string[]; errors?: Record<string,string>;
+    channels: { band: string; channel: number; util_percent: number; quality_percent: number;
+      retry_percent: number; noise_floor_dbm: number; interference_index: number | null }[];
+    assignments: { interface: string; band: string; channel: number; power_dbm: number }[] };
+  baseline?: { available: boolean; source_name?: string; scope?: string; reason?: string;
+    reference_channels_5g?: number[]; observed_channels_5g?: number[];
+    differences?: { setting: string; reference: unknown; observed: unknown; status: string }[] };
   ai?: { available: boolean; text?: string; model?: string; reason?: string };
   checked?: Record<string, string | number | null> }
 export interface WClient {
@@ -106,6 +114,8 @@ export interface ClusterOpt {
 }
 
 export const wl = {
+  collectArm: (id: string) => post<{state:string}>(`/v1/wireless/arm/${encodeURIComponent(id)}/collect`),
+  diagnosisPlan: (id: string, finding_id: string, observed_at: string) => post<{id:string; state:string}>(`/v1/wireless/diagnose/ap/${encodeURIComponent(id)}/change-plan`, {finding_id, observed_at}),
   fleet: () => request<Fleet>("/v1/wireless/fleet"),
   scanKeys: (device_ids?: string[]) => post<{ scanned: number; results: { ip: string; fingerprint?: string; key_type?: string; error?: string; status?: string }[];
     pending: { ip: string; fingerprint: string; key_type: string; scanned_at: string; changed_from?: string | null }[] }>("/v1/wireless/autodiscover/scan-keys", { device_ids }),
