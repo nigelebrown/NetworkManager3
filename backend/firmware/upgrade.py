@@ -36,8 +36,10 @@ def plan_upgrade(db: Session, site: Site, user: str, image_ids: list[int], *, al
     if len({i.version for i in imgs}) != 1:
         raise cfg.PlanError("All chosen images must be the same version.")
     for i in imgs:
-        if images.image_path(i.filename) is None:
-            raise cfg.PlanError(f"The stored file for {i.filename} is missing on disk. Delete and upload it again.")
+        try:
+            images.verify_image(i.filename, i.sha256, i.size_bytes)
+        except images.ImageError as exc:
+            raise cfg.PlanError(str(exc)) from None
     try:
         images.public_base()
     except images.ImageError as exc:
@@ -63,7 +65,7 @@ def plan_upgrade(db: Session, site: Site, user: str, image_ids: list[int], *, al
     ch.plan = {
         "kind": "firmware_stage", "confirm_phrase": cfg.confirm_phrase(site), "running": compliance.fmt(r), "target": imgs[0].version, "auto_reboot": "no",
         "images": [{"ap_class": i.ap_class, "filename": i.filename, "version": i.version, "size_bytes": i.size_bytes,
-                    "sha256": i.sha256[:16], "url": _masked(urls[i.ap_class])} for i in imgs],
+                    "sha256": i.sha256, "url": _masked(urls[i.ap_class])} for i in imgs],
         "warnings": warnings,
         "rollback": "SIMS cannot undo a staged image. To abandon it, do not reboot; to go back, stage the previous image.",
     }
@@ -74,6 +76,17 @@ def plan_upgrade(db: Session, site: Site, user: str, image_ids: list[int], *, al
 def apply_stage(db: Session, change: ConfigChange, site: Site, user: str, *, request: Request | None,
                 transport: httpx.BaseTransport | None) -> dict[str, Any]:
     payload = json.loads(decrypt_secret(change.payload_enc))
+    try:
+        planned = (change.plan or {}).get("images") or []
+        if not planned or {i.get("filename") for i in planned} != set(payload.get("files") or []):
+            raise images.ImageError("Firmware plan is incomplete; create a new plan.")
+        for item in planned:
+            images.verify_image(item["filename"], item.get("sha256"), item.get("size_bytes"))
+    except images.ImageError as exc:
+        change.status, change.result = "failed", str(exc)
+        audit(db, "firmware_integrity_refused", username=user, target=f"site:{site.name}",
+              detail=f"#{change.id} image integrity validation failed", request=request, success=False)
+        return {"ok": False, "status": "failed", "message": str(exc), "problems": []}
     try:
         with client_for_site(site, transport) as c:
             c.login()
