@@ -168,7 +168,8 @@ def propose(db: Session, device: InmDevice, e: OptimizationEnrollment) -> dict |
 
 def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
     out={"evaluated":0,"executed":0,"pending_approval":0,"denied":0,"rolled_back_degraded":0,
-         "no_adjustment_needed":0,"waiting_existing_plan":0,"shadow_evaluated":0,"failed":0}
+         "no_adjustment_needed":0,"insufficient_evidence":0,"manual_review_required":0,
+         "waiting_existing_plan":0,"shadow_evaluated":0,"failed":0}
     holder="optimizer-"+uuid.uuid4().hex
     if not X._lease(db,"optimizer-scheduler",holder,ttl=900):
         return {**out,"busy":1}
@@ -212,7 +213,16 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                 if existing:
                     out["waiting_existing_plan"]+=1; continue
                 if not op:
-                    out["no_adjustment_needed"]+=1; continue
+                    from ..aruba.arm import assessments
+                    from .arm_measurements import snapshot
+                    findings=assessments(snapshot(db,device.id))
+                    if any(f["id"]=="arm_missing" for f in findings):
+                        out["insufficient_evidence"]+=1
+                    elif any(f["severity"] in ("high","medium") for f in findings):
+                        out["manual_review_required"]+=1
+                    else:
+                        out["no_adjustment_needed"]+=1
+                    continue
                 out["evaluated"]+=1
                 clean={k:v for k,v in op.items() if k!="reason"}
                 res,dec=evaluate(db,device,clean,actor=actor)
