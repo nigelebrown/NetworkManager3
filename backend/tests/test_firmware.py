@@ -234,6 +234,33 @@ def test_apply_posts_os_upgrade_without_reboot_and_opens_download(env, client, a
     assert client.get(dl).status_code == 404
 
 
+def test_firmware_tamper_blocks_staging_and_download(env, client, admin_headers, upvc):
+    sid = _live_site()
+    with session_scope() as db:
+        poll_site(db, db.get(Site, sid))
+    iid = _one_image(client, admin_headers)
+    ch = _plan_upgrade(client, admin_headers, sid, [iid]).json()
+    assert len(ch["plan"]["images"][0]["sha256"]) == 64
+    path = images.image_path(NAME)
+    altered = bytes([BLOB[0] ^ 1]) + BLOB[1:]
+    path.write_bytes(altered)
+    r = client.post(f"/api/config/changes/{ch['id']}/apply",
+                    json={"confirm_text": "APPLY Lab"}, headers=admin_headers)
+    assert r.status_code == 200 and not r.json()["ok"]
+    assert "integrity" in r.json()["message"].lower()
+    assert upvc.upgrades == []
+    assert _plan_upgrade(client, admin_headers, sid, [iid]).status_code == 422
+    path.write_bytes(BLOB)
+    ch = _plan_upgrade(client, admin_headers, sid, [iid]).json()
+    r = client.post(f"/api/config/changes/{ch['id']}/apply",
+                    json={"confirm_text": "APPLY Lab"}, headers=admin_headers)
+    assert r.json()["ok"]
+    dl = f"/fw/{ch['id']}/{images.token_for(ch['id'], NAME)}/{NAME}"
+    assert client.get(dl).content == BLOB
+    path.write_bytes(altered)
+    assert client.get(dl).status_code == 404
+
+
 def test_failed_device_response_leaves_link_closed(env, client, admin_headers, upvc, monkeypatch):
     sid = _live_site()
     with session_scope() as db:
