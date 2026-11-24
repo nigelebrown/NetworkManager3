@@ -198,11 +198,15 @@ def tick(session_factory, owner):
             X._release(db, lease, holder)
 
 
+def _utc_iso(value):
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).isoformat()
+
+
 def history(db, device_id, limit=100):
     rows = db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id == device_id,
                         DeviceLogEvent.transport_quality == TRANSPORT)
                       .order_by(DeviceLogEvent.ingested_at.desc(), DeviceLogEvent.id.desc()).limit(limit))
-    return [{"id": r.id, "collected_at": r.ingested_at.isoformat(), "kind": r.event_code,
+    return [{"id": r.id, "collected_at": _utc_iso(r.ingested_at), "kind": r.event_code,
              "scope": "controller" if r.parser_version == "polled-controller-v1" else "device",
              "level": r.severity, "reported_actor": r.username, "message": r.message}
             for r in rows]
