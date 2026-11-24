@@ -150,3 +150,10 @@ def test_baseline_differences_are_comparisons_not_auto_application():
 def test_native_arm_operation_cannot_be_used_to_hide_arbitrary_manual_channel():
     with pytest.raises(PolicyViolation):
         validate_operation({"op":"ap.radio.channel","band":"5","value":149,"power":18,"arm_managed":True},family="access_point")
+
+
+def test_enabled_80mhz_capability_is_not_a_performance_alarm():
+    m=measured();m["config"]["80Mhz Support"]="enable"
+    rows=arm.assessments(m)
+    assert next(f for f in rows if f["id"]=="arm_width")["severity"]=="info"
+    assert not any(f["severity"] in ("medium","high") for f in rows)
