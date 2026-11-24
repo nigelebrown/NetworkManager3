@@ -107,8 +107,7 @@ def tick(session_factory, owner, limit=2):
         now = datetime.now(timezone.utc)
         with session_factory() as db:
             devices = list(db.scalars(select(InmDevice).where(InmDevice.source_type=="REAL",
-                InmDevice.family=="access_point",InmDevice.lifecycle!="merged",
-                InmDevice.legacy_ap_id.is_not(None)).limit(2000)))
+                InmDevice.family=="access_point",InmDevice.lifecycle!="merged").limit(2000)))
             states = {r.key[len(PREFIX):]:r.value for r in db.scalars(select(AppSetting).where(AppSetting.key.startswith(PREFIX)))}
             due = []
             for d in devices:
