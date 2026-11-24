@@ -87,7 +87,7 @@ def collect(db, device, actor="arm-collector", *, client=None):
     old = snapshot(db,device.id)
     parsed = arm.parse(outputs)
     import re
-    observed_name=re.search(r"(?im)^name\\s*:\\s*(.+)$",outputs.get("environment",""))
+    observed_name=re.search(r"(?im)^name\s*:\s*(.+)$",outputs.get("environment",""))
     if not observed_name or observed_name[1].strip().casefold()!=(device.hostname or "").casefold():
         parsed["state"]="TARGET_UNVERIFIED"
         errors["identity"]="AP name did not match the requested inventory target"
