@@ -26,7 +26,7 @@ def arm_device(client,admin,monkeypatch):
         m=measured();m["overrides"]["5"]={"chan":149,"tx_power":18}
         AD._put(db,"arm-rf:"+did,m,"test")
     ap={"device_id":did,"name":"Measured-AP","state":"ONLINE","cluster_key":"unlinked","clients":1,
-        "state_reason":"persisted real data","guidance":"monitor","radio_5g":{"channel":149,"util_percent":10,"noise_floor_dbm":-92},
+        "cluster":"Measured cluster","tier":"GOLD","state_reason":"persisted real data","guidance":"monitor","radio_5g":{"channel":149,"util_percent":10,"noise_floor_dbm":-92},
         "radio_2g":{"channel":11,"util_percent":20,"noise_floor_dbm":-96},
         "cpu_percent":20,"memory_percent":30}
     monkeypatch.setattr(API,"build_fleet",lambda db:{"aps":[ap]})
