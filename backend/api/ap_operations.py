@@ -977,10 +977,21 @@ def diagnose_ap(device_id: str, request: Request, ai: bool = False, db: Session 
     if ap["cluster_key"] != UNLINKED:
         for c in db.scalars(select(ClientRecord).where(ClientRecord.site_id == int(ap["cluster_key"]),
                                                        ClientRecord.ap_name == ap["name"],
-                                                       ClientRecord.is_connected.is_(True)).limit(500)):
+                                                       ClientRecord.is_connected.is_(True), ClientRecord.last_seen >= _now()-timedelta(minutes=15)).limit(500)):
             clients_on.append({"snr_db": c.snr_db, "band": c.band, "speed_mbps": c.speed_mbps, "quality": c.quality})
     latest = db.get(AppSetting, "ap-health:latest")
-    ev = next((r for r in (latest.value.get("rows", []) if latest else []) if r["ap"] == ap["name"]), None)
+    event_rows=[]
+    if latest:
+        try:
+            generated=datetime.fromisoformat(str(latest.value.get("generated_at","")).replace("Z","+00:00"))
+            if generated.tzinfo is None: generated=generated.replace(tzinfo=timezone.utc)
+            if timedelta(0)<=_now()-generated<=timedelta(minutes=15):
+                event_rows=latest.value.get("rows",[])
+        except (ValueError,TypeError):
+            pass
+    unique_name=sum(a["name"]==ap["name"] for a in fl["aps"])==1
+    ev=next((r for r in event_rows if r.get("ap")==ap["name"] and (
+        str(r.get("cluster_key",r.get("site_id","")))==ap["cluster_key"] or unique_name)),None)
     result = _arm_diagnosis(db, ap, neighbours, clients_on, ev)
     same5 = [n["name"] for n in neighbours if n["device_id"] != ap["device_id"] and ap["radio_5g"]["channel"]
              and n["radio_5g"]["channel"] == ap["radio_5g"]["channel"]]
