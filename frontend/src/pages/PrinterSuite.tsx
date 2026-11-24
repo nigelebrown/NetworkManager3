@@ -148,6 +148,8 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
   const job = current.data?.id === jobId ? current.data : queued?.id === jobId ? queued : null;
   const setJob = (j: Job) => { setQueued(j); setJobId(j.id); sessionStorage.setItem("printer-discovery-job", j.id); };
   const [pick, setPick] = useState<Record<string, boolean>>({});
+  // Approval selections belong to a single discovery job; never carry them across saved scans.
+  useEffect(() => { setPick({}); }, [jobId]);
   const act = useAction();
   const body = () => {
     const t = target.trim();
@@ -201,8 +203,8 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
           onChange={e => setPick({ ...pick, [p.management_ip]: e.target.checked })} />, p.management_ip, p.manufacturer ?? "—",
           p.model ?? <span title={p.reported_model}>not recognised</span>, p.serial_number ?? "missing", <Pill value={p.confidence} tone={p.confidence === "HIGH" ? "good" : "fair"} />,
           (creds.data ?? []).find(c => c.id === p.credential_profile_id)?.name || p.profile, p.existing_printer_id ? "registered" : "new"])} empty="" />
-      <button className={`${btn} mt-2`} disabled={act.busy || !Object.values(pick).some(Boolean)} onClick={() => act.run(async () => {
-        const items = found.filter(p => pick[p.management_ip]).map(p => ({ management_ip: p.management_ip, manufacturer: p.manufacturer || "Unknown",
+      <button className={`${btn} mt-2`} disabled={act.busy || !found.some(p => p.serial_number && pick[p.management_ip])} onClick={() => act.run(async () => {
+        const items = found.filter(p => p.serial_number && pick[p.management_ip]).map(p => ({ management_ip: p.management_ip, manufacturer: p.manufacturer || "Unknown",
           model: p.model || p.reported_model || "Unknown", serial_number: p.serial_number, hostname: p.hostname }));
         const r = await prn.approve(job.id, { items }); onDone(); setPick({});
         return `${r.created.length} registered, ${r.updated.length} updated; monitoring enabled (read-only).`;
