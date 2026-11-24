@@ -183,6 +183,17 @@ export interface DeviceOriginLogs {
   device_id: string; environment: string; kind: string; count: number;
   hardware_verified: boolean; records: DeviceOriginLog[];
 }
+export interface DeviceLogSchedule {
+  device_id: string; eligible: boolean; enabled?: boolean; interval_minutes?: number;
+  next_due_at?: string; last_attempt_at?: string; last_completed_at?: string;
+  last_result?: { state: string; reason?: string; records_added?: number;
+    categories?: Record<string, { state: string; received?: number; added?: number; reason?: string; possibly_truncated?: boolean }> };
+}
+export interface DeviceLogHistory {
+  device_id: string; timestamp_semantics: string; attribution_verified: boolean;
+  records: { id: string; collected_at: string; kind: string; scope: string; level: string;
+    reported_actor: string | null; message: string }[];
+}
 export interface DeviceDiagnostic {
   device_id: string; environment: string; kind: string; command: string; source: string;
   output: string; hardware_verified: boolean; device_writes: number;
@@ -201,6 +212,12 @@ export const rw = {
   ports: (id: string) => request<Ports>(`/v1/devices/${enc(id)}/ports`),
   deviceLogs: (id: string, kind: "audit" | "event" | "system" | "security" | "user", limit = 50) =>
     request<DeviceOriginLogs>(`/v1/devices/${enc(id)}/device-logs?kind=${enc(kind)}&limit=${limit}`),
+  deviceLogSchedule: (id: string) => request<DeviceLogSchedule>(`/v1/devices/${enc(id)}/device-log-collection`),
+  setDeviceLogSchedule: (id: string, enabled: boolean, interval_minutes: number) =>
+    request<DeviceLogSchedule>(`/v1/devices/${enc(id)}/device-log-collection`, {
+      method: "PUT", body: JSON.stringify({ enabled, interval_minutes })
+    }),
+  deviceLogHistory: (id: string) => request<DeviceLogHistory>(`/v1/devices/${enc(id)}/device-log-history`),
   diagnostics: (id: string, kind: string) =>
     request<DeviceDiagnostic>(`/v1/devices/${enc(id)}/diagnostics?kind=${enc(kind)}`),
   authority: (id: string) => request<{ authority: string; detail: string; environment: string }>(`/v1/devices/${enc(id)}/authority`),
