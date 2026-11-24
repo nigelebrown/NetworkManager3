@@ -155,7 +155,9 @@ def assessments(snapshot, *, now=None):
             finding("arm_override_"+band,"medium","Static channel override limits native ARM",
                     f"{band} GHz has an explicit channel override; ARM may not choose its own channel.",
                     ["Review why the override exists and remove it through a reviewed device change if no longer required."],
-                    {"channel":ch,"override":overrides})
+                    {"channel":ch,"override":overrides},
+                    {"operation":"ap.radio.channel","band":band+" GHz","from":ch,"to":0,"power":0,
+                     "arm_managed":True,"basis":"Remove measured static override and return channel/power to native ARM"})
         if cfg.get("Scanning") == "disable" or cfg.get("Client Aware") == "disable":
             finding("arm_controls_"+band,"medium","ARM protection or scanning is disabled",
                     "Native scanning/client-aware protection is not fully enabled.",
