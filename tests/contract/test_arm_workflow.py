@@ -136,7 +136,7 @@ def test_allow_evaluations_do_not_consume_the_hardware_action_budget(client,admi
         assert first["decision"]==second["decision"]=="ALLOW"
         for i in range(2):
             p=ChangePlan(device_id=did,title="Measured adjustment",operations=[op],capability_report=[],
-                plan_hash="test-hash",source="AUTO_OPTIMIZER",requester="requester",state="APPLIED_VERIFIED")
+                plan_hash="test-hash",source="AUTO_OPTIMIZER",requester="requester",state="APPLIED_VERIFIED",rollback_plan={})
             db.add(p);db.flush()
             db.add(ChangeExecution(plan_id=p.id,device_id=did,environment="HARDWARE",outcome="APPLIED_VERIFIED",
                 steps=[],executed_by="tester",finished_at=datetime.now(timezone.utc)-timedelta(minutes=5)))
@@ -180,7 +180,7 @@ def test_degradation_rollback_uses_exact_journal_and_reports_only_verified_resto
             steps=[],executed_by="tester",post_artifact_id=post.id,finished_at=applied)
         db.add(ex);db.flush()
         e=OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",firmware_bound=d.firmware,
-            mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],value_constraints={},cooldown_seconds=3600,max_actions_per_day=2,
+            mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
             expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",independent_approver_id="reviewer",
             status="ARMED",last_action_id=p.id)
         db.add(e);db.flush()
