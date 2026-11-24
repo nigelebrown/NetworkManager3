@@ -53,6 +53,7 @@ def collect(db, device, actor="arm-collector", *, client=None):
     else:
         raise ValueError("No enabled saved credential is available")
     outputs, errors = {}, {}
+    target_ip = None
     owned = client is None
     transport = "TEST_INJECTED" if client else None
     if client is None:
@@ -62,13 +63,16 @@ def collect(db, device, actor="arm-collector", *, client=None):
             transport = "PINNED_SSH_DIRECT_AP"
         else:
             # A directly authenticated AP REST session gives exact measurement attribution.
-            client = ArubaClient(ArubaTarget(ip,site.vc_port if site else 4343,username,password),
+            host=site.vc_host if site and site.vc_host else ip
+            _permit_probe(ipaddress.IPv4Address(host))
+            target_ip=ip if host!=ip else None
+            client = ArubaClient(ArubaTarget(host,site.vc_port if site else 4343,username,password),
                                  timeout=8,verify=get_settings().tls_verify_arg)
-            transport = "REST_DIRECT_AP"
+            transport = "REST_TARGETED_AP" if target_ip else "REST_DIRECT_AP"
     try:
         for key,command in arm.COMMANDS.items():
             try:
-                text = output_text(client.show(command))
+                text = output_text(client.show(command,iap_ip=target_ip) if target_ip else client.show(command))
                 if len(text)>100000:
                     errors[key] = "OUTPUT_LIMIT"; continue
                 outputs[key] = text
@@ -82,6 +86,11 @@ def collect(db, device, actor="arm-collector", *, client=None):
     now = datetime.now(timezone.utc)
     old = snapshot(db,device.id)
     parsed = arm.parse(outputs)
+    import re
+    observed_name=re.search(r"(?im)^name\\s*:\\s*(.+)$",outputs.get("environment",""))
+    if not observed_name or observed_name[1].strip().casefold()!=(device.hostname or "").casefold():
+        parsed["state"]="TARGET_UNVERIFIED"
+        errors["identity"]="AP name did not match the requested inventory target"
     # Direct command data is a measurement, not proof that all configuration operations are writable.
     value = {**parsed,"device_id":device.id,"observed_at":now.isoformat(),"transport":transport,
              "collection_state":"SUCCEEDED" if parsed["state"]=="MEASURED" else "FAILED",
@@ -118,7 +127,7 @@ def tick(session_factory, owner, limit=2):
                     continue
                 ap = db.get(AccessPoint,d.legacy_ap_id)
                 site = db.get(Site,d.legacy_site_id) if d.legacy_site_id else None
-                if not queued and (not ap or ap.status.lower() not in ("up","online") or not site or not site.enabled or not site.last_poll_ok):
+                if not queued and (not ap or (ap.status or "").lower() not in ("up","online") or not site or not site.enabled or not site.last_poll_ok):
                     continue
                 due.append((not queued,state.get("last_attempt_at",""),d.id))
             ids = [x[2] for x in sorted(due)[:limit]]
