@@ -29,6 +29,51 @@ const AP_TRENDS = [
   ["util_5g_percent", "5 GHz channel utilization", "%"],
 ] as const;
 
+function DeviceLogArchive({ deviceId }: { deviceId: string }) {
+  const schedule = useLoad(() => rw.deviceLogSchedule(deviceId), [deviceId], 30000);
+  const history = useLoad(() => rw.deviceLogHistory(deviceId), [deviceId], 30000);
+  const act = useAction();
+  const [minutes, setMinutes] = useState("");
+  const s = schedule.data?.device_id === deviceId ? schedule.data : undefined;
+  const records = history.data?.device_id === deviceId ? history.data.records : [];
+  const interval = minutes === "" ? (s?.interval_minutes ?? 15) : Number(minutes);
+  const admin = getSession()?.role === "admin";
+  const save = (enabled: boolean) => act.run(async () => {
+    await rw.setDeviceLogSchedule(deviceId, enabled, interval);
+    await schedule.reload();
+    return enabled ? "Schedule saved. Collection also requires the worker's live log-collection setting." : "Schedule paused; previously collected records retained.";
+  });
+  return <Card title="Scheduled device log archive">
+    <p className="text-xs text-slate-500">Read-only, opt-in collection. Timestamps indicate collection time, not verified event time.
+      AP records describe the controller's log view, not necessarily the selected member AP.</p>
+    <ErrorNote error={schedule.error || history.error} />
+    <Notice error={act.error} message={act.message} />
+    {s && <div className="mt-2 space-y-1 text-sm">
+      <p>Schedule: <b>{s.enabled ? "Enabled" : "Not enabled"}</b> · last result: {s.last_result?.state ?? "Not yet collected"}</p>
+      {s.last_result?.reason && <p>Last failure: {s.last_result.reason}</p>}
+      {s.last_completed_at && <p>Last completion: {new Date(s.last_completed_at).toLocaleString()}</p>}
+      {Object.entries(s.last_result?.categories ?? {}).map(([kind, value]) =>
+        <p key={kind}>{kind}: {value.state} · {value.received ?? 0} received · {value.added ?? 0} added
+          {value.reason ? " · " + value.reason : ""}{value.possibly_truncated ? " · possibly truncated" : ""}</p>)}
+      {admin && s.eligible && <div className="flex flex-wrap items-center gap-2">
+        <label>Interval (minutes) <input type="number" min={5} max={1440}
+          value={minutes === "" ? (s.interval_minutes ?? 15) : minutes}
+          onChange={e => setMinutes(e.target.value)} className="inm-form-control w-24" /></label>
+        <button className={btn2} disabled={act.busy || !Number.isInteger(interval) || interval < 5 || interval > 1440}
+          onClick={() => save(true)}>Enable / save schedule</button>
+        {s.enabled && <button className={btn2} disabled={act.busy} onClick={() => save(false)}>Pause schedule</button>}
+      </div>}
+    </div>}
+    <div className="mt-3 max-h-80 overflow-auto"><table className="inm-table">
+      <thead><tr><th>Collected</th><th>Category / scope</th><th>Reported actor</th><th>Message</th></tr></thead>
+      <tbody>{records.map(r => <tr key={r.id}>
+        <td>{new Date(r.collected_at).toLocaleString()}</td><td>{r.kind} / {r.scope} / {r.level}</td>
+        <td>{r.reported_actor ?? "Unknown"}</td><td className="font-mono text-xs break-words">{r.message}</td>
+      </tr>)}</tbody></table>
+      {!records.length && <p className="inm-empty">No archived records for this device.</p>}</div>
+  </Card>;
+}
+
 function ApTrends({ apId }: { apId: number }) {
   const [hours, setHours] = useState(6);
   const history = useLoad(() => api.apHistory(apId, hours), [apId, hours], 60000, ["telemetry"]);
@@ -207,6 +252,7 @@ export default function Device360() {
           {!deviceLogs.count && <div className="inm-empty">No log entries returned by the device.</div>}
         </div>}
       </Card>
+      {mayReadHardware && d && <DeviceLogArchive key={id} deviceId={id} />}
       <Card title="Live device diagnostics (read-only)">
         <p className="text-xs text-slate-500">Run a fixed, documented device show command.
           No arbitrary CLI input, no configuration operations, and no automatic changes.
