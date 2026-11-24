@@ -70,7 +70,7 @@ export default function DiagnosisPanel({ target, onClose }: {
             {(d.baseline.differences ?? []).map(x => <p key={x.setting}>{x.setting}: {String(x.observed ?? "not measured")} · reference {String(x.reference)} · {x.status}</p>)}</>}
         </section>}
         {planId && <p role="status" className="mt-2 text-sm">Reviewed change plan created. <Link className="inm-link" to={`/changes?plan=${planId}`}>Open Change Management</Link></p>}
-        <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-slate-800"><b>Most likely cause: </b>{d.headline}</div>
+        <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-slate-800"><b>Assessment: </b>{d.headline}</div>
         <ol className="mt-4 space-y-3">{d.findings.map((f, i) => <li key={f.id} className="rounded-lg border border-slate-200 p-3">
           <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-bold text-slate-400">#{i + 1}</span>
             <b className="text-slate-800">{f.title}</b><Pill value={f.severity} tone={SEV[f.severity]} />
