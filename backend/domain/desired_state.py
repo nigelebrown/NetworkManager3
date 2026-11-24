@@ -189,7 +189,7 @@ def cx_facts(cfg: dict) -> dict:
             "description": it.get("description") or "",
             "bpdu_guard": "enabled" if (it.get("stp_config") or {}).get("bpdu_guard_enable") else "disabled",
             "storm_control_kbps": (it.get("rate_limits") or {}).get("broadcast"),
-            "qos_trust": it.get("qos_trust") or "none",
+            "qos_trust": (it.get("qos_config") or {}).get("qos_trust") or it.get("qos_trust") or "none",
             "poe": "disabled" if poe.get("admin_disable") else "enabled",
             "lldp": "disabled" if (it.get("other_config") or {}).get("lldp_enable_dir") == "off" else "enabled"}
     vrf = (cfg.get("vrfs") or {}).get("mgmt") or {}
@@ -235,7 +235,9 @@ def reconcile(family: str, eff: dict, facts: dict, *, ports: list[str] | None = 
                 continue                      # this model does not have the port (e.g. 1/1/48 on a 24-port)
             if want.get("access_vlan") is not None and (h["vlan_mode"] != "access" or h["access_vlan"] != want["access_vlan"]):
                 ops.append({"op": "switch.port.access_vlan", "port": p, "value": want["access_vlan"]})
-            if want.get("trunk_vlans") and h["trunk_vlans"] != sorted(want["trunk_vlans"]):
+            if want.get("trunk_vlans") and (h["trunk_vlans"] != sorted(want["trunk_vlans"])
+                                           or h["vlan_mode"] != "native-untagged"
+                                           or h["access_vlan"] != want.get("native_vlan", 1)):
                 ops.append({"op": "switch.port.trunk_vlans", "port": p, "value": sorted(want["trunk_vlans"]),
                             **({"native": want["native_vlan"]} if want.get("native_vlan") else {})})
             for key, op in (("admin_state", "switch.port.admin_state"), ("poe", "switch.port.poe"),
