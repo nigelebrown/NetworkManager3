@@ -54,7 +54,7 @@ export default function DiagnosisPanel({ target, onClose }: {
       }}>{collecting ? "Collecting ARM measurements…" : "Refresh native ARM measurements"}</button>}
       {d && <>
         {d.arm && <section className="mt-3 rounded border p-3 text-xs">
-          <b>Native Aruba ARM · {d.arm.state}</b>
+          <b>Native Aruba ARM · {d.arm.state} · {d.arm.freshness ?? "MISSING"}</b>
           <p>{d.arm.observed_at ? new Date(d.arm.observed_at).toLocaleString() : "Not collected"} · {d.arm.transport ?? "No transport evidence"}</p>
           {(d.arm.assignments ?? []).map(a => <p key={a.interface}>{a.band} GHz: channel {a.channel}, {a.power_dbm} dBm · {a.interface}</p>)}
           <div className="overflow-x-auto"><table className="inm-table mt-2"><thead><tr><th>GHz/ch</th><th>Busy</th><th>Quality</th><th>Retry</th><th>Noise</th><th>Interference index</th></tr></thead>
