@@ -176,6 +176,24 @@ class ArubaInstantWriter:
         return {"kind": kind, "command": cmd, "output": safe_output(result),
                 "source": "INSTANT_SSH_SHOW" if ssh else "INSTANT_REST_SHOW"}
 
+    def identity(self) -> dict:
+        """Read the exact target AP identity, never assume a controller's identity is its member's."""
+        from ...aruba import parsers
+        from ...aruba.errors import ArubaError
+        try:
+            aps = parsers.normalize_aps(parsers.extract_rows(self.client.show("show aps"), "show aps"))
+            members = [ap for ap in aps if ap.get("ip") == self.ap_ip]
+            if len(members) != 1:
+                raise WriterError("IDENTITY_UNVERIFIED", "The target AP is not uniquely present in the controller inventory.")
+            member = members[0]
+            firmware = parsers.parse_version(self.client.show("show version", iap_ip=self.ap_ip))
+            if not member.get("serial") or not member.get("model") or not firmware:
+                raise WriterError("IDENTITY_UNVERIFIED", "Target AP serial, model or firmware could not be verified.")
+            return {"serial_number": member["serial"], "model": member["model"],
+                    "firmware": firmware, "management_ip": self.ap_ip}
+        except ArubaError:
+            raise WriterError("IDENTITY_UNVERIFIED", "Target AP identity commands failed.") from None
+
     def read_audit_logs(self, *, kind: str = "system", limit: int = 50) -> list[dict]:
         """Read a bounded Instant VC log view via the documented GET show-cmd API.
 
