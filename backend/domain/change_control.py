@@ -66,6 +66,10 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             ch, band = op.get("value"), op.get("band")
             if band not in ("2.4", "5"):
                 raise PolicyViolation("Radio band must be 2.4 or 5.")
+            if op.get("arm_managed") is True:
+                if ch != 0 or op.get("power") != 0:
+                    raise PolicyViolation("Native ARM assignment requires channel=0 and power=0.")
+                return dict(op)
             if not isinstance(ch, int) or ch not in (VALID_2G if band == "2.4" else VALID_5G):
                 raise PolicyViolation(f"Channel {ch} is not valid for {band} GHz.")
             if ch in excluded_channels:

@@ -401,6 +401,10 @@ class ArubaInstantWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k=="ap.radio.channel" and op.get("arm_managed") is True:
+            got=(self._radio_overrides() or {}).get(op.get("band","5"))
+            ok=got is not None and float(got.get("channel",0))==0 and float(got.get("power",0))==0
+            return ok,{"overrides":got,"native_arm":True}
         if k == "ap.ssid.create":
             b = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}"))
             want = {"essid": op.get("essid") or op["ssid"], "vlan": str(int(op["vlan"])),

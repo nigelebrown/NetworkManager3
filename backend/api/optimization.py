@@ -82,6 +82,12 @@ def _state(db: Session, d) -> dict:
         "badge": {"ARMED": "ARMED", "PENDING_APPROVAL": "PENDING APPROVAL", "PAUSED": "PAUSED"}.get(e.status, "AUTO OFF")}
     if e is not None and e.status == "ARMED" and (lock or stop):
         base["display"] = "Configured for future automation — currently locked"
+    from ..infrastructure.arm_measurements import snapshot
+    from ..infrastructure.ap_autodiscovery import _get
+    measurement=snapshot(db,d.id)
+    base["arm_state"]=measurement.get("state")
+    base["arm_observed_at"]=measurement.get("observed_at")
+    base["last_analysis"]=_get(db,"optimizer-analysis:"+d.id)
     return dict(base, device=device_public(d), enrollment=_enr_public(e) if e else None,
                 global_write_lock=lock, emergency_stop=stop,
                 native_vendor_optimization="Not changed by this setting (e.g. Aruba ARM remains as configured on the device).")
@@ -265,6 +271,10 @@ def put_site_policy(site_id: str, body: SitePolicyInput, request: Request, db: S
         raise HTTPException(422, "Widths may only be 20 and/or 40 MHz.")
     if any(c not in VALID_5G for c in body.allowed_channels_5g) or any(c not in VALID_2G for c in body.allowed_channels_2g):
         raise HTTPException(422, "Invalid channel in policy.")
+    if (body.window_start_hour is None)!=(body.window_end_hour is None):
+        raise HTTPException(422,"Set both UTC window hours or neither.")
+    if body.window_start_hour is not None and (not 0<=body.window_start_hour<=23 or not 0<=body.window_end_hour<=23 or body.window_start_hour==body.window_end_hour):
+        raise HTTPException(422,"UTC window hours must be distinct and in 0..23.")
     if body.min_tx_dbm > body.max_tx_dbm:
         raise HTTPException(422, "Minimum power exceeds maximum.")
     p = db.get(OptimizationSitePolicy, site_id) or OptimizationSitePolicy(site_id=site_id, updated_by=user.username)
