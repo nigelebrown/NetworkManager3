@@ -828,7 +828,8 @@ def _ai_narrative(db: Session, request: Request, user: User, kind: str, facts: d
               "data is insufficient.\n\n" + prompts.data_block(facts))
     try:
         with A._Session(db) as s:
-            text = A._chat(s, prompt, max_tokens=700)
+            text = A._chat(s, prompt+"\\nKeep the answer under 150 words; one short sentence per section.", max_tokens=220,
+                           context_window=4096,timeout_seconds=45,retry_empty=False)
             A._audit(db, request, user, f"diagnose_{kind}", s.client.model or "")
             return {"available": True, "text": text, "model": s.client.model, "ai_generated": True}
     except HTTPException as exc:
@@ -1021,7 +1022,10 @@ def diagnose_ap(device_id: str, request: Request, ai: bool = False, db: Session 
                  "client_snr": [c["snr_db"] for c in clients_on if c["snr_db"] is not None][:200],
                  "client_bands": dict(Counter(c["band"] for c in clients_on)),
                  "rule_findings": [{k: f[k] for k in ("title", "why", "actions","confidence","evidence")} for f in result["findings"]],
-                 "arm": {k:result["arm"].get(k) for k in ("state","observed_at","channels","assignments","config","unavailable")},
+                 "arm": {**{k:result["arm"].get(k) for k in ("state","observed_at","assignments","config","unavailable")},
+                         "channels":[row for row in result["arm"].get("channels",[]) if any(
+                             a.get("band")==row.get("band") and a.get("channel")==row.get("channel")
+                             for a in result["arm"].get("assignments",[]))]},
                  "client_impact":result["client_impact"],"reference_baseline":result["baseline"],
                  "allowed_changes":result["proposals"]}
         out["ai"] = _ai_narrative(db, request, user, "access point", facts)
