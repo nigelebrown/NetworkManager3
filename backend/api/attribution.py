@@ -149,8 +149,17 @@ def change_timeline(device_id: str, db: Session = Depends(get_db),
 
 @router.get("/drift")
 def drift(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor", "operator"))):
-    rows = db.scalars(select(ChangeAttribution).where(ChangeAttribution.change_type == "DIRECT_DEVICE")
-                      .order_by(ChangeAttribution.change_at.desc()).limit(300))
+    from .workflows import _authorized_sites
+    from ..security.deps import user_site_scope
+    allowed = _authorized_sites(db, user)
+    scope = user_site_scope(db, user)
+    query = select(ChangeAttribution).where(ChangeAttribution.change_type == "DIRECT_DEVICE")
+    if scope is not None:
+        from sqlalchemy import and_, or_
+        query = query.join(InmDevice, InmDevice.id == ChangeAttribution.device_id).where(
+            or_(and_(InmDevice.family == "access_point", InmDevice.legacy_site_id.in_(scope)),
+                and_(InmDevice.family != "access_point", InmDevice.site_id.in_(allowed or set()))))
+    rows = db.scalars(query.order_by(ChangeAttribution.change_at.desc()).limit(300))
     return [_attr_public(a) for a in rows]
 
 
