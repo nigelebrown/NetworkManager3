@@ -55,6 +55,32 @@ def firmware_train(fw: str | None) -> str:
     return ".".join(nums[:2]) if len(nums) >= 2 else "UNKNOWN"
 
 
+def firmware_build(fw: str | None) -> str | None:
+    """Compare the complete numeric release/build, ignoring vendor-prefix formatting."""
+    match = re.search(r"(?<!\d)\d+(?:\.\d+){2,}(?!\d)", fw or "")
+    if not match:
+        return None
+    return ".".join(str(int(part)) for part in match.group().split("."))
+
+
+def verify_hardware_identity(device: InmDevice, writer) -> dict:
+    if not hasattr(writer, "identity"):
+        raise WriterError("IDENTITY_UNVERIFIED", "No live device identity reader is available.")
+    observed = writer.identity()
+    expected_build = firmware_build(device.firmware)
+    actual_build = firmware_build(observed.get("firmware"))
+    expected_serial = (device.serial_number or "").strip().upper()
+    actual_serial = str(observed.get("serial_number") or "").strip().upper()
+    if (not expected_serial or not actual_serial or not expected_build or not actual_build
+            or not device.model or not observed.get("model")):
+        raise WriterError("IDENTITY_UNVERIFIED", "Complete serial, model and firmware evidence is required.")
+    if (expected_serial != actual_serial
+            or model_family(observed.get("model")) != model_family(device.model)
+            or expected_build != actual_build):
+        raise WriterError("IDENTITY_MISMATCH", "Live serial, model or firmware build differs from the registered device.")
+    return observed
+
+
 def environment(device: InmDevice) -> str:
     return "EMULATED" if device.source_type == "DEMO" else "HARDWARE"
 
@@ -67,7 +93,10 @@ def certification_map(db: Session, device: InmDevice) -> dict[str, str]:
         DeviceCertification.model_family == model_family(device.model),
         DeviceCertification.firmware_train == firmware_train(device.firmware),
         DeviceCertification.environment == environment(device)))
-    return {r.operation: r.status for r in rows}
+    return {r.operation: (r.status if environment(device) != "HARDWARE" or r.status != "CERTIFIED_WRITE"
+                          or (firmware_build(device.firmware) is not None and
+                              (r.evidence or {}).get("verified_firmware_build") == firmware_build(device.firmware))
+                          else "UNCERTIFIED") for r in rows}
 
 
 # ---- writer factory -------------------------------------------------------------------------------
@@ -379,13 +408,13 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
             writer, env2 = writer_for(db, device)
         writer.open()
         step("connect", True)
-        if hasattr(writer, "identity") and env == "HARDWARE":
-            ident = writer.identity()
-            same = model_family(ident.get("model")) == model_family(device.model) and \
-                firmware_train(ident.get("firmware")) == firmware_train(device.firmware)
-            step("identity_check", same, observed=ident)
-            if not same:
-                raise WriterError("IDENTITY_MISMATCH", "Device model/firmware differs from the approved plan.")
+        if env == "HARDWARE":
+            try:
+                ident = verify_hardware_identity(device, writer)
+                step("identity_check", True, observed=ident)
+            except WriterError as exc:
+                step("identity_check", False, reason=exc.category)
+                raise
         takeover = all(o["op"] == "switch.central.disable" for o in plan.operations)
         if hasattr(writer, "management_authority") and not takeover:
             auth = writer.management_authority()
@@ -552,7 +581,8 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     try:
         writer.open()
         try:
-            ident = writer.identity() if hasattr(writer, "identity") else {"model": device.model, "firmware": device.firmware}
+            ident = (verify_hardware_identity(device, writer) if env == "HARDWARE" else
+                     {"model": device.model, "firmware": device.firmware, "environment": "EMULATED"})
             base = writer.backup()
             seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
             results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
@@ -617,6 +647,9 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                 db.add(row)
             # An operation the adapter deliberately does not implement is UNSUPPORTED, not a failed test.
             row.status = "TESTED_PENDING_APPROVAL" if r["passed"] else ("UNSUPPORTED" if r.get("unsupported") else "FAILED")
+            if env == "HARDWARE":
+                r["evidence"] = {**r["evidence"], "verified_firmware_build": firmware_build(ident["firmware"]),
+                                 "verified_model_family": model_family(ident["model"])}
             row.run_id, row.device_id, row.evidence, row.tested_by = run_id, device.id, r["evidence"], actor
             row.tested_at, row.approved_by, row.approved_at = datetime.now(timezone.utc), None, None
         db.flush()
