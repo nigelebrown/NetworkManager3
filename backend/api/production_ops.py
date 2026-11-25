@@ -31,6 +31,8 @@ class CertInput(BaseModel):
     lag_ports: list[str] | None = None
     test_channel: int = 44
     test_ssid: str | None = None
+    test_enterprise_ssid: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_allowed_channels: list[str] | None = Field(default=None, min_length=1, max_length=48)
 
 
 def _cert_public(c: DeviceCertification) -> dict:
