@@ -1,7 +1,7 @@
 """Device-reported Instant ClientMatch action history, separate from inferred roams.
 
-The vendor table supplies ages, not absolute timestamps, destination APs or a
-complete association stream. Keep estimated event times explicitly labelled.
+Firmware tables supply relative ages or device-local timestamps. Neither format
+supplies a complete association stream or independently verified roam transitions. Keep estimated event times explicitly labelled.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ MAX_ROWS = 300
 MAX_BYTES = 100_000
 RETENTION = timedelta(days=7)
 _MAC_PATTERN = r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}"
-_ROW = re.compile(r"^(" + _MAC_PATTERN + r")\s+([A-Za-z0-9_-]{1,32})\s+([A-Za-z0-9_-]{1,32})\s+(.{1,200}?)\s+([0-9]{1,2})\s+([0-9dhms:]+)$")
+_ROW = re.compile(r"^(" + _MAC_PATTERN + r")\s+([A-Za-z0-9_-]{1,32})\s+([A-Za-z0-9_-]{1,32})\s+(.{1,200}?)\s+([0-9]{1,2})\s+([0-9dhms:]+|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$")
 _AGE = re.compile(r"(?:(\d+)d:)?(?:(\d+)h:)?(?:(\d+)m:)?(\d+)s")
 
 
@@ -64,20 +64,28 @@ def parse(text: str, *, site_id: int, collected: datetime) -> dict:
         recognized += 1
         mac, old, new, reason, radio, age = m.groups()
         seconds = _age(age)
+        local = None
         if seconds is None:
-            continue
+            try:
+                datetime.strptime(age, "%Y-%m-%d %H:%M:%S")
+                local = age
+            except ValueError:
+                continue
         reason = re.sub(_MAC_PATTERN, "[client]", sanitize(reason), flags=re.I)[:160]
         reason = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[address]", reason)
         rows.append({"client_token": token(mac, site_id), "old_state": old, "new_state": new,
                      "reason": reason, "radio": int(radio), "age_seconds_at_capture": seconds,
-                     "estimated_at": (collected - timedelta(seconds=seconds)).isoformat(),
+                     "estimated_at": (collected - timedelta(seconds=seconds)).isoformat() if seconds is not None else None,
+                     "device_local_time":local,
+                     "time_basis":"DEVICE_LOCAL_UNVERIFIED" if local else "ESTIMATED_FROM_DEVICE_AGE",
                      "collected_at": collected.isoformat()})
     if declared and not recognized:
         raise ValueError("No recognizable ClientMatch action rows")
-    rows.sort(key=lambda row: row["estimated_at"], reverse=True)
+    rows.sort(key=lambda row: row.get("estimated_at") or row.get("device_local_time") or "", reverse=True)
     return {"state": "COLLECTED" if declared == recognized == len(rows) and len(rows) <= MAX_ROWS else "PARTIAL",
             "declared_records": declared, "recognized_records": recognized,
             "truncated": len(rows) > MAX_ROWS or declared > recognized,
+            "clock_alignment": "DEVICE_LOCAL_UNVERIFIED" if any(r.get("device_local_time") for r in rows) else "ESTIMATED_FROM_AGE",
             "records": rows[:MAX_ROWS]}
 
 
@@ -93,25 +101,26 @@ def merge(previous: list[dict], incoming: list[dict], at: datetime) -> list[dict
     Separate identical actions within the same capture remain distinct.
     """
     cutoff = at - RETENTION
-    retained = [row for row in previous if _utc(row["estimated_at"]) >= cutoff]
+    retained = [row for row in previous if _utc(row.get("estimated_at") or row["collected_at"]) >= cutoff]
     old = list(retained)
     used = set()
     for row in incoming:
         sig = tuple(row[k] for k in ("client_token", "old_state", "new_state", "reason", "radio"))
-        when = _utc(row["estimated_at"])
+        when = _utc(row.get("estimated_at") or row["collected_at"])
         found = None
         for index, candidate in enumerate(old):
             if index in used:
                 continue
-            if sig == tuple(candidate[k] for k in ("client_token", "old_state", "new_state", "reason", "radio")) and abs(
-                    (_utc(candidate["estimated_at"]) - when).total_seconds()) <= 5:
+            same_local = row.get("device_local_time") and row.get("device_local_time")==candidate.get("device_local_time")
+            same_estimate = row.get("estimated_at") and candidate.get("estimated_at") and abs((_utc(candidate["estimated_at"])-when).total_seconds())<=5
+            if sig == tuple(candidate[k] for k in ("client_token", "old_state", "new_state", "reason", "radio")) and (same_local or same_estimate):
                 found = index
                 break
         if found is not None:
             used.add(found)
         elif when >= cutoff:
             retained.append(row)
-    return sorted(retained, key=lambda row: row["estimated_at"], reverse=True)[:MAX_ROWS]
+    return sorted(retained, key=lambda row: row.get("estimated_at") or row["collected_at"], reverse=True)[:MAX_ROWS]
 
 
 def save(db, device, parsed: dict | None, *, collected: datetime, failure: str | None = None):
@@ -126,7 +135,8 @@ def save(db, device, parsed: dict | None, *, collected: datetime, failure: str |
              "state": parsed["state"] if parsed else "FAILED",
              "reason": failure, "last_success_at": collected.isoformat() if parsed else value.get("last_success_at"),
              "declared_records": parsed["declared_records"] if parsed else None,
-             "truncated": parsed["truncated"] if parsed else None}
+             "truncated": parsed["truncated"] if parsed else None,
+             "clock_alignment":parsed.get("clock_alignment") if parsed else value.get("clock_alignment")}
     if existing is None:
         db.add(AppSetting(key=key, value=state, updated_by="clientmatch-collector"))
     else:
@@ -149,7 +159,7 @@ def journey(db, client, *, since: datetime, now: datetime) -> dict:
         return {"records": [], "source": "DEVICE_REPORTED_CLIENTMATCH",
                 "coverage": {"state": "INVALID_CLIENT_ID", "eligible_aps": len(devices), "fresh_aps": 0},
                 "note": "Client identifier cannot be matched safely."}
-    records, fresh, seen = [], 0, 0
+    records, unmapped, fresh, seen = [], [], 0, 0
     for setting in settings:
         value = setting.value or {}
         if value.get("legacy_site_id") != client.site_id:
@@ -159,12 +169,17 @@ def journey(db, client, *, since: datetime, now: datetime) -> dict:
         if last and value.get("state") == "COLLECTED" and now - _utc(last) <= timedelta(minutes=20):
             fresh += 1
         for row in value.get("records", []):
-            if row.get("client_token") != fingerprint or not max(since, now - RETENTION) <= _utc(row["estimated_at"]) <= now:
+            if row.get("client_token") != fingerprint:
                 continue
-            records.append({**{k: v for k, v in row.items() if k != "client_token"},
-                            "ap": keys[setting.key].hostname or keys[setting.key].serial_number})
+            public={**{k:v for k,v in row.items() if k!="client_token"},"ap":keys[setting.key].hostname or keys[setting.key].serial_number}
+            if not row.get("estimated_at"):
+                if max(since,now-RETENTION)<=_utc(row["collected_at"])<=now:
+                    unmapped.append(public)
+                continue
+            if max(since,now-RETENTION)<=_utc(row["estimated_at"])<=now:
+                records.append(public)
     records.sort(key=lambda row: row["estimated_at"], reverse=True)
     state = "NO_DATA" if not seen else "CURRENT" if fresh == len(devices) else "PARTIAL_OR_STALE"
-    return {"records": records[:MAX_ROWS], "source": "DEVICE_REPORTED_CLIENTMATCH",
+    return {"records": records[:MAX_ROWS], "unmapped_records":unmapped[:MAX_ROWS], "source": "DEVICE_REPORTED_CLIENTMATCH",
             "coverage": {"state": state, "eligible_aps": len(devices), "fresh_aps": fresh, "observed_aps": seen},
-            "note": "AP ClientMatch action table; times estimated from device-reported ages. Actions are not complete or independently verified roam transitions."}
+            "note": "AP-reported actions. Relative ages give estimated times; device-local timestamps remain unmapped until clock alignment is verified. Unmapped actions were captured in this window, but their event time cannot be placed in it. Actions are not complete or independently verified roam transitions."}
