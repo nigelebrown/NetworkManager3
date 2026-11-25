@@ -104,7 +104,7 @@ def test_emulated_certification_campaign(env, family, model, firmware):
     c, adm, appr, sw, ap = env
     dev = sw if family == "switch" else ap
     _retarget(dev["id"], model, firmware)
-    test = {"test_port": "1/1/20", "lag_ports": ["1/1/21", "1/1/22"]} if family == "switch" else {"test_ssid": "Demo-Corp"}
+    test = {"test_port": "1/1/20", "lag_ports": ["1/1/21", "1/1/22"]} if family == "switch" else {"test_ssid": "Corp-WiFi"}
     res, failed = certify(c, adm, appr, dev, **test)
     # Instant full-config restore is deliberately UNSUPPORTED (guided Replace-device procedure), not a failure
     hard_fail = [x for x in failed if not x.get("unsupported")]
