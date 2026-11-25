@@ -631,6 +631,11 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     env = environment(device)
     if env == "HARDWARE" and not (get_settings().allow_config_changes and not get_settings().device_write_lock):
         raise WriterError("WRITES_DISABLED", "Certification writes to a lab device; enable device writes first.")
+    if env == "HARDWARE":
+        import os
+        lab_serials = {s.strip().casefold() for s in os.environ.get("INM_CERTIFICATION_LAB_SERIALS", "").split(",") if s.strip()}
+        if device.environment != "lab" or not device.serial_number or device.serial_number.casefold() not in lab_serials:
+            raise WriterError("LAB_DEVICE_REQUIRED", "Certification requires an explicitly allowlisted spare laboratory device.")
     if control(db).emergency_stop:
         raise WriterError("EMERGENCY_STOP", "Emergency stop is active.")
     test = dict(test)
@@ -663,9 +668,15 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
             ident = (verify_hardware_identity(device, writer) if env == "HARDWARE" else
                      {"model": device.model, "firmware": device.firmware, "environment": "EMULATED"})
             base = writer.backup()
+            if not base:
+                raise WriterError("PRECONDITION", "Certification requires a nonempty restorable baseline.")
             seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
             results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
+            stopped = False
             for op in test_ops:
+                if control(db).emergency_stop:
+                    stopped = True
+                    break
                 public_op = {k: v for k, v in op.items() if k != "_secret"}
                 ev = {"op": public_op}
                 cp = None
@@ -699,11 +710,14 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                         ev["rollback_error"] = type(rollback_exc).__name__
                 results.append({"operation": op["op"], "passed": passed, "evidence": ev})
                 if not restored:
-                    # Never run the next test against an unverified baseline.
+                    # Never attempt further test writes after an unverified rollback.
+                    stopped = True
                     break
-            # full-configuration restore: write the captured baseline back and prove it reads back identically
+            # A full restore drill is a separate test, not an automatic recovery attempt.
             ev = {}
             try:
+                if stopped or control(db).emergency_stop:
+                    raise WriterError("PRECONDITION", "Restore drill skipped: certification stopped; operator recovery/review required.")
                 _renew_lease(db, device.id, holder)
                 writer.restore(base)
                 ev["matches_baseline"] = _norm(writer.backup(), device.family) == _norm(base, device.family)
