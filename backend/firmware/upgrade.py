@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..aruba.authentication import client_for_site
 from ..aruba.errors import ArubaError
 from ..configmgmt import service as cfg
-from ..database.models import ConfigChange, FirmwareImage, Site, utcnow
+from ..database.models import AccessPoint, ConfigChange, FirmwareImage, Site, utcnow
 from ..security.crypto import decrypt_secret
 from ..security.deps import audit
 from . import compliance, images
@@ -64,6 +64,8 @@ def plan_upgrade(db: Session, site: Site, user: str, image_ids: list[int], *, al
     ch.payload_enc = cfg.encrypt_secret(json.dumps({"body": body, "files": [i.filename for i in imgs]}))
     ch.plan = {
         "kind": "firmware_stage", "confirm_phrase": cfg.confirm_phrase(site), "running": compliance.fmt(r), "target": imgs[0].version, "auto_reboot": "no",
+        "expected_members": [{"serial": ap.serial, "model": ap.model, "ip": ap.ip}
+                             for ap in db.scalars(select(AccessPoint).where(AccessPoint.site_id == site.id))],
         "images": [{"ap_class": i.ap_class, "filename": i.filename, "version": i.version, "size_bytes": i.size_bytes,
                     "sha256": i.sha256, "url": _masked(urls[i.ap_class])} for i in imgs],
         "warnings": warnings,
@@ -103,3 +105,96 @@ def apply_stage(db: Session, change: ConfigChange, site: Site, user: str, *, req
     audit(db, "firmware_apply", username=user, target=f"site:{site.name}", detail=f"#{change.id} {change.summary} -> applied"[:240],
           request=request)
     return {"ok": True, "status": "applied", "message": change.result, "problems": []}
+
+
+def verify_members(db: Session, change: ConfigChange, site: Site, actor: str, *, request=None, transport=None) -> dict:
+    """Read-only verification of all planned members after an operator-controlled reboot.
+
+    A controller-reported aggregate version is not accepted as member proof.
+    Do not update inventory or certification based on failed or missing identity.
+    """
+    from ipaddress import IPv4Address
+    from fastapi import HTTPException
+    from ..api.quick_devices import _permit_probe
+    from ..aruba import parsers
+    if change.kind != "firmware_stage" or change.status not in ("applied", "applied_unverified"):
+        raise cfg.PlanError("Only a staged firmware change can be verified.")
+    if site.simulated or not site.enabled:
+        raise cfg.PlanError("A live enabled cluster is required.")
+    planned = change.plan or {}
+    members = planned.get("expected_members") or []
+    target = compliance.parse_version(planned.get("target"))
+    expected = {str(x.get("serial") or "").strip().casefold(): x for x in members}
+    if not members or "" in expected or len(expected) != len(members) or not target or len(members) > 128:
+        raise cfg.PlanError("A bounded, complete pre-upgrade serial inventory is required for member verification.")
+    observed = []
+    seen = set()
+    failure = None
+    try:
+        _permit_probe(IPv4Address(site.vc_host))
+        with client_for_site(site, transport) as client:
+            aps = parsers.normalize_aps(parsers.extract_rows(client.show("show aps"), "show aps"))
+            if len(aps) > 128:
+                raise ValueError("Membership exceeds verification limit")
+            for ap in aps:
+                serial = str(ap.get("serial") or "").strip().casefold()
+                ip = ap.get("ip")
+                row = {"serial": ap.get("serial"), "ip": ip, "model": ap.get("model"),
+                       "version": None, "state": "IDENTITY_UNVERIFIED"}
+                observed.append(row)
+                if not serial or serial in seen or serial not in expected:
+                    row["state"] = "UNEXPECTED_OR_DUPLICATE_MEMBER"
+                    continue
+                seen.add(serial)
+                try:
+                    _permit_probe(IPv4Address(ip))
+                    summary = parsers.output_text(client.show("show summary", iap_ip=ip)) or ""
+                    if len(summary) > 100000:
+                        continue
+                    actual = re.search(r"(?im)^Serial Number\s*:\s*(\S+)\s*$", summary)
+                    actual_ip = re.search(r"(?im)^IP Address\s*:\s*(\S+)\s*$", summary)
+                    if not actual or actual[1].casefold() != serial or not actual_ip or actual_ip[1] != ip:
+                        continue
+                    version = parsers.parse_version(client.show("show version", iap_ip=ip))
+                    row["version"] = version
+                    row["state"] = ("VERIFIED_TARGET" if compliance.parse_version(version) == target else
+                                    "VERSION_MISMATCH" if compliance.parse_version(version) else "VERSION_UNKNOWN")
+                except (ArubaError, ValueError, TypeError, HTTPException):
+                    row["state"] = "READ_FAILED"
+    except (ArubaError, ValueError, TypeError, HTTPException) as exc:
+        failure = type(exc).__name__
+    missing = [expected[s]["serial"] for s in expected.keys() - seen]
+    ok = (not failure and not missing and len(observed) == len(expected)
+          and all(row["state"] == "VERIFIED_TARGET" for row in observed))
+    result = {"state": "VERIFIED_RUNNING_TARGET" if ok else "UNVERIFIED",
+              "checked_at": utcnow().isoformat(), "target": planned.get("target"),
+              "members": observed, "missing_serials": sorted(missing), "failure": failure,
+              "note": "Running version verification only; device health, reboot completion and re-certification remain separate."}
+    change.plan = {**planned, "member_verification": result}
+    audit(db, "firmware_members_verified", username=actor, target=f"site:{site.name}",
+          detail=f"change={change.id} state={result['state']} expected={len(expected)} observed={len(observed)}",
+          request=request, success=ok)
+    return result
+
+
+def plan_recovery(db: Session, change: ConfigChange, site: Site, actor: str, image_ids: list[int], *, request=None):
+    """Create a separately reviewable stage-only rollback to the recorded prior release."""
+    if change.kind != "firmware_stage" or change.status not in ("applied", "applied_unverified"):
+        raise cfg.PlanError("Only a previously staged firmware change has a recovery plan.")
+    prior = (change.plan or {}).get("running")
+    if not compliance.parse_version(prior):
+        raise cfg.PlanError("The previous firmware version is unknown; use vendor-guided recovery.")
+    expected_classes = {i.get("ap_class") for i in (change.plan or {}).get("images", [])}
+    recovery_images = [db.get(FirmwareImage, i) for i in dict.fromkeys(image_ids)]
+    if not recovery_images or any(i is None for i in recovery_images):
+        raise cfg.PlanError("Upload the exact previous firmware images first.")
+    if {i.ap_class for i in recovery_images} != expected_classes or any(
+            compliance.parse_version(i.version) != compliance.parse_version(prior) for i in recovery_images):
+        raise cfg.PlanError("Recovery images must match every original AP class and the recorded prior version.")
+    plan = plan_upgrade(db, site, actor, image_ids, allow_downgrade=True, request=request)
+    plan.rollback_of = change.id
+    plan.plan = {**plan.plan, "recovery_of": change.id,
+                 "recovery_note": "Separate review and confirmation required; manual reboot remains mandatory."}
+    audit(db, "firmware_recovery_plan", username=actor, target=f"site:{site.name}",
+          detail=f"change={change.id} recovery={plan.id}", request=request)
+    return plan
