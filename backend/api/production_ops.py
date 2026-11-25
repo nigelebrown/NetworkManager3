@@ -33,6 +33,10 @@ class CertInput(BaseModel):
     test_ssid: str | None = None
     test_enterprise_ssid: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
     test_allowed_channels: list[str] | None = Field(default=None, min_length=1, max_length=48)
+    test_guest_ssid: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_portal: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_pre_auth_role: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_mac_role: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 
 
 def _cert_public(c: DeviceCertification) -> dict:
