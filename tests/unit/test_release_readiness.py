@@ -34,8 +34,8 @@ def build(tmp_path):
     with register.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(("test_id", "phase", "status", "actual_result", "artifact_link"))
-        for i in range(220):
-            writer.writerow((f"TEST-{i:03d}", f"P{1 + i % 11}", "PASS",
+        for test_id, phase in R.required_acceptance_checks().items():
+            writer.writerow((test_id, phase, "PASS",
                              "SYNTHETIC UNIT FIXTURE - NOT PHYSICAL EVIDENCE", "artifacts.txt"))
     register_hash = hashlib.sha256(register.read_bytes()).hexdigest()
     pass_ref = {"status": "PASS", "evidence": ["artifacts.txt"]}
@@ -99,7 +99,7 @@ def test_valid_synthetic_signed_input_exercises_gate_only(tmp_path):
     result = verdict(m, root, trusted)
     assert result["decision"] == "GO", result["failures"]
     assert result["verified_artifacts"] == 2
-    assert result["acceptance_register"]["passed"] == 220
+    assert result["acceptance_register"]["passed"] == len(R.required_acceptance_checks())
     assert result["models_required"] == list(R.MODELS)
     # GO here asserts the evaluator's *fixture*, not external-device evidence.
 
@@ -223,3 +223,36 @@ def test_generated_template_cannot_be_misread_as_production_pass(tmp_path):
         "--prepared-by", "implementer",
     ], capture_output=True, text=True, timeout=20)
     assert again.returncode != 0  # cannot overwrite a previously reviewed file
+
+
+def test_wrong_ids_and_unhashed_row_artifacts_never_pass(tmp_path):
+    m, root, trusted, private = build(tmp_path)
+    register = root / "acceptance.csv"
+    rows = list(csv.DictReader(register.open(encoding="utf-8")))
+    rows[0]["test_id"] = "FAKE-REPLACEMENT"
+    rows[1]["artifact_link"] = "unhashed.txt"
+    with register.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    m["artifacts"]["acceptance.csv"] = hashlib.sha256(register.read_bytes()).hexdigest()
+    sign(m, private)
+    result = verdict(m, root, trusted)
+    assert result["decision"] == "NO_GO"
+    assert any("canonical checks absent" in e for e in result["failures"])
+    assert any("rows not independently evidenced" in e for e in result["failures"])
+
+
+def test_same_key_cannot_sign_for_two_reviewers(tmp_path):
+    m, root, trusted, private = build(tmp_path)
+    private["review.operations"] = private["review.security"]
+    trusted["reviewers"]["review.operations"]["ed25519_public_key"] = trusted["reviewers"]["review.security"]["ed25519_public_key"]
+    sign(m, private)
+    assert verdict(m, root, trusted)["decision"] == "NO_GO"
+
+
+def test_duplicate_device_serial_does_not_certify_four_models(tmp_path):
+    m, root, trusted, private = build(tmp_path)
+    m["device_certifications"][1]["serial_number"] = m["device_certifications"][0]["serial_number"]
+    sign(m, private)
+    assert any("serial is reused" in e for e in verdict(m, root, trusted)["failures"])
