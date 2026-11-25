@@ -32,6 +32,12 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "ap.radio.channel", label: "Radio channel", fields: [{ key: "band", label: "Band", kind: "select", options: ["5", "2.4"] }, { key: "value", label: "Channel", kind: "int" }, { key: "power", label: "EIRP dBm", kind: "int" }] },
     { op: "ap.radio.width", label: "Channel width", fields: [{ key: "value", label: "Width (MHz)", kind: "select", options: ["20", "40"] }] },
     { op: "ap.radio.tx_power", label: "Transmit power range", fields: [{ key: "min_dbm", label: "Min dBm", kind: "int" }, { key: "max_dbm", label: "Max dBm", kind: "int" }] },
+    { op: "ap.radio.allowed_channels", label: "5 GHz allowed channels (DFS / 20–40 MHz)", fields: [{ key: "value", label: "Channels e.g. 36,40,44,48,36+,44+", kind: "ips" }] },
+    { op: "ap.ssid.roaming", label: "SSID fast roaming (802.11k/v/r)", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" },
+      { key: "dot11k", label: "802.11k", kind: "select", options: ["enabled", "disabled"] }, { key: "dot11v", label: "802.11v", kind: "select", options: ["enabled", "disabled"] },
+      { key: "dot11r", label: "802.11r (client compatibility required)", kind: "select", options: ["disabled", "enabled"] }] },
+    { op: "ap.ssid.accounting", label: "SSID RADIUS accounting", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" }, { key: "value", label: "Accounting", kind: "select", options: ["enabled", "disabled"] },
+      { key: "interval_minutes", label: "Interim interval minutes (required when enabled)", kind: "int", optional: true }] },
     { op: "ap.ssid.vlan", label: "SSID VLAN", fields: [{ key: "ssid", label: "SSID", kind: "text" }, { key: "value", label: "VLAN", kind: "int" }] },
     { op: "ap.band_steering", label: "Band steering", fields: [{ key: "value", label: "Mode", kind: "select", options: ["prefer-5ghz", "force-5ghz", "balance-bands", "disabled"] }] },
     { op: "ap.client_match", label: "ClientMatch", fields: [{ key: "value", label: "State", kind: "select", options: ["enabled", "disabled"] }] },
@@ -130,12 +136,13 @@ export default function ChangePlans() {
   const [title, setTitle] = useState(params.get("port") ? `Change port ${params.get("port")}` : "");
   const [items, setItems] = useState<Op[]>([]);
   const [excluded, setExcluded] = useState("");
+  const [allowDfs, setAllowDfs] = useState(false);
   const [uplinks, setUplinks] = useState("");
   const act = useAction();
   const step = !device ? 0 : !items.length ? 1 : 2;
   const submit = () => act.run(async () => {
     const p = await ops.createChange({ device_id: device!.id, title, operations: items,
-      excluded_channels: excluded.split(/[\s,]+/).filter(Boolean).map(Number), protected_uplinks: uplinks.split(/[\s,]+/).filter(Boolean) });
+      allow_dfs: device!.family === "access_point" && allowDfs, excluded_channels: excluded.split(/[\s,]+/).filter(Boolean).map(Number), protected_uplinks: uplinks.split(/[\s,]+/).filter(Boolean) });
     setItems([]); setTitle(""); plans.reload();
     return `Change plan submitted for approval (${p.operations.length} operation(s)). Policy validation passed.`;
   });
@@ -152,6 +159,7 @@ export default function ChangePlans() {
             ? <label className="text-sm">Excluded channels (site policy)<input className={inputCls} value={excluded} onChange={e => setExcluded(e.target.value)} placeholder="e.g. 144, 165" /></label>
             : <label className="text-sm">Protected uplink ports<input className={inputCls} value={uplinks} onChange={e => setUplinks(e.target.value)} placeholder="e.g. 1/1/49, 1/1/50" /></label>}
         </div>
+        {device?.family === "access_point" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowDfs} onChange={e => setAllowDfs(e.target.checked)} />Request DFS only under an administrator-configured site channel policy and independent approval</label>}
         {device && <OpBuilder family={device.family} onAdd={o => setItems([...items, o])} />}
         {items.length > 0 && <ul className="space-y-1 text-sm">{items.map((o, i) => <li key={i} className="flex items-center gap-2 font-mono text-xs">
           <span>{i + 1}. {JSON.stringify(o)}</span><button className="text-red-300" onClick={() => setItems(items.filter((_, j) => j !== i))}>remove</button></li>)}</ul>}
