@@ -55,6 +55,14 @@ class CxEmulator:
                                                            "detection_status": "delivering" if i <= 4 else "searching"}}}
                            for i in range(1, ports + 1)},
         }
+        # Explicit synthetic AAA baseline on the designated certification port.
+        if "1/1/24" in self.state["interfaces"]:
+            self.state["interfaces"]["1/1/24"].update({
+                "port_access_auth_mode": "client-mode",
+                "auth_methods": {method: {"authentication_method": method,
+                    "radius_server_group": "LAB-RADIUS", "auth_enable": False,
+                    "cached_reauth_enable": False, "canned_eap_success_enable": False}
+                    for method in ("dot1x", "mac-auth")}})
         self.cli_commands = ["show port-access clients", "show power-over-ethernet",
                              "show qos trust", "show lacp interfaces",
                              "show interface transceiver detail", "show interface dom"]
