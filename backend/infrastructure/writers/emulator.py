@@ -387,6 +387,10 @@ class InstantEmulator:
                 return None
 
             def show(self, cmd, iap_ip=None):
+                if cmd == "show aps":
+                    return {"show aps": [{"Name": "emulated", "IP Address": "emulated-vc*", "Type": emu.model, "Serial #": "EMULATED-AP"}]}
+                if cmd == "show ap allowed-channels":
+                    return {"Command output": "Allowed Channels for AP Type 505 Country Code US\n5GHz (indoor) 36 40 44 48 149 153 157 161\n5GHz (outdoor) 36 40 44 48 149 153 157 161\n5GHz 40MHz (indoor) 36-40 44-48 149-153 157-161\n5GHz 40MHz (outdoor) 36-40 44-48 149-153 157-161"}
                 if cmd == "show ap-env":
                     values = ["name:emulated"]
                     for band, prefix in (("5", "a"), ("2.4", "g")):
