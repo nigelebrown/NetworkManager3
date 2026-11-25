@@ -1,5 +1,5 @@
 # NetworkManager3 — Aruba device API gap register
-Updated for the current GitHub main. This register tracks *implemented software*, *emulated protocol checks*,
+Updated for the production-remediation candidate. This register tracks *implemented software*, *emulated protocol checks*,
 *hardware certification*, and *missing capabilities* separately. It supersedes any blanket claim that "all APIs work".
 
 ## Implemented and exercised in software
@@ -19,8 +19,7 @@ REST AnyCLI `POST /cli` transport, but only for fixed `show` commands from a sta
 switch advertises support via `GET /cli/commands`. Arbitrary command strings are never accepted.
 
 Log and diagnostic replies are size bounded and credential-redacted. The device-originated log API is
-separate from NetworkManager3's hash-chained internal audit trail. Logs are read on demand, not yet
-persisted as a scheduled device-originated audit stream.
+separate from NetworkManager3's hash-chained internal audit trail. Logs can be collected on demand or via the opt-in scheduled collector; retained entries are deduplicated and access-scoped. Physical response validation remains necessary.
 
 **Software integration test commands:**
 ```bash
@@ -39,16 +38,16 @@ for certification or the independent approver.
 | Gap | State | Conditions to close |
 |---|---|---|
 | Instant automatic full-config restore | **GUIDED / UNSUPPORTED** | Aruba-supported restoration method validated on AP firmware; no invented REST endpoint |
-| Full enterprise WLAN lifecycle (RADIUS accounting, captive portal, user roles, multi-auth) | **PARTIAL** | Exact Instant model/firmware REST/CLI schemas; typed validators; readback + rollback tests |
-| DFS controls and roaming-assist configuration | **PARTIAL** | Approved allowed-channel list, HPE firmware command support, 20/40-MHz policy checks |
+| Full enterprise WLAN lifecycle (RADIUS accounting, captive portal, user roles, multi-auth) | **EXTENDED / PARTIAL** | Typed RADIUS accounting now implemented for existing enterprise SSIDs with readback and rollback; captive portal, role management and multi-auth remain incomplete. |
+| DFS controls and roaming-assist configuration | **IMPLEMENTED IN CANDIDATE / HARDWARE PENDING** | Typed 5 GHz channel allowlist and 802.11k/v/r; persisted site constraints, device regulatory checks, 20/40 MHz limits, explicit restorable baseline; validate physical syntax and behavior. |
 | CX 802.1X/MAB port write configuration | **NOT IMPLEMENTED** | REST schema on CX 6100/6200, bypass/fail-open protections, role/AAA testbed |
 | VSF stack provisioning | **NOT IMPLEMENTED** | Lab topology, out-of-band console, destructive failure/recovery testing |
 | CX ACL/routing/voice/QoS profiles | **PARTIAL / NOT IMPLEMENTED** | Explicit CLI/REST schema and model capability; impact validation/rollback |
 | AP/CX firmware rollout orchestration | **PARTIAL** | HPE images, signed firmware metadata, staged upgrade/rollback, device re-certification |
-| Client roaming history and interference analytics | **NOT IMPLEMENTED** | Per-AP event streams, timestamp correlation, privacy controls, measured baselines |
+| Client roaming history and interference analytics | **EXTENDED / PARTIAL** | Opt-in native ClientMatch action history, estimated timestamps, site-scoped pseudonyms and separate UI evidence; full association stream, roam outcome verification and interference correlation remain incomplete. |
 | Device-initiated ping/traceroute/cable test/packet capture | **NOT IMPLEMENTED** | Per-model vendor diagnostics API and strongly bounded RBAC/effect controls |
 | Transceiver DOM and model-specific port counters | **PARTIAL** | Exact telemetry resource and hardware DOM support per firmware |
-| Continuous device accounting/audit log ingestion | **NOT IMPLEMENTED** | Credential-sanitized polls or signed syslog feeds, dedupe, retention, incident correlation |
+| Continuous device accounting/audit log ingestion | **EXTENDED / HARDWARE PENDING** | Opt-in scheduled read-only device log ingestion, sanitization, dedupe and retention; validate physical log formats and external accounting feed. |
 | Cisco/UniFi/generic SNMPv3 adapters | **PLACEHOLDERS** | New protocol clients + test emulators + hardware scope agreement |
 | Production ZTP, multi-site batching and high-risk change review | **PARTIAL** | Phased site deployment, bounded concurrency, blast-radius analysis and approval |
 | Production HA/DR, long-term load and external penetration testing | **BLOCKED** | Production infrastructure and independent test environment |
@@ -71,3 +70,9 @@ Vendor references:
 - HPE Aruba Networking AOS-CX 10.14 REST Guide: `/logs/event`, `/logs/audit`,
   `/cli/commands` and `/cli` for documented show commands.
 - On-device REST Swagger reference remains the authority for exact firmware/model write schemas.
+
+### Candidate wireless additions
+
+- `ap.ssid.roaming`, `ap.ssid.accounting`, `ap.radio.allowed_channels`: explicit typed change plans, independent approval, readback, inverse rollback, per-operation hardware certification still required.
+- Native ClientMatch history is opt-in via worker setting `INM_CLIENT_MATCH_HISTORY=true`. Requires an approved reachable AP and a verified local serial; malformed or unsupported responses are recorded as failures. History is bounded to 300 records/AP and seven days in queries and subsequent captures; disable collection if not approved by the data controller. Estimated action times are not measured roam completion times. No raw client MAC is persisted by this collector; site-keyed HMAC is used for lookup. Existing client inventory remains subject to existing privacy controls.
+- New tests: `tests/unit/test_wireless_policy_extensions.py`, `tests/unit/test_client_match_history.py`. CI must pass at the new candidate SHA before release.
