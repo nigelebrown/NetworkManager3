@@ -40,6 +40,7 @@ async function performRequest<T>(path: string, init: RequestInit = {}): Promise<
     }
     throw new ApiError(resp.status, msg, retryAfterMs);
   }
+  if (resp.status === 204 || resp.headers.get("content-length") === "0") return undefined as T;
   return resp.json();
 }
 
