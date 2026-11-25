@@ -356,6 +356,8 @@ class ArubaCxWriter:
                           "rx_errors": st.get("rx_error") if "rx_error" in st else st.get("rx_errors"),
                           "tx_errors": st.get("tx_error") if "tx_error" in st else st.get("tx_errors"),
                           "rx_dropped": st.get("rx_dropped"), "tx_dropped": st.get("tx_dropped"),
+                          "rx_packets": st.get("rx_packets"), "tx_packets": st.get("tx_packets"),
+                          "rx_crc_errors": st.get("rx_crc_errors"),
                           "link_resets": it.get("link_resets"), "poe_w": None, "poe_status": None, "lldp": None})
         for p in ports:
             if p["link"] != "up":
@@ -380,6 +382,16 @@ class ArubaCxWriter:
                         break
             except WriterError:
                 pass
+        import os
+        if os.environ.get("INM_CX_OPTICAL_DOM", "false").lower() == "true":
+            from ..device_diagnostics import parse_optical_dom
+            try:
+                optical = parse_optical_dom(self.read_diagnostics(kind="optical_dom")["output"])
+            except WriterError as exc:
+                optical = {"state": exc.category, "ports": {}}
+            hw["optical_dom"] = {k: v for k, v in optical.items() if k != "ports"}
+            for p in ports:
+                p["optical_dom"] = optical["ports"].get(p["name"])
         up = sum(1 for p in ports if p["link"] == "up")
         metrics = {"ports_up": float(up), "ports_total": float(len(ports)),
                    "port_errors_total": float(sum((p["rx_errors"] or 0) + (p["tx_errors"] or 0) for p in ports)),
