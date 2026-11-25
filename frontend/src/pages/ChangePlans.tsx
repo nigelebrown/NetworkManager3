@@ -23,6 +23,8 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "switch.port.stp_bpdu_guard", label: "BPDU guard (edge port)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "BPDU guard", kind: "select", options: ["enabled", "disabled"] }] },
     { op: "switch.port.storm_control", label: "Storm control", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "broadcast_kbps", label: "Broadcast kbps", kind: "int" },
       { key: "multicast_kbps", label: "Multicast kbps (optional)", kind: "int", optional: true }, { key: "unknown_unicast_kbps", label: "Unknown-unicast kbps (optional)", kind: "int", optional: true }] },
+    { op: "switch.vlan.voice", label: "Voice VLAN advertisement", fields: [{ key: "vlan", label: "Existing VLAN", kind: "int" }, { key: "value", label: "Voice", kind: "select", options: ["enabled", "disabled"] }, { key: "acknowledge_voice_change", label: "Acknowledge voice change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.port.auth_enable", label: "Enable existing 802.1X / MAB on disabled access port", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "method", label: "Authentication method", kind: "select", options: ["dot1x", "mac-auth"] }, { key: "value", label: "Action", kind: "select", options: ["enabled"] }, { key: "acknowledge_auth_change", label: "Acknowledge NAC change", kind: "select", options: ["no", "yes"] }] },
     { op: "switch.port.qos_trust", label: "QoS trust (voice)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "Trust", kind: "select", options: ["dscp", "cos", "none"] }] },
     { op: "switch.system.ntp", label: "NTP server", fields: [{ key: "value", label: "NTP server IP", kind: "text" }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
     { op: "switch.system.dns", label: "DNS servers", fields: [{ key: "value", label: "DNS server IPs (comma separated)", kind: "ips" }, { key: "domain", label: "Domain (optional)", kind: "text", optional: true }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
@@ -67,7 +69,7 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
     for (const f of def.fields) {
       const v = vals[f.key] ?? (f.options?.[0] ?? "");
       if (f.optional && !v.trim()) continue;
-      o[f.key] = f.key === "acknowledge_guest_auth_change" ? v === "yes" : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
+      o[f.key] = ["acknowledge_guest_auth_change", "acknowledge_voice_change", "acknowledge_auth_change"].includes(f.key) ? v === "yes" : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "ips" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "int" || (f.key === "value" && def.op === "ap.radio.width") ? Number(v)
         : f.kind === "list" ? v.split(/[\s,]+/).filter(Boolean).map(Number) : v;
