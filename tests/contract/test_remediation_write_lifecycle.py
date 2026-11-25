@@ -44,7 +44,16 @@ def test_device_capability_report_follows_certification_records(env):
     assert before["environment"] == "EMULATED" and before["hardware_certified"] is False
     assert {r["certification"] for r in before["operations"]} == {"UNCERTIFIED"}
     assert not any(r["executable_now"] for r in before["operations"])
-    assert len(before["operations"]) == 16 and all(r["software"] == "IMPLEMENTED" for r in before["operations"])
+    expected = {
+        "switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
+        "switch.port.admin_state", "switch.port.poe", "switch.lldp", "switch.lag.members",
+        "switch.central.disable", "switch.port.description", "switch.port.stp_bpdu_guard",
+        "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp",
+        "switch.system.dns", "switch.system.syslog", "config.restore",
+        "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab",
+    }
+    assert {r["operation"] for r in before["operations"]} == expected
+    assert all(r["software"] == "IMPLEMENTED" for r in before["operations"])
     certify(c, adm, appr, sw, test_port="1/1/20", lag_ports=["1/1/21", "1/1/22"])
     after = c.get(f"/api/v1/devices/{sw['id']}/capabilities", headers=adm).json()
     st = {r["operation"]: r for r in after["operations"]}
