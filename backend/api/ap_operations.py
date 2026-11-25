@@ -674,11 +674,13 @@ def client_journey(client_id: int, hours: int = Query(24, ge=1, le=168), db: Ses
               for e in db.scalars(select(ClientEvent).where(ClientEvent.site_id == c.site_id, ClientEvent.mac == c.mac,
                                                             ClientEvent.ts >= since).order_by(ClientEvent.ts))]
     aps_visited = Counter(e["ap_to"] for e in events if e["ap_to"])
+    from ..infrastructure import client_match_history as CM
     return {"id": c.id, "mac": c.mac if full else mask_mac(c.mac), "hostname": c.hostname if full else None,
             "cluster": sites[c.site_id].name, "current": {"ap": c.ap_name, "ssid": c.ssid, "band": c.band,
             "channel": c.channel, "snr_db": c.snr_db, "speed_mbps": c.speed_mbps, "connected": c.is_connected,
             "quality": c.quality, "vlan": c.vlan, "last_seen": _iso(c.last_seen)},
             "score": client_score_result(db, c), "events": events,
+            "native_client_match": CM.journey(db, c, since=since, now=_now()),
             "aps_visited": [{"ap": k, "times": v} for k, v in aps_visited.most_common()],
             "window_hours": hours}
 
