@@ -643,7 +643,9 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
         raise WriterError("EMERGENCY_STOP", "Emergency stop is active.")
     test = dict(test)
     if env == "EMULATED" and device.family == "switch" and writer is None:
-        test["test_auth_port"] = test.get("test_auth_port") or "1/1/24"
+        port_count = re.search(r"(\d{2})G", device.model or "")
+        lab_port = f"1/1/{min(int(port_count.group(1)) if port_count else 48, 24)}"
+        test["test_auth_port"] = test.get("test_auth_port") or lab_port
     if env == "EMULATED" and device.family == "access_point":
         test["test_ssid"] = test.get("test_ssid") or "Corp-WiFi"
         test["test_enterprise_ssid"] = test.get("test_enterprise_ssid") or "INM-LAB-1X"
