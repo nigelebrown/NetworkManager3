@@ -26,6 +26,8 @@ def test_bonded_secondary_and_dfs_checked():
     {"op": "ap.ssid.roaming", "ssid": "Corp-WiFi", "dot11k": "enabled", "dot11v": "enabled", "dot11r": "enabled"},
     {"op": "ap.ssid.accounting", "ssid": "INM-LAB-1X", "value": "enabled", "interval_minutes": 10},
     {"op": "ap.radio.allowed_channels", "value": ["36", "40", "36+"]},
+    {"op": "ap.ssid.guest_auth", "ssid": "INM-LAB-GUEST", "portal_profile": "LAB-PORTAL-B",
+     "pre_auth_role": "LAB-PRE", "mac_role": "LAB-MAC", "acknowledge_guest_auth_change": True},
 ])
 def test_wireless_extensions_render_apply_readback_and_restore(op):
     emu = InstantEmulator()
