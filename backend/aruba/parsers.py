@@ -48,7 +48,9 @@ def parse_text_table(text: str) -> list[dict[str, str]]:
             if re.fullmatch(r"(?i)(?:(?:num(?:ber)?(?:\s+of)?\s+(?:clients?|aps?|access points?)|total(?:\s+(?:clients?|aps?|access points?))?)\s*[:=]?\s*\d+|info\s+timestamp\s*[:=]\s*\S+)",stripped):
                 break
             if stripped.lower().startswith(("flags:","legend")):break
-            if starts:
+            # Some REST fixtures/firmware use compact delimiter-separated rows despite
+            # an aligned header. Only slice when actual cell boundaries are whitespace.
+            if starts and all(a <= len(raw) and raw[a-1].isspace() for a in starts[1:]):
                 cells=[raw[a:starts[j+1] if j+1<len(starts) else None].strip() for j,a in enumerate(starts)]
             else:
                 cells=[c.strip() for c in _SPLIT.split(stripped)]
