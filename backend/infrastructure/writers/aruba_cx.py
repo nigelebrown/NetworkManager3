@@ -579,7 +579,7 @@ class ArubaCxWriter:
                     raise WriterError("PRECONDITION", "Port must be administratively down in access mode.")
                 if port.get("port_access_auth_mode") != "client-mode" or any(
                     value for key, value in port.items() if key.startswith("port_access_") and
-                    ("role" in key or "override" in key)) or port.get("aaa_port_access_radius_override_enable")::
+                    ("role" in key or "override" in key)) or port.get("aaa_port_access_radius_override_enable"):
                     raise WriterError("PRECONDITION", "Require explicit client-mode and no configured fallback/override role.")
                 auth = self._req("GET", call["path"], params={"selector": "configuration"}).json()
                 if not isinstance(auth, dict) or auth.get("authentication_method") != op["method"] or not auth.get("radius_server_group"):
