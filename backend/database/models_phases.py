@@ -312,8 +312,8 @@ class DeviceCertification(Base):
     """Write/read certification of ONE operation for ONE model family + firmware train, with evidence.
     Status CERTIFIED_WRITE requires a passed certification run AND an independent approver."""
     __tablename__ = "device_certifications"
-    __table_args__ = (UniqueConstraint("adapter_key", "model_family", "firmware_train", "operation",
-                                       name="uq_cert_scope_op"),)
+    __table_args__ = (UniqueConstraint("adapter_key", "model_family", "firmware_train", "operation", "environment",
+                                       name="uq_cert_scope_env_op"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     adapter_key: Mapped[str] = mapped_column(String(48))
     model_family: Mapped[str] = mapped_column(String(48))
