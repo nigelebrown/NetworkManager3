@@ -99,6 +99,53 @@ def certification_map(db: Session, device: InmDevice) -> dict[str, str]:
                           else "UNCERTIFIED") for r in rows}
 
 
+def validate_site_rf_policy(db: Session, device: InmDevice, operations: list[dict]) -> None:
+    """Apply administrator-maintained site RF limits to plans AND execution.
+
+    ARM allowed-channel changes affect the whole controller cluster, so enforce
+    every known member's physical site policy. DFS is fail-closed when any
+    affected site's explicit approved list is missing.
+    """
+    from ..database.models_phases import OptimizationSitePolicy
+    if device.family != "access_point":
+        return
+    for op in operations:
+        kind = op.get("op")
+        if kind not in ("ap.radio.allowed_channels", "ap.radio.channel"):
+            continue
+        if kind == "ap.radio.channel" and op.get("arm_managed") is True:
+            continue
+        if kind == "ap.radio.allowed_channels":
+            tokens = CC.normalize_channel_list(op.get("value"), allow_dfs=op.get("allow_dfs") is True)
+            channels = set().union(*(CC.channel_components(t) for t in tokens))
+            widths = {40 if t.endswith("+") else 20 for t in tokens}
+            members = [device]
+            if device.cluster_id:
+                members = list(db.scalars(select(InmDevice).where(InmDevice.cluster_id == device.cluster_id,
+                    InmDevice.source_type == device.source_type, InmDevice.family == "access_point",
+                    InmDevice.lifecycle.not_in(("merged", "retired", "decommissioned"))))) or [device]
+            elif device.legacy_site_id is not None:
+                members = list(db.scalars(select(InmDevice).where(InmDevice.legacy_site_id == device.legacy_site_id,
+                    InmDevice.source_type == device.source_type, InmDevice.family == "access_point",
+                    InmDevice.lifecycle.not_in(("merged", "retired", "decommissioned"))))) or [device]
+            band = "5"
+        else:
+            CC.validate_operation(op, family="access_point", allow_dfs=op.get("allow_dfs") is True)
+            channels, widths, members, band = {op["value"]}, set(), [device], op["band"]
+        dfs = band == "5" and bool(channels & CC.DFS_5G)
+        if dfs and op.get("allow_dfs") is not True:
+            raise CC.PolicyViolation("DFS requires an explicit approved request.")
+        for site_id in {member.site_id for member in members}:
+            policy = db.get(OptimizationSitePolicy, site_id) if site_id else None
+            allowed = set((policy.allowed_channels_5g if band == "5" else policy.allowed_channels_2g) or []) if policy else set()
+            if dfs and not allowed:
+                raise CC.PolicyViolation("DFS requires an administrator-configured channel list for every affected site.")
+            if allowed and not channels <= allowed:
+                raise CC.PolicyViolation("A requested channel or bonded secondary lies outside an affected site's policy.")
+            if policy and widths and not widths <= set(policy.allowed_widths_mhz or []):
+                raise CC.PolicyViolation("Requested channel width is outside an affected site's policy.")
+
+
 # ---- writer factory -------------------------------------------------------------------------------
 def writer_for(db: Session, device: InmDevice):
     """Return (writer, environment). REAL devices need a bound credential, an allowlisted address and,
@@ -375,6 +422,13 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                              emergency_stop=control(db).emergency_stop, plan_state=plan.state,
                              approval_ok=ok_appr, capabilities=caps, pre_backup_verified=True,
                              device_lease_held=leased, executor_authenticated=bool(actor))
+    try:
+        validate_site_rf_policy(db, device, plan.operations)
+        gate["guards"].append({"guard": "current_site_rf_policy", "pass": True})
+    except CC.PolicyViolation as exc:
+        gate["guards"].append({"guard": "current_site_rf_policy", "pass": False})
+        gate["denial_reasons"].append("current_site_rf_policy: " + str(exc))
+        gate["decision"] = "DENY"
     dec = ExecutionDecision(kind="CHANGE_PLAN", plan_id=plan.id, device_id=device.id, proposed_diff_hash=plan.plan_hash,
                             global_lock_state="LOCKED" if lock else "UNLOCKED", decision=gate["decision"],
                             guards=gate["guards"] + [{"guard": f"environment:{env}", "pass": True}],
