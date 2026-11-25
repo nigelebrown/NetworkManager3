@@ -45,7 +45,9 @@ def collect_snapshot(client: ArubaClient) -> SiteSnapshot:
         snap.clients = parsers.normalize_clients(rows)
         raw = parsers.output_text(resp) or ""
         explicit_empty = resp.get("show clients") == [] or bool(re.search(r"(?im)^\s*(?:0 clients?|total(?: number of)? clients\s*[:=]?\s*0|num(?:ber of)? clients\s*[:=]?\s*0|no clients(?: found)?)\s*$", raw))
-        if len(rows) != len(snap.clients) or (not snap.clients and not explicit_empty):
+        declared=re.search(r"(?im)^\s*(?:number of clients|num(?:ber)? clients|total(?: number of)? clients)\s*[:=]?\s*(\d+)\s*$",raw)
+        count_mismatch=declared is not None and int(declared[1])!=len(snap.clients)
+        if count_mismatch or len(rows) != len(snap.clients) or (not snap.clients and not explicit_empty):
             snap.clients_ok = False
             snap.warnings.append("Client inventory is incomplete or unrecognized; disconnect inference suppressed.")
     except ArubaCommandError as exc:

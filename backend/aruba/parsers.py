@@ -27,32 +27,42 @@ def _output_text(resp: dict[str, Any]) -> str | None:
 
 
 def parse_text_table(text: str) -> list[dict[str, str]]:
-    """Parse the first Aruba text table: title / ---- / header / rows (columns split on 2+ spaces)."""
-    lines = text.replace("\r", "").split("\n")
-    for i, line in enumerate(lines):
-        if _DASHES.match(line.strip()) and i + 1 < len(lines):
-            header_line = lines[i + 1]
-            if not header_line.strip():
-                continue
-            header = [h.strip() for h in _SPLIT.split(header_line.strip())]
-            if len(header) < 2:
-                continue
-            rows: list[dict[str, str]] = []
-            for raw in lines[i + 2:]:
-                if not raw.strip():
-                    break
-                if re.fullmatch(r"[-\s]+", raw):
-                    continue  # the underline row beneath the column headers is not data
-                if raw.lower().startswith(("num ", "total", "flags:", "legend")):
-                    break
-                cells = [c.strip() for c in _SPLIT.split(raw.strip())]
-                rows.append({h: (cells[j] if j < len(cells) else "") for j, h in enumerate(header)})
-            return rows
+    """Parse a CLI table without shifting columns when the first field is blank."""
+    lines=text.replace("\r","").split("\n")
+    for i,line in enumerate(lines):
+        if not _DASHES.match(line.strip()) or i+1>=len(lines):
+            continue
+        header_line=lines[i+1]
+        header=[h.strip() for h in _SPLIT.split(header_line.strip())]
+        if len(header)<2:continue
+        starts=None
+        if i+2<len(lines) and re.fullmatch(r"[-\s]+",lines[i+2]):
+            spans=[m.start() for m in re.finditer(r"-+",lines[i+2])]
+            fixed=[header_line[a:spans[j+1] if j+1<len(spans) else None].strip() for j,a in enumerate(spans)]
+            if len(spans)==len(header) and fixed==header:starts=spans
+        rows=[]
+        for raw in lines[i+2:]:
+            stripped=raw.strip()
+            if not stripped:break
+            if re.fullmatch(r"[-\s]+",raw):continue
+            if re.fullmatch(r"(?i)(?:(?:num(?:ber)?(?:\s+of)?\s+(?:clients?|aps?|access points?)|total(?:\s+(?:clients?|aps?|access points?))?)\s*[:=]?\s*\d+|info\s+timestamp\s*[:=]\s*\S+)",stripped):
+                break
+            if stripped.lower().startswith(("flags:","legend")):break
+            # Some REST fixtures/firmware use compact delimiter-separated rows despite
+            # an aligned header. Only slice when actual cell boundaries are whitespace.
+            if starts and all(a <= len(raw) and raw[a-1].isspace() for a in starts[1:]):
+                cells=[raw[a:starts[j+1] if j+1<len(starts) else None].strip() for j,a in enumerate(starts)]
+            else:
+                cells=[c.strip() for c in _SPLIT.split(stripped)]
+            rows.append({h:cells[j] if j<len(cells) else "" for j,h in enumerate(header)})
+        return rows
     return []
 
 
 def extract_rows(resp: dict[str, Any], cmd: str) -> list[dict[str, str]]:
     """Return a list of row dicts from a show-cmd response, whichever shape it has."""
+    if resp.get(cmd) == []:
+        return []
     candidates = [resp.get(cmd)] + list(resp.values())
     for v in candidates:
         if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):

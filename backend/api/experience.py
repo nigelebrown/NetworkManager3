@@ -11,7 +11,7 @@ from ..database.models import AccessPoint, ClientEvent, ClientRecord, Site, Site
 from ..database.session import get_db
 from ..experience.config import ExperienceConfig, load_config, save_config
 from ..experience.scoring import ClientMetrics, band_for, score_client, summarize
-from ..monitoring.collector import visible_sites
+from ..monitoring.collector import visible_sites, client_observation_minutes
 from ..security.deps import audit, require_role
 from ..security.privacy import mask_mac
 
@@ -87,11 +87,13 @@ def client_score_result(db: Session, c: ClientRecord) -> dict:
     """Re-derive a client's score (with its full input breakdown) using the current configuration."""
     cfg = load_config(db)
     now = utcnow()
+    observed=client_observation_minutes(db,c,now)
+    start=max(now-timedelta(hours=cfg.client.stability.window_hours),now-timedelta(minutes=observed)) if observed is not None else now
     n = db.scalar(select(func.count()).select_from(ClientEvent).where(
         ClientEvent.mac == c.mac, ClientEvent.site_id == c.site_id, ClientEvent.kind == "disconnect",
-        ClientEvent.ts >= now - timedelta(hours=cfg.client.stability.window_hours))) or 0
+        ClientEvent.ts >= start)) or 0
     return score_client(ClientMetrics(snr_db=c.snr_db, rssi_dbm=c.rssi_dbm, speed_mbps=c.speed_mbps, disconnects=n,
-                                      observed_minutes=(now - _aware(c.first_seen)).total_seconds() / 60), cfg)
+                                      observed_minutes=observed), cfg)
 
 
 @router.get("/clients/{client_id}")
