@@ -40,3 +40,11 @@ def test_missing_or_malformed_rows_still_block_disconnect_inference(raw):
 
 def test_explicit_empty_inventory_is_not_replaced_by_an_unrelated_table():
     assert parsers.extract_rows({"show clients":[],"other":[{"MAC Address":"aa:bb:cc:00:00:01"}]},"show clients")==[]
+
+
+def test_compact_ap_rows_do_not_use_header_column_offsets():
+    raw=("1 Access Points\n---------------\nName  IP Address  Mode  Spectrum  Clients  Type  Serial #\n"
+         "----  ----------  ----  --------  -------  ----  --------\n"
+         "aa:bb:cc:00:00:01  10.9.8.10*  access  disable  0  505(indoor)  EXAMPLE-1\n")
+    ap=parsers.normalize_aps(parsers.parse_text_table(raw))[0]
+    assert ap["ip"]=="10.9.8.10" and ap["serial"]=="EXAMPLE-1"
