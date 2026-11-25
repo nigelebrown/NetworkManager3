@@ -1,3 +1,5 @@
+> **Current version and release status:** See [VERSION](VERSION) for the source version and [production acceptance gates](docs/PRODUCTION_GO_NO_GO.md) for the conditions required before production use. Historical release notes below are not current certification evidence. Verify CI for the exact candidate commit before deployment.
+
 > **Release candidate 1.2.0-rc2 — software remediation before hardware testing (branch `release/software-remediation`).**
 > All 20 independent-audit findings fixed with regression tests; per-interface telemetry, a transactional outbox
 > event pipeline, CX form login + CSRF + API-version negotiation, durable discovery jobs, a 12-step persistent
@@ -59,7 +61,7 @@
 >
 # Intelligent Network Manager — Git-managed Phase 1 Demo
 
-The complete application source is hosted in the **private**
+The complete application source is hosted in the
 [nigelebrown/NetworkManager3](https://github.com/nigelebrown/NetworkManager3) repository.
 **No local PC, ZIP uploads or manual source transfers are required.** Device
 configuration writes are locked in this Phase 1 demo.
