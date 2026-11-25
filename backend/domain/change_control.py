@@ -130,8 +130,10 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
                 raise PolicyViolation(f"Channel {ch} is not valid for {band} GHz.")
             if ch in excluded_channels:
                 raise PolicyViolation(f"Channel {ch} is excluded by site policy.")
-            if band == "5" and ch in DFS_5G and not allow_dfs:
-                raise PolicyViolation(f"DFS channel {ch} requires an approved site compatibility profile.")
+            if band == "5" and ch in DFS_5G:
+                if not allow_dfs:
+                    raise PolicyViolation(f"DFS channel {ch} requires an approved site compatibility profile.")
+                return {**op, "allow_dfs": True}
         if kind == "ap.radio.tx_power":
             lo, hi = op.get("min_dbm"), op.get("max_dbm")
             if not (isinstance(lo, int) and isinstance(hi, int) and 3 <= lo <= hi <= 30):
