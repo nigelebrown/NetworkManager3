@@ -5,7 +5,7 @@ import { useLoad } from "./useLoad";
 import { request, getSession } from "../services/api";
 import { btn, btn2 } from "./viz";
 
-type AP={id:string;name:string;ip:string|null;location:string|null;model:string;arm_freshness:string};
+type AP={id:string;name:string;ip:string|null;location:string|null;model:string;arm_freshness:string;native_clientmatch?:{state:string;record_count:number;clock_alignment:string|null}};
 type Group={key:string;controller:string;port:number;sites:string[];aps:AP[];fresh_aps:number;operations:Record<string,unknown>[];unsupported_changes:Record<string,unknown>;blockers:string[];scope_note:string};
 type Window={samples:number;span_minutes:number;link_score:number|null;poor_percent:number|null;snr_db:number|null;rssi_dbm:number|null;mean_clients:number|null;client_measurement_coverage:number|null;arm:{util_percent:number|null;quality_percent:number|null;retry_percent:number|null;coverage:number;repeated_coverage:number};inferred_events:{disconnect:number;roam:number};intelligence_findings_seen:number};
 type ClusterReview={group:Group;state:string;before:Window;after:Window|null;comparison:{state:string;reasons?:string[];link_score_delta?:number;poor_client_percentage_point_delta?:number}|null};
@@ -44,7 +44,7 @@ export default function WirelessImpactPanel(){
   <div className="max-h-96 overflow-auto"><table className="w-full text-sm"><thead><tr className="text-left"><th>Select</th><th>Application scope</th><th>APs / ARM coverage</th><th>Proposed settings and prerequisites</th></tr></thead><tbody>
    {(data.data?.groups??[]).map(g=><tr key={g.key} className="border-t align-top">
     <td><input aria-label={"Select "+g.controller} type="checkbox" checked={selected.includes(g.key)} disabled={!canCapture} onChange={e=>setSelected(s=>e.target.checked?[...s,g.key]:s.filter(k=>k!==g.key))}/></td>
-    <td className="p-2"><b>{g.sites.join(" / ")}</b><div>{g.controller}:{g.port}</div><details><summary>Locations and APs</summary>{g.aps.map(a=><div key={a.id} className="py-1"><Link className="inm-link" to={"/devices/"+a.id+"/360"}>{a.name}</Link> · {a.ip} · {a.location??"physical location not assigned"} · {a.model}</div>)}<p>{g.scope_note}</p></details></td>
+    <td className="p-2"><b>{g.sites.join(" / ")}</b><div>{g.controller}:{g.port}</div><details><summary>Locations and APs</summary>{g.aps.map(a=><div key={a.id} className="py-1"><Link className="inm-link" to={"/devices/"+a.id+"/360"}>{a.name}</Link> · {a.ip} · {a.location??"physical location not assigned"} · {a.model}<div className="text-xs text-slate-500">Native ClientMatch: {a.native_clientmatch?.state??"not collected"} · {a.native_clientmatch?.record_count??0} captured actions · {a.native_clientmatch?.clock_alignment??"timing not verified"}</div></div>)}<p>{g.scope_note}</p></details></td>
     <td className="p-2">{g.aps.length} APs · {g.fresh_aps} fresh</td>
     <td className="p-2"><details><summary>{g.operations.length} proposed operation(s)</summary><pre className="whitespace-pre-wrap text-xs">{JSON.stringify(g.operations,null,2)}</pre></details>{g.blockers.map(b=><div key={b} className="text-amber-700">{b}</div>)}{!!Object.keys(g.unsupported_changes).length&&<div className="text-xs">Additional controls need implementation/certification: {Object.keys(g.unsupported_changes).join(", ")}</div>}<div className="text-xs text-slate-500">Existing certification, approval, regulatory and backup gates still apply.</div></td>
    </tr>)}
