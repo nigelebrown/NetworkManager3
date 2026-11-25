@@ -37,3 +37,20 @@ def test_dedupe_does_not_collapse_same_capture(monkeypatch):
     second = cm.parse(table(row("20s"), row("20s")), site_id=2, collected=later)["records"]
     assert len(cm.merge(first, second, later)) == 2
     assert cm.merge(first, [], NOW + timedelta(days=8)) == []
+
+
+def test_absolute_device_time_is_preserved_without_inventing_utc(monkeypatch):
+    monkeypatch.setattr(cm,"get_settings",lambda:type("Settings",(),{"jwt_secret":"test-key"})())
+    native=table(f"{MAC} Normal Normal Client associated 0 2026-11-25 09:18:05")
+    parsed=cm.parse(native,site_id=2,collected=NOW)
+    assert parsed["state"]=="COLLECTED" and parsed["clock_alignment"]=="DEVICE_LOCAL_UNVERIFIED"
+    record=parsed["records"][0]
+    assert record["estimated_at"] is None and record["age_seconds_at_capture"] is None
+    assert record["device_local_time"]=="2026-11-25 09:18:05" and MAC not in str(parsed)
+    assert len(cm.merge(parsed["records"],cm.parse(native,site_id=2,collected=NOW+timedelta(seconds=20))["records"],NOW+timedelta(seconds=20)))==1
+    assert cm.merge(parsed["records"],[],NOW+timedelta(days=8))==[]
+
+def test_invalid_device_calendar_timestamp_is_not_accepted(monkeypatch):
+    monkeypatch.setattr(cm,"get_settings",lambda:type("Settings",(),{"jwt_secret":"test-key"})())
+    parsed=cm.parse(table(f"{MAC} Normal Normal Client associated 0 2026-19-55 09:18:05"),site_id=2,collected=NOW)
+    assert parsed["state"]=="PARTIAL" and not parsed["records"]
