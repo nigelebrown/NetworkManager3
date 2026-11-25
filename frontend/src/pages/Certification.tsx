@@ -14,6 +14,10 @@ export default function Certification() {
   const [ssid, setSsid] = useState("");
   const [enterpriseSsid, setEnterpriseSsid] = useState("");
   const [testChannels, setTestChannels] = useState("");
+  const [guestSsid, setGuestSsid] = useState("");
+  const [guestPortal, setGuestPortal] = useState("");
+  const [guestPre, setGuestPre] = useState("");
+  const [guestMac, setGuestMac] = useState("");
   const [vlan, setVlan] = useState(4090);
   const [ack, setAck] = useState(false);
   const [run, setRun] = useState<Awaited<ReturnType<typeof rw.certify>> | null>(null);
@@ -33,6 +37,10 @@ export default function Certification() {
         </> : <>
           <label className="text-sm">Existing lab SSID (VLAN and roaming)<input className={inputCls} value={ssid} onChange={e => setSsid(e.target.value)} /></label>
           <label className="text-sm">Existing lab enterprise SSID (RADIUS accounting)<input className={inputCls} value={enterpriseSsid} onChange={e => setEnterpriseSsid(e.target.value)} /></label>
+          <label className="text-sm">Existing lab guest SSID<input className={inputCls} value={guestSsid} onChange={e => setGuestSsid(e.target.value)} /></label>
+          <label className="text-sm">Existing lab external captive portal<input className={inputCls} value={guestPortal} onChange={e => setGuestPortal(e.target.value)} /></label>
+          <label className="text-sm">Existing lab pre-auth role<input className={inputCls} value={guestPre} onChange={e => setGuestPre(e.target.value)} /></label>
+          <label className="text-sm">Existing lab MAC-auth role<input className={inputCls} value={guestMac} onChange={e => setGuestMac(e.target.value)} /></label>
           <label className="text-sm">Lab non-DFS allowed channels (20/40 MHz)<input className={inputCls} value={testChannels} onChange={e => setTestChannels(e.target.value)} placeholder="36,40,44,48" /></label>
         </>}
         <label className="text-sm">Test VLAN<input type="number" className={inputCls} value={vlan} onChange={e => setVlan(Number(e.target.value))} /></label>
@@ -42,7 +50,8 @@ export default function Certification() {
       <button className={`${btn} mt-3`} disabled={!device || !ack || act.busy} onClick={() => act.run(async () => {
         const r = await rw.certify({ device_id: device!.id, lab_device_acknowledged: true, test_port: port || null, test_vlan: vlan,
           lag_ports: lag ? lag.split(/[\s,]+/).filter(Boolean) : null, test_ssid: ssid || null, test_enterprise_ssid: enterpriseSsid || null,
-          test_allowed_channels: testChannels.trim() ? testChannels.split(/[\s,]+/).filter(Boolean) : null });
+          test_allowed_channels: testChannels.trim() ? testChannels.split(/[\s,]+/).filter(Boolean) : null,
+          test_guest_ssid: guestSsid || null, test_guest_portal: guestPortal || null, test_guest_pre_auth_role: guestPre || null, test_guest_mac_role: guestMac || null });
         setRun(r); certs.reload();
         const uns = r.results.filter(x => (x as { unsupported?: boolean }).unsupported).length;
         return `Certification run complete: ${r.results.filter(x => x.passed).length}/${r.results.length - uns} operations passed${uns ? ` (${uns} not supported by this adapter)` : ""} on ${r.model_family} firmware ${r.firmware_train} (${r.environment}). An independent approver must now approve each passed operation.`;
