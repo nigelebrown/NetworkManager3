@@ -9,6 +9,7 @@ import type { Device } from "../services/inm";
 import { ops, rw } from "../services/ops";
 import GuidePanel from "../components/GuidePanel";
 import ClusterOptimization from "../components/ClusterOptimization";
+import WirelessImpactPanel from "../components/WirelessImpactPanel";
 
 export default function Optimization() {
   const [device, setDevice] = useState<Device | undefined>();
@@ -28,6 +29,7 @@ export default function Optimization() {
       Emergency stop: <b>{control.data?.emergency_stop ? "ACTIVE" : "clear"}</b>. Vendor-native features such as Aruba ARM remain as configured on each device.</div>
     <ErrorNote error={control.error || state.error || enrollments.error || sites.error} />
     <GuidePanel guide="optimization" defaultOpen={false} />
+    <WirelessImpactPanel />
     <ClusterOptimization onChanged={() => { enrollments.reload(); state.reload(); }} />
     <Card title="Single device">
       <div className="max-w-md"><DevicePicker family="access_point" value={device?.id ?? ""} onChange={(_, d) => setDevice(d)} /></div>

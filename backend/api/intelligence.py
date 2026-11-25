@@ -574,3 +574,71 @@ def inventory(request: Request, user: User = viewer):
                 rows.append({"kind": "route", "method": method, "target": path, "registered": (method, path) in routes})
         out[ws] = {"items": rows, "complete": all(r["registered"] for r in rows)}
     return {"workspaces": out, "complete": all(v["complete"] for v in out.values())}
+
+
+# ---- ARM + digital experience impact review (read-only towards hardware)
+class WirelessImpactInput(BaseModel):
+    cluster_keys: list[str] = Field(min_length=1, max_length=5)
+    window_minutes: int = Field(default=30, ge=15, le=120)
+
+def _impact_sites(db):
+    return [s.id for s in db.scalars(select(Site).where(Site.simulated==False,Site.enabled==True)) if _in_scope(s.id)]
+
+def _impact_row(db, review_id):
+    from ..database.models import AppSetting
+    from ..infrastructure import wireless_impact as WI
+    row=db.get(AppSetting,WI.PREFIX+review_id)
+    if row is None or any(not _in_scope(sid) for g in row.value["clusters"] for sid in g["group"]["site_ids"]):
+        raise HTTPException(404,"Impact review not found")
+    return row
+
+@router.get("/wireless-impact")
+def wireless_impact_preview(db: Session = Depends(get_db), user: User = viewer):
+    from ..infrastructure import wireless_impact as WI
+    return {"groups":WI.groups(db,_impact_sites(db)),"source":"ARUBA_ARM + DIGITAL_EXPERIENCE + NETWORK_INTELLIGENCE",
+        "read_only_devices":True,"model":WI.MODEL,"unmeasured":WI.UNKNOWN,
+        "note":"Proposals only. No hardware writes. Partial wireless link scores are not end-to-end service assurance."}
+
+@router.get("/wireless-impact/reviews")
+def wireless_impact_reviews(db: Session = Depends(get_db), user: User = viewer):
+    from ..database.models import AppSetting
+    from ..infrastructure import wireless_impact as WI
+    rows=list(db.scalars(select(AppSetting).where(AppSetting.key.startswith(WI.PREFIX)).order_by(AppSetting.updated_at.desc()).limit(100)))
+    return {"items":[{"id":r.key[len(WI.PREFIX):],"created_at":r.value["created_at"],
+                     "clusters":len(r.value["clusters"]),"complete":r.value.get("complete",False)}
+        for r in rows if all(_in_scope(sid) for c in r.value["clusters"] for sid in c["group"]["site_ids"])]}
+
+@router.post("/wireless-impact/reviews",status_code=201)
+def capture_wireless_impact(body: WirelessImpactInput, request: Request, db: Session = Depends(get_db), user: User = operator):
+    import uuid
+    from ..database.models import AppSetting
+    from ..infrastructure import wireless_impact as WI
+    if len(set(body.cluster_keys))!=len(body.cluster_keys):raise HTTPException(422,"Choose each cluster only once")
+    if (db.scalar(select(func.count()).select_from(AppSetting).where(AppSetting.key.startswith(WI.PREFIX))) or 0)>=100:
+        raise HTTPException(409,"Archive an old impact review before creating another")
+    available={g["key"]:g for g in WI.groups(db,_impact_sites(db))}
+    if any(k not in available for k in body.cluster_keys):raise HTTPException(404,"Cluster not found")
+    selected=[available[k] for k in body.cluster_keys]
+    if any(g["fresh_aps"]!=len(g["aps"]) or g["blockers"][:1]==["No fresh native ARM configuration"] for g in selected):
+        raise HTTPException(409,"Refresh native ARM evidence for every member before freezing a review")
+    if any("Fresh member configurations disagree" in g["blockers"] for g in selected):
+        raise HTTPException(409,"Member configurations disagree; revalidate the controller first")
+    now=_now()
+    record={"id":str(uuid.uuid4()),"created_at":now.isoformat(),"requested_by":user.username,
+            "window_minutes":body.window_minutes,"scoring_policy_hash":WI.policy_hash(db),"model":WI.MODEL,
+            "read_only_devices":True,"clusters":[{"group":g,"before":WI.history(db,g,now-timedelta(minutes=body.window_minutes),now)} for g in selected]}
+    db.add(AppSetting(key=WI.PREFIX+record["id"],value=record,updated_by=user.username))
+    audit(db,"wireless_impact_baseline_saved",username=user.username,target=record["id"],
+          detail=f'{len(selected)} clusters; measured history only; no hardware writes',request=request)
+    return WI.details(db,record,list(available.values()),now)
+
+@router.get("/wireless-impact/reviews/{review_id}")
+def wireless_impact_review(review_id: str, db: Session = Depends(get_db), user: User = viewer):
+    from ..infrastructure import wireless_impact as WI
+    return WI.details(db,_impact_row(db,review_id).value,WI.groups(db,_impact_sites(db)),_now())
+
+@router.delete("/wireless-impact/reviews/{review_id}",status_code=204)
+def delete_wireless_impact(review_id: str, request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    row=_impact_row(db,review_id);db.delete(row)
+    audit(db,"wireless_impact_review_archived",username=user.username,target=review_id,
+          detail="Review record removed; no device configuration changed",request=request)

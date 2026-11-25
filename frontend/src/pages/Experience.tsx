@@ -63,14 +63,15 @@ export default function Experience() {
       {msg && <div className="rounded-lg border border-emerald-800 bg-emerald-950/40 p-2 text-sm text-emerald-200">{msg}</div>}
 
       <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-400">
-        Scores combine what the AP reports (signal, connection speed) with connection stability <b>inferred from polling</b>. Retransmissions,
-        channel congestion, latency, jitter, packet loss, DHCP and application responsiveness are <b>not measured yet</b>, so they are left out and never estimated.
-        Every score lists the inputs it used and what was missing.
+        This is a partial wireless-link assessment, using configurable application weights and AP-reported signal and negotiated PHY rate.
+        PHY rate is not throughput. Stability is inferred from polling; missing retries and service measurements are not assumed healthy.
+        ARM radio quality is separate from client experience. Association/authentication, DHCP/DNS, packet loss, RTT/jitter and application throughput need their own telemetry.
+        <a className="inm-link ml-1" href="/optimization">Review ARM and client evidence before and after changes</a>.
       </div>
 
       {s && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <Stat label="Experience score" value={s.score ?? NA} tone={tone(s.band)} sub={s.score == null ? "no scorable clients" : `${s.band} · mean of clients`} />
+          <Stat label="Wireless-link score" value={s.score ?? NA} tone={tone(s.band)} sub={s.score == null ? "no scorable clients" : `${s.band} · mean of clients`} />
           <Stat label="Good" value={s.good} tone="ok" sub={`score ≥ ${o?.bands.good_min}`} />
           <Stat label="Fair" value={s.fair} tone="warn" sub={`score ≥ ${o?.bands.fair_min}`} />
           <Stat label="Poor" value={s.poor} tone={s.poor ? "bad" : undefined} sub={`score < ${o?.bands.fair_min}`} />
