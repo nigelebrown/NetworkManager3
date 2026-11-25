@@ -168,6 +168,26 @@ def compare(before, after):
             "causal_claim":False,"end_to_end_verdict":"UNMEASURED",
             "rule":"Application review thresholds: five link-score points or five poor-client percentage points; not a vendor certification."}
 
+
+def rate_sensitive_review(comparison, proposed, before, after, cfg):
+    """An intentional width change can move PHY-based scores without changing application experience."""
+    if not any(o.get("op")=="ap.radio.width" for o in proposed) or cfg.client.weights.rate<=0:
+        return comparison
+    if comparison.get("state") not in ("OBSERVED_LINK_IMPROVEMENT","OBSERVED_LINK_DEGRADATION"):
+        return comparison
+    direction=1 if comparison["state"]=="OBSERVED_LINK_IMPROVEMENT" else -1
+    def delta(a,b):
+        return a-b if number(a) is not None and number(b) is not None else None
+    snr=delta(after.get("snr_db"),before.get("snr_db"))
+    quality=delta(after.get("arm",{}).get("quality_percent"),before.get("arm",{}).get("quality_percent"))
+    retries=delta(before.get("arm",{}).get("retry_percent"),after.get("arm",{}).get("retry_percent"))
+    corroborated=any(v is not None and v*direction>=threshold for v,threshold in ((snr,3),(quality,10),(retries,5)))
+    if not corroborated:
+        return {**comparison,"state":"RATE_SENSITIVE_SCORE_CHANGE_REVIEW_REQUIRED",
+                "reasons":["Channel width changes negotiated PHY rates. No corroborating signal/retry/channel-quality change supports interpreting the score change as experience improvement or degradation."]}
+    return comparison
+
+
 def details(db, record, current_groups, now):
     result={**record,"clusters":[]}
     current={g["key"]:g for g in current_groups}
@@ -205,7 +225,7 @@ def details(db, record, current_groups, now):
             row["state"]="EXECUTION_TIMING_UNVERIFIED";result["clusters"].append(row);continue
         row["after"]=history(db,g,start,min(now,end)) if now>start else None
         if now<end:row["state"]="OBSERVING";result["clusters"].append(row);continue
-        row["comparison"]=compare(row["before"],row["after"])
+        row["comparison"]=rate_sensitive_review(compare(row["before"],row["after"]),saved["group"]["operations"],row["before"],row["after"],load_config(db))
         if utc(ex.started_at)-utc(record["created_at"])>timedelta(minutes=10):
             row["comparison"]={"state":"INCONCLUSIVE","reasons":["Saved baseline no longer immediately precedes the change. Capture a new review."]}
         row["state"]=row["comparison"]["state"];result["clusters"].append(row)
