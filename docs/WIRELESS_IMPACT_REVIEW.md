@@ -29,3 +29,6 @@ The dimensions and distinctions follow public platform documentation, not copied
 - Meraki health stages: https://documentation.meraki.com/Platform_Management/Dashboard_Administration/Operate_and_Maintain/Monitoring_and_Reporting/Meraki_Health_Overview
 
 No hardware certification, approval or write gate is removed. This feature does not execute a rollout or automatically claim an optimized WLAN.
+
+## Native AP timing verification
+The live Commissioners Office AP returned ClientMatch actions with absolute device-local timestamps, rather than relative ages. The parser now preserves that format without assigning UTC or a timezone. Client journeys display those actions separately until clock alignment is verified. Capture time is not substituted for event time, and association records do not establish a complete roaming stream or a service-success denominator.
