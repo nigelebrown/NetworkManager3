@@ -145,6 +145,16 @@ def run_job(session_factory, job_id: str, owner: str, identify: Callable[[str, s
                 if r.get("serial_number") and r["serial_number"] in serials and r["management_ip"] not in by_ip:
                     r = {**r, "enrollable": False, "status": "DUPLICATE",
                          "result_note": "Same serial already answered on another address (VC/cluster or NAT)."}
+                if r.get("status") == "FOUND" and r.get("enrollable"):
+                    from . import automatic_onboarding as AO
+                    try:
+                        with db.begin_nested():
+                            device_id = AO.enroll_authenticated_result(
+                                db, profile_id, r, job.site_name, job.created_by)
+                            if device_id:
+                                r = {**r, "existing_device_id": device_id, "automatically_registered": True}
+                    except Exception as exc:
+                        r = {**r, "automatic_onboarding_error": type(exc).__name__}
                 by_ip[r["management_ip"]] = r
                 if r.get("serial_number"):
                     serials.add(r["serial_number"])

@@ -100,6 +100,38 @@ def plan_upgrade(site_id: int, body: UpgradeBody, request: Request, db: Session 
                                                                allow_downgrade=body.allow_downgrade, request=request)))
 
 
+# ---- firmware follow-through --------------------------------------------------------------------------------------
+@router.get("/sites/{site_id}/upgrade/history")
+def upgrade_history(site_id: int, db: Session = Depends(get_db), admin: User = Depends(require_role("admin"))):
+    _site(db, site_id)
+    return [change_out(c) for c in db.scalars(select(ConfigChange).where(
+        ConfigChange.site_id == site_id, ConfigChange.kind == "firmware_stage")
+        .order_by(ConfigChange.id.desc()).limit(50))]
+
+
+def _upgrade_change(db, change_id):
+    change = db.get(ConfigChange, change_id)
+    if not change or change.kind != "firmware_stage":
+        raise HTTPException(404, "Firmware change not found.")
+    return change
+
+
+@router.post("/upgrades/{change_id}/verify")
+def verify_upgrade(change_id: int, request: Request, db: Session = Depends(get_db),
+                   admin: User = Depends(require_role("admin"))):
+    change = _upgrade_change(db, change_id)
+    return _plan_guard(lambda: upgrade.verify_members(db, change, _site(db, change.site_id),
+                                                     admin.username, request=request))
+
+
+@router.post("/upgrades/{change_id}/recovery-plan", status_code=201)
+def recovery_plan(change_id: int, body: UpgradeBody, request: Request, db: Session = Depends(get_db),
+                  admin: User = Depends(require_role("admin"))):
+    change = _upgrade_change(db, change_id)
+    return change_out(_plan_guard(lambda: upgrade.plan_recovery(db, change, _site(db, change.site_id),
+                                                               admin.username, body.image_ids, request=request)))
+
+
 # ---- certificate --------------------------------------------------------------------------------------------------
 @router.post("/sites/{site_id}/certificate/plan", status_code=201)
 def plan_certificate(site_id: int, request: Request, file: UploadFile = File(...), passphrase: str = Form(...),
@@ -116,7 +148,15 @@ def download(change_id: int, token: str, filename: str, request: Request, db: Se
     ok = (images.link_valid(token, change_id, filename) and ch is not None and ch.kind == "firmware_stage"
           and ch.status in ("applied", "applied_unverified") and images.link_window_open(ch.applied_at)
           and filename in {i.get("filename") for i in (ch.plan or {}).get("images", [])})
-    path = images.image_path(filename) if ok else None
+    path = None
+    if ok:
+        item = next((i for i in (ch.plan or {}).get("images", []) if i.get("filename") == filename), None)
+        if item:
+            try:
+                path = images.verify_image(filename, item.get("sha256"), item.get("size_bytes"))
+            except images.ImageError:
+                audit(db, "firmware_download_integrity_refused", username=None, target=f"image:{filename}",
+                      detail=f"change #{change_id}", request=request, success=False)
     if path is None:
         raise HTTPException(404, "Not found")  # same answer for every failure: reveals nothing
     audit(db, "firmware_download", username=None, target=f"image:{filename}",

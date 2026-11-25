@@ -167,9 +167,24 @@ def port_intent(eff: dict, ports: list[str]) -> dict[str, dict]:
 
 
 # ---- facts from captured configuration ------------------------------------------------------------------------
+def _reference_ids(ref) -> list[int]:
+    """Read legacy string/list and current CX reference-map forms."""
+    values = ref.values() if isinstance(ref, dict) else ref
+    if isinstance(values, (str, int)):
+        values = [values]
+    if values is None:
+        return []
+    ids = set()
+    for value in values:
+        tail = str(value).rsplit("/", 1)[-1]
+        if tail.isdigit() and 1 <= int(tail) <= 4094:
+            ids.add(int(tail))
+    return sorted(ids)
+
+
 def _tail_id(ref) -> int | None:
-    s = str(ref or "").rsplit("/", 1)[-1]
-    return int(s) if s.isdigit() else None
+    ids = _reference_ids(ref)
+    return ids[0] if len(ids) == 1 else None
 
 
 def cx_facts(cfg: dict) -> dict:
@@ -184,12 +199,12 @@ def cx_facts(cfg: dict) -> dict:
         poe = (it.get("poe") or {}).get("config") or {}
         ports[str(it.get("name") or name)] = {
             "vlan_mode": it.get("vlan_mode"), "access_vlan": _tail_id(it.get("vlan_tag")),
-            "trunk_vlans": sorted(x for x in (_tail_id(v) for v in it.get("vlan_trunks") or []) if x),
+            "trunk_vlans": _reference_ids(it.get("vlan_trunks")),
             "admin_state": it.get("admin") or it.get("admin_state") or "up",
             "description": it.get("description") or "",
             "bpdu_guard": "enabled" if (it.get("stp_config") or {}).get("bpdu_guard_enable") else "disabled",
             "storm_control_kbps": (it.get("rate_limits") or {}).get("broadcast"),
-            "qos_trust": it.get("qos_trust") or "none",
+            "qos_trust": (it.get("qos_config") or {}).get("qos_trust") or it.get("qos_trust") or "none",
             "poe": "disabled" if poe.get("admin_disable") else "enabled",
             "lldp": "disabled" if (it.get("other_config") or {}).get("lldp_enable_dir") == "off" else "enabled"}
     vrf = (cfg.get("vrfs") or {}).get("mgmt") or {}
@@ -235,7 +250,9 @@ def reconcile(family: str, eff: dict, facts: dict, *, ports: list[str] | None = 
                 continue                      # this model does not have the port (e.g. 1/1/48 on a 24-port)
             if want.get("access_vlan") is not None and (h["vlan_mode"] != "access" or h["access_vlan"] != want["access_vlan"]):
                 ops.append({"op": "switch.port.access_vlan", "port": p, "value": want["access_vlan"]})
-            if want.get("trunk_vlans") and h["trunk_vlans"] != sorted(want["trunk_vlans"]):
+            if want.get("trunk_vlans") and (h["trunk_vlans"] != sorted(want["trunk_vlans"])
+                                           or h["vlan_mode"] != "native-untagged"
+                                           or h["access_vlan"] != want.get("native_vlan", 1)):
                 ops.append({"op": "switch.port.trunk_vlans", "port": p, "value": sorted(want["trunk_vlans"]),
                             **({"native": want["native_vlan"]} if want.get("native_vlan") else {})})
             for key, op in (("admin_state", "switch.port.admin_state"), ("poe", "switch.port.poe"),

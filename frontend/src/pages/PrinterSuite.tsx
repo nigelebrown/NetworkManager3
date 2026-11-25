@@ -2,7 +2,7 @@
  * Printer Intelligence workspaces (SRS navigation). Every figure comes from the API with its source,
  * coverage and confidence. Missing data is shown as missing — never as zero. Printers stay read-only.
  */
-import { ReactNode, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ErrorNote } from "../components/ui";
@@ -136,38 +136,75 @@ export function PrinterInventory() {
 }
 
 function DiscoveryJobs({ onDone }: { onDone: () => void }) {
+  const recent = useLoad(prn.discoveryJobs, [], 0);
+  const settings = useLoad(prn.settings, [], 0);
   const creds = useLoad(prn.credentialProfiles, [], 0);
   const [target, setTarget] = useState("");
-  const [cred, setCred] = useState("");
-  const [job, setJob] = useState<Job | null>(null);
+  const [selectedCreds, setSelectedCreds] = useState<string[]>([]);
+  const [plan, setPlan] = useState<{ addresses: number; batches: number; concurrency: number } | null>(null);
+  const [jobId, setJobId] = useState(() => sessionStorage.getItem("printer-discovery-job") ?? "");
+  const [queued, setQueued] = useState<Job | null>(null);
+  const current = useLoad(() => jobId ? prn.job(jobId) : Promise.resolve(null), [jobId], 2000);
+  const job = current.data?.id === jobId ? current.data : queued?.id === jobId ? queued : null;
+  const setJob = (j: Job) => { setQueued(j); setJobId(j.id); sessionStorage.setItem("printer-discovery-job", j.id); };
   const [pick, setPick] = useState<Record<string, boolean>>({});
+  // Approval selections belong to a single discovery job; never carry them across saved scans.
+  useEffect(() => { setPick({}); }, [jobId]);
   const act = useAction();
-  const start = () => act.run(async () => {
+  const body = () => {
     const t = target.trim();
-    const body: Record<string, unknown> = { credential_profile_id: cred };
-    if (t.includes("/")) body.management_range = t; else body.management_ips = t.split(/[\s,;]+/).filter(Boolean);
-    const j = await prn.discover(body); setJob(j);
-    const done = await waitJob(j.id); setJob(done);
-    return `${done.status}: ${done.result?.printers?.length ?? 0} printer(s) identified, ${(done.errors ?? []).length} address(es) not identified.${j.warnings?.length ? " " + j.warnings.join(" ") : ""}`;
+    return { credential_profile_ids: selectedCreds, ...(t.includes("/") ? { management_range: t } : { management_ips: t.split(/[\\s,;]+/).filter(Boolean) }) };
+  };
+  const start = () => act.run(async () => {
+    const j = await prn.discover(body()); setJob(j); recent.reload();
+    return `Discovery queued. Progress refreshes automatically and resumes when you reopen this page.${j.warnings?.length ? " " + j.warnings.join(" ") : ""}`;
   });
+  useEffect(() => {
+    if (!jobId && recent.data?.length) {
+      setJobId(recent.data[0].id); sessionStorage.setItem("printer-discovery-job", recent.data[0].id);
+    }
+  }, [jobId, recent.data]);
+  const blocked = (version: string) => version === "1" ? settings.data?.snmp_policy?.allow_v1 === false
+    : version === "2c" ? settings.data?.snmp_policy?.allow_v2c === false : false;
   const found: any[] = job?.result?.printers ?? [];  // eslint-disable-line @typescript-eslint/no-explicit-any
   return <Section title="Discovery job" footer="Read-only GET/GETNEXT. SNMPv3 authPriv preferred; v2c only where policy allows; v1 off by default.">
     <div className="flex flex-wrap items-end gap-2">
-      <label className="text-sm">Credential profile<select className={inputCls} value={cred} onChange={e => setCred(e.target.value)}>
-        <option value="">Choose…</option>{(creds.data ?? []).map(c => <option key={c.id} value={c.id}>{c.name} (SNMPv{c.version})</option>)}</select></label>
-      <label className="grow text-sm">CIDR (/22–/32) or IP list<input className={inputCls} value={target} onChange={e => setTarget(e.target.value)} placeholder="10.103.44.0/24 or 10.103.44.21, 10.103.44.22" /></label>
-      <button className={btn} disabled={act.busy || !cred || !target.trim()} onClick={start}>{act.busy ? `Scanning… ${job?.progress ?? 0}/${job?.total ?? "?"}` : "Start discovery"}</button>
-      {job && ["QUEUED", "RUNNING"].includes(job.status) && <button className={btn2} onClick={() => prn.cancelJob(job.id).then(setJob)}>Cancel</button>}
+      <fieldset className="w-full"><legend className="text-sm font-semibold">Credential profiles to try</legend>
+        <div className="flex flex-wrap gap-3">{(creds.data ?? []).map(c => <label key={c.id} className="text-sm">
+          <input type="checkbox" checked={selectedCreds.includes(c.id)} disabled={blocked(c.version)}
+            onChange={e => { setSelectedCreds(e.target.checked ? [...selectedCreds, c.id] : selectedCreds.filter(id => id !== c.id)); setPlan(null); }} />
+          {" "}{c.name} (SNMPv{c.version}){blocked(c.version) ? " — disabled by printer policy" : ""}
+        </label>)}</div>
+        {!creds.data?.length && <p className="text-sm">Create a saved SNMP credential profile before starting discovery.</p>}
+      </fieldset>
+      <label className="grow text-sm">CIDR (/9–/32) or IP list<input className={inputCls} value={target} onChange={e => { setTarget(e.target.value); setPlan(null); }} placeholder="10.103.44.0/24 or 10.103.44.21, 10.103.44.22" /></label>
+      <button className={btn2} disabled={act.busy || !selectedCreds.length || !target.trim()} onClick={() => act.run(async () => {
+        const p = await prn.discoveryPlan(body()); setPlan(p); return "Plan validated. No scan has started.";
+      })}>Preview scan plan</button>
+      <button className={btn} disabled={act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") || !selectedCreds.length || !target.trim()} onClick={start}>{act.busy || ["QUEUED","RUNNING"].includes(job?.status ?? "") ? `Scanning… ${job?.progress ?? 0}/${job?.total ?? "?"}` : "Start discovery"}</button>
+      {job && ["QUEUED", "RUNNING"].includes(job.status) && <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { setJob(await prn.controlDiscovery(job.id, "pause")); current.reload(); return "Pause requested; the current batch saves its progress."; })}>Pause scan</button>}
+      {job && ["PAUSED", "CANCELLED", "FAILED"].includes(job.status) && <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { setJob(await prn.controlDiscovery(job.id, "resume")); current.reload(); return "Discovery queued from its saved position."; })}>Resume scan</button>}
     </div>
+    {plan && <p className="mt-3 text-sm">{plan.addresses.toLocaleString()} addresses · {plan.batches.toLocaleString()} batches · at most {plan.concurrency} simultaneous probes. Large scans can take days; pause and resume without keeping this page open.</p>}
+    <ErrorNote error={creds.error || current.error || recent.error || settings.error} />
+    <p className="mt-2 text-xs">Version access is controlled under <Link className="inm-link" to="/printers/profiles">SNMP &amp; MIB profiles</Link>.</p>
+    {!!recent.data?.length && <label className="mt-3 block text-sm">Previous discoveries
+      <select className={inputCls} value={jobId} onChange={e => { setJobId(e.target.value); sessionStorage.setItem("printer-discovery-job", e.target.value); }}>
+        <option value="">Choose a saved scan…</option>
+        {recent.data.map(j => <option key={j.id} value={j.id}>{j.target} · {j.status} · {j.found} found · {new Date(j.created_at).toLocaleString()}</option>)}
+      </select>
+    </label>}
     <Notice error={act.error} message={act.message} />
+    {job && <p role="status" className="mt-2 text-sm">{job.status}: {job.progress}/{job.total} checked · {found.length} printers found</p>}
+    {job?.status === "SUCCEEDED" && !found.length && <p className="mt-2 text-sm">No printers identified. Expand the per-address results below to see why.</p>}
     {job && found.length > 0 && <>
       <Table head={["", "IP", "Manufacturer", "Model (reported)", "Serial", "Confidence", "Profile", "Existing"]}
         rows={found.map(p => [<input type="checkbox" aria-label={`Select ${p.management_ip}`} checked={!!pick[p.management_ip]} disabled={!p.serial_number}
           onChange={e => setPick({ ...pick, [p.management_ip]: e.target.checked })} />, p.management_ip, p.manufacturer ?? "—",
           p.model ?? <span title={p.reported_model}>not recognised</span>, p.serial_number ?? "missing", <Pill value={p.confidence} tone={p.confidence === "HIGH" ? "good" : "fair"} />,
-          p.profile, p.existing_printer_id ? "registered" : "new"])} empty="" />
-      <button className={`${btn} mt-2`} disabled={act.busy || !Object.values(pick).some(Boolean)} onClick={() => act.run(async () => {
-        const items = found.filter(p => pick[p.management_ip]).map(p => ({ management_ip: p.management_ip, manufacturer: p.manufacturer || "Unknown",
+          (creds.data ?? []).find(c => c.id === p.credential_profile_id)?.name || p.profile, p.existing_printer_id ? "registered" : "new"])} empty="" />
+      <button className={`${btn} mt-2`} disabled={act.busy || !found.some(p => p.serial_number && pick[p.management_ip])} onClick={() => act.run(async () => {
+        const items = found.filter(p => p.serial_number && pick[p.management_ip]).map(p => ({ management_ip: p.management_ip, manufacturer: p.manufacturer || "Unknown",
           model: p.model || p.reported_model || "Unknown", serial_number: p.serial_number, hostname: p.hostname }));
         const r = await prn.approve(job.id, { items }); onDone(); setPick({});
         return `${r.created.length} registered, ${r.updated.length} updated; monitoring enabled (read-only).`;

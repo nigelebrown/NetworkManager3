@@ -51,6 +51,12 @@ def validate_enrollment_request(req: dict, *, device: dict, now: datetime) -> di
     widths = c.get("allowed_widths_mhz", [20])
     if not widths or any(w not in (20, 40) for w in widths):
         raise PolicyViolation("Allowed widths may only be 20 and/or 40 MHz.")
+    window=req.get("permitted_windows") or {}
+    if window:
+        if set(window)-{"start_hour","end_hour","timezone"} or window.get("timezone","UTC")!="UTC":
+            raise PolicyViolation("Maintenance windows use start_hour/end_hour in UTC.")
+        if any(not isinstance(window.get(k),int) or isinstance(window.get(k),bool) or not 0<=window[k]<=23 for k in ("start_hour","end_hour")) or window["start_hour"]==window["end_hour"]:
+            raise PolicyViolation("UTC window hours must be distinct integers from 0 to 23.")
     expires = req.get("expires_at_utc")
     if not isinstance(expires, datetime):
         raise PolicyViolation("Expiry is required.")
@@ -101,7 +107,7 @@ def evaluate_action(*, now: datetime, feature_enabled: bool, global_write_lock: 
         g("firmware_bound", e.get("firmware_bound") == device.get("firmware"),
           "Device firmware changed since enrollment.")
         g("independent_approver", bool(e.get("independent_approver_id"))
-          and e.get("independent_approver_id") != e.get("requester_id"), "No independent approver.")
+          and str(e.get("independent_approver_id")).casefold() != str(e.get("requester_id")).casefold(), "No independent approver.")
         g("operation_allowed", proposed_op.get("op") in (e.get("allowed_operation_types") or []),
           "Operation not in this device's allowlist.")
         try:

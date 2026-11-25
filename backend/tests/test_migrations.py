@@ -80,3 +80,32 @@ def test_expand_only_management_0004_to_current_head_preserves_existing_site(tmp
         assert "onboarding_config_snapshots" in tables
     finally:
         con.close()
+
+
+def test_0014_preserves_physical_cert_and_allows_separate_emulator(tmp_path, monkeypatch):
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+    from backend.database.models_phases import DeviceCertification
+    _setup(tmp_path, monkeypatch)
+    eng = dbs.get_engine()
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(dbs.__file__).parent / "migrations"))
+    with eng.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0013")
+        conn.execute(DeviceCertification.__table__.insert().values(
+            id="physical", adapter_key="aruba_cx_10_14", model_family="CX 6200", firmware_train="10.14",
+            operation="switch.vlan.define", environment="HARDWARE", status="TESTED_PENDING_APPROVAL",
+            run_id="physical-run", device_id="physical-device", evidence={"verified_firmware_build":"10.14.1000"},
+            tested_by="lab", tested_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)))
+    dbs.create_schema()
+    with dbs.session_scope() as db:
+        old = db.get(DeviceCertification, "physical")
+        assert old.evidence == {"verified_firmware_build":"10.14.1000"}
+        db.add(DeviceCertification(id="emulator", adapter_key=old.adapter_key, model_family=old.model_family,
+            firmware_train=old.firmware_train, operation=old.operation, environment="EMULATED",
+            status="TESTED_PENDING_APPROVAL", run_id="emulated-run", device_id="demo-device",
+            evidence={}, tested_by="demo"))
+        db.flush()
+        assert db.get(DeviceCertification, "physical").environment == "HARDWARE"

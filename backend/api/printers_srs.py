@@ -2,8 +2,8 @@
 
 Read endpoints use platform RBAC (viewer and above) with site scoping: a site-scoped user only sees
 printers assigned to a granted site. Changes to monitoring, profiles, MIBs, catalogue and records are
-admin-only; recommendation decisions need an approver or admin. Every change is audited. Nothing here
-writes to a printer: polls and diagnostic walks are read-only GET/GETNEXT jobs.
+admin-only; recommendation decisions need an approver or admin. Every change is audited. Monitoring
+polls and diagnostic walks are read-only GET/GETNEXT jobs. Explicit verified configuration actions use a separate journalled service.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from ..database.session import get_db, session_scope
 from ..printers import export, fleet, mib, mib_parser
 from ..printers import service as S
 from ..printers import utilization as U
-from ..printers.snmp import permitted_target
+from ..printers.snmp import permitted_target, permitted_network
 from ..security.context import get_scope
 from ..security.deps import ROLE_RANK, audit, require_any_role, require_role
 
@@ -466,7 +466,9 @@ def cancel_job(job_id: str, request: Request, db: Session = Depends(get_db), use
 
 # ---- discovery & import ------------------------------------------------------------------------------
 class DiscoveryJobInput(BaseModel):
-    credential_profile_id: str = Field(min_length=1, max_length=64)
+    credential_profile_id: str | None = Field(None, min_length=1, max_length=64)
+    credential_profile_ids: list[str] | None = Field(None, min_length=1, max_length=20)
+    concurrency: int = Field(16, ge=1, le=64)
     management_range: IPv4Network | None = None
     management_ips: list[IPv4Address] | None = Field(None, max_length=1024)
 
@@ -489,30 +491,89 @@ def _check_profile_policy(db: Session, profile_id: str) -> str:
     return version
 
 
+@router.get("/discovery/jobs")
+def recent_discoveries(db: Session = Depends(get_db), user: User = admin):
+    jobs = db.scalars(select(PrinterJob).where(PrinterJob.kind == "DISCOVERY")
+                      .order_by(PrinterJob.created_at.desc()).limit(20))
+    return [{"id": j.id, "status": j.status, "target": j.params.get("target", ""),
+             "created_at": S.iso(j.created_at), "progress": j.progress, "total": j.total,
+             "found": len((j.result or {}).get("printers", []))}
+            for j in jobs]
+
+
+def _discovery_plan(body: DiscoveryJobInput, db: Session) -> tuple[dict, int]:
+    ids = list(dict.fromkeys(body.credential_profile_ids or ([body.credential_profile_id] if body.credential_profile_id else [])))
+    if not ids:
+        raise HTTPException(422, "Select at least one saved credential profile")
+    versions = [_check_profile_policy(db, cid) for cid in ids]
+    if bool(body.management_range) == bool(body.management_ips):
+        raise HTTPException(422, "Provide either management_range or management_ips")
+    params = {"credential_profile_ids": ids, "credential_profile_id": ids[0],
+              "concurrency": body.concurrency, "next_index": 0, "snmp_versions": versions}
+    if body.management_range:
+        network = body.management_range
+        if network.prefixlen < 9:
+            raise HTTPException(422, "Use an IPv4 CIDR from /9 to /32")
+        if not permitted_network(network):
+            raise HTTPException(403, "The entire network must be within the server's management scope")
+        total = network.num_addresses - (2 if network.prefixlen < 31 else 0)
+        params |= {"network_cidr": str(network), "target": str(network)}
+    else:
+        hosts = list(dict.fromkeys(str(ip) for ip in body.management_ips))
+        if not all(permitted_target(h) or (S.emulation_enabled() and h in S.EMULATORS) for h in hosts):
+            raise HTTPException(403, "Every address must be within the server's management scope")
+        total = len(hosts)
+        params |= {"hosts": hosts, "target": f"{total} addresses"}
+    return params, total
+
+
+@router.post("/discovery/plan")
+def preview_discovery(body: DiscoveryJobInput, db: Session = Depends(get_db), user: User = admin):
+    params, total = _discovery_plan(body, db)
+    size = S.discovery_batch_size(params)
+    return {"target": params["target"], "addresses": total, "batch_size": size,
+            "batches": (total + size - 1) // size, "concurrency": body.concurrency,
+            "credential_profile_ids": params["credential_profile_ids"], "starts_scan": False}
+
+
 @router.post("/discovery", status_code=202)
 def start_discovery(body: DiscoveryJobInput, request: Request, background: BackgroundTasks, db: Session = Depends(get_db),
                     user: User = admin):
-    version = _check_profile_policy(db, body.credential_profile_id)
-    if bool(body.management_range) == bool(body.management_ips):
-        raise HTTPException(422, "Provide either management_range or management_ips")
-    try:
-        hosts = S.discovery_hosts(str(body.management_range) if body.management_range else [str(i) for i in body.management_ips])
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from None
-    if not all(permitted_target(h) or (S.emulation_enabled() and h in S.EMULATORS) for h in hosts):
-        raise HTTPException(403, "Every address must be within approved printer management ranges")
+    params, total = _discovery_plan(body, db)
     running = db.scalar(select(func.count()).select_from(PrinterJob).where(PrinterJob.kind == "DISCOVERY",
                                                                            PrinterJob.status.in_(("QUEUED", "RUNNING"))))
     if running and running >= 3:
         raise HTTPException(409, "Three printer discoveries are already running")
-    j = S.create_job(db, "DISCOVERY", {"hosts": hosts, "credential_profile_id": body.credential_profile_id,
-                                       "target": str(body.management_range or f"{len(hosts)} addresses"),
-                                       "snmp_version": version}, user.username, total=len(hosts))
+    j = S.create_job(db, "DISCOVERY", params, user.username, total=total)
     audit(db, "printer_discovery_started", username=user.username, target=j.id,
-          detail=f"read-only SNMPv{version} discovery of {len(hosts)} address(es)", request=request)
+          detail=f"read-only discovery of {total} addresses using {len(params['credential_profile_ids'])} selected profiles",
+          request=request)
     db.commit()
-    background.add_task(S.run_job, session_scope, j.id, _owner())
-    return _job_json(j) | {"warnings": ["SNMPv2c sends the community in clear text; prefer SNMPv3 authPriv"] if version != "3" else []}
+    if total <= 8:
+        background.add_task(S.run_job, session_scope, j.id, _owner())
+    return _job_json(j) | {"warnings": (["Large networks run in resumable background batches; results appear as batches finish."]
+                          if total > 1024 else []) + (["SNMPv1/v2c sends the community in clear text; prefer SNMPv3 authPriv."]
+                          if any(v != "3" for v in params["snmp_versions"]) else [])}
+
+
+@router.post("/jobs/{job_id}/{action}")
+def control_discovery(job_id: str, action: Literal["pause", "resume"], request: Request,
+                      db: Session = Depends(get_db), user: User = admin):
+    j = db.scalar(select(PrinterJob).where(PrinterJob.id == job_id).with_for_update())
+    if j is None or j.kind != "DISCOVERY":
+        raise HTTPException(404, "Discovery job not found")
+    if action == "pause":
+        if j.status not in ("QUEUED", "RUNNING"):
+            raise HTTPException(409, "Only an active discovery can be paused")
+        j.cancel_requested, j.status = True, "PAUSED"
+    else:
+        if j.status not in ("PAUSED", "CANCELLED", "FAILED"):
+            raise HTTPException(409, "Only a paused or interrupted discovery can be resumed")
+        for cid in j.params.get("credential_profile_ids") or [j.params.get("credential_profile_id")]:
+            _check_profile_policy(db, cid)
+        j.cancel_requested, j.status, j.finished_at = False, "QUEUED", None
+    audit(db, "printer_discovery_" + action, username=user.username, target=j.id, request=request)
+    return _job_json(j)
 
 
 class ApproveItem(BaseModel):
@@ -544,16 +605,16 @@ def _site_allowed(db: Session, site_id: int | None):
 @router.post("/discovery/{job_id}/approve")
 def approve_discovered(job_id: str, body: ApproveInput, request: Request, db: Session = Depends(get_db), user: User = admin):
     j = db.get(PrinterJob, job_id)
-    if j is None or j.kind != "DISCOVERY" or j.status not in ("SUCCEEDED", "CANCELLED"):
-        raise HTTPException(409, "Discovery job is not complete")
-    found = {r["management_ip"] for r in (j.result or {}).get("printers", [])}
-    cred = body.credential_profile_id or j.params.get("credential_profile_id")
-    if cred:
-        _check_profile_policy(db, cred)
+    if j is None or j.kind != "DISCOVERY" or j.status not in ("SUCCEEDED", "CANCELLED", "RUNNING", "QUEUED", "PAUSED"):
+        raise HTTPException(409, "Discovery has no available results")
+    found = {r["management_ip"]: r for r in (j.result or {}).get("printers", [])}
     created, updated = [], []
     for it in body.items:
         if str(it.management_ip) not in found:
             raise HTTPException(422, f"{it.management_ip} was not identified by this discovery job")
+        cred = body.credential_profile_id or found[str(it.management_ip)].get("credential_profile_id") or j.params.get("credential_profile_id")
+        if cred:
+            _check_profile_policy(db, cred)
         _site_allowed(db, it.site_id)
         p, new = S.register_or_update(db, it.model_dump(mode="json") | {"management_ip": str(it.management_ip)},
                                       provenance="DISCOVERY", site_id=it.site_id)
@@ -1392,3 +1453,41 @@ def decide_identity(printer_id: str, change_id: int, body: IdentityDecision, req
     audit(db, "printer_identity_decided", username=user.username, target=p.id,
           detail=f"{c.field}: {c.old_value} → {c.new_value} decision={c.decision}", request=request)
     return {"id": c.id, "decision": c.decision}
+
+
+# ---- verified printer configuration ---------------------------------------------------------------
+class PrinterLocationChange(BaseModel):
+    location: str = Field(max_length=255)
+
+    @field_validator("location")
+    @classmethod
+    def printable_location(cls, value: str) -> str:
+        from ..printers.configuration import validate_location
+        return validate_location(value)
+
+
+@router.get("/{printer_id}/configuration")
+async def printer_configuration(printer_id: str, db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.view(db, _visible(db, printer_id))
+
+
+@router.post("/{printer_id}/configuration/preview", status_code=201)
+async def printer_configuration_preview(printer_id: str, body: PrinterLocationChange,
+                                        db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.preview(db, _visible(db, printer_id), body.location, user.username)
+
+
+@router.post("/{printer_id}/configuration/{plan_id}/apply")
+async def printer_configuration_apply(printer_id: str, plan_id: str,
+                                      db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.execute(db, _visible(db, printer_id), plan_id, user.username)
+
+
+@router.post("/{printer_id}/configuration/{plan_id}/rollback")
+async def printer_configuration_rollback(printer_id: str, plan_id: str,
+                                         db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.execute(db, _visible(db, printer_id), plan_id, user.username, rollback=True)

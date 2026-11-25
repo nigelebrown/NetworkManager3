@@ -16,7 +16,7 @@ from ..database.session import get_db
 from ..domain import change_control as CC
 from ..infrastructure import change_executor as X
 from ..infrastructure.writers import WriterError
-from ..security.deps import audit, require_any_role, require_role
+from ..security.deps import audit, require_any_role, require_role, user_site_scope
 from ._phase_common import iso, now, real_device
 
 router = APIRouter(prefix="/api/v1", tags=["production-read-write"])
@@ -27,10 +27,17 @@ class CertInput(BaseModel):
     device_id: str
     lab_device_acknowledged: bool = False
     test_port: str | None = None
+    test_auth_port: str | None = Field(default=None, pattern=r"^[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?$")
     test_vlan: int = Field(default=4090, ge=2, le=4094)
     lag_ports: list[str] | None = None
     test_channel: int = 44
     test_ssid: str | None = None
+    test_enterprise_ssid: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_allowed_channels: list[str] | None = Field(default=None, min_length=1, max_length=48)
+    test_guest_ssid: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_portal: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_pre_auth_role: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+    test_guest_mac_role: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 
 
 def _cert_public(c: DeviceCertification) -> dict:
@@ -303,6 +310,31 @@ def ports(device_id: str, db: Session = Depends(get_db), user: User = Depends(re
             "ports": s.ports, "hardware": s.hardware}
 
 
+@router.get("/devices/{device_id}/firmware-status")
+def switch_firmware_status(device_id: str, request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    if d.family != "switch" or d.vendor.casefold() != "aruba":
+        raise HTTPException(422, "This resource is supported for Aruba CX switches only.")
+    try:
+        w, env = X.reader_for(db, d)
+        try:
+            w.open()
+            if env == "HARDWARE":
+                identity = w.identity()
+                if not identity.get("serial_number") or identity["serial_number"].casefold() != d.serial_number.casefold():
+                    raise WriterError("IDENTITY_UNVERIFIED", "Switch serial does not match registered inventory.")
+            result = w.firmware_status()
+        finally:
+            w.close()
+    except WriterError as exc:
+        raise HTTPException(409, exc.category) from None
+    audit(db, "firmware_status_read", username=user.username, target=d.id,
+          detail=f"state={result['state']} environment={env}", request=request)
+    return {"device_id": d.id, "environment": env, "device_writes": 0, **result}
+
+
 @router.get("/devices/{device_id}/authority")
 def authority(device_id: str, request: Request, db: Session = Depends(get_db),
               user: User = Depends(require_role("operator"))):
@@ -323,6 +355,64 @@ def authority(device_id: str, request: Request, db: Session = Depends(get_db),
 
 
 # ---- read-only device accounting and operational logs ---------------------------------------------
+def _require_hardware_log_scope(db, user, device):
+    # Controller-wide logs require the actual legacy controller grant. Physical
+    # site access alone must not reveal a different site's controller logs.
+    scope = user_site_scope(db, user)
+    if scope is None:
+        return
+    if device.family == "access_point":
+        if device.legacy_site_id not in scope:
+            raise HTTPException(404, "Resource not found.")
+    else:
+        from .workflows import _require_site
+        _require_site(db, user, device.site_id)
+
+
+class DeviceLogScheduleInput(BaseModel):
+    enabled: bool
+    interval_minutes: int = Field(default=15, ge=5, le=1440)
+
+
+@router.get("/devices/{device_id}/device-log-collection")
+def get_device_log_collection(device_id: str, db: Session = Depends(get_db),
+                              user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    from ..infrastructure import device_log_collection as DLC
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    return {"device_id": d.id, **DLC.setting(db, d.id), "eligible": DLC.eligible(d)}
+
+
+@router.put("/devices/{device_id}/device-log-collection")
+def put_device_log_collection(device_id: str, body: DeviceLogScheduleInput, request: Request,
+                              db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..infrastructure import device_log_collection as DLC
+    d = real_device(db, device_id)
+    if body.enabled:
+        if not DLC.eligible(d):
+            raise HTTPException(409, "Only active real Aruba devices can be scheduled.")
+        try:
+            DLC.scope_key(db, d)
+        except (ValueError, WriterError):
+            raise HTTPException(409, "The management or controller address is not eligible.") from None
+    value = DLC.set_schedule(db, d.id, body.enabled, body.interval_minutes, user.username)
+    audit(db, "device_log_schedule_changed", username=user.username, target=d.id,
+          detail=f"enabled={body.enabled} interval_minutes={body.interval_minutes}", request=request)
+    return {"device_id": d.id, **value, "eligible": DLC.eligible(d)}
+
+
+@router.get("/devices/{device_id}/device-log-history")
+def device_log_history(device_id: str, limit: int = Query(default=100, ge=1, le=200),
+                       db: Session = Depends(get_db),
+                       user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    from ..infrastructure import device_log_collection as DLC
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    return {"device_id": d.id, "records": DLC.history(db, d.id, limit),
+            "timestamp_semantics": "collection time, not verified device event time",
+            "attribution_verified": False}
+
+
 @router.get("/devices/{device_id}/device-logs")
 def read_device_logs(device_id: str, request: Request, kind: str | None = None,
                      limit: int = Query(default=50, ge=1, le=100),
@@ -335,6 +425,7 @@ def read_device_logs(device_id: str, request: Request, kind: str | None = None,
     or HTTP headers are returned. No configuration changes are performed.
     """
     d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
     chosen = kind or ("audit" if d.family == "switch" else "system")
     choices = ("audit", "event") if d.family == "switch" else ("system", "security", "user")
     if chosen not in choices:
@@ -370,6 +461,7 @@ def read_device_diagnostics(device_id: str, request: Request, kind: str,
     """
     from ..infrastructure.device_diagnostics import CX_SHOW, INSTANT_SHOW
     d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
     choices = CX_SHOW if d.family == "switch" else INSTANT_SHOW if d.family == "access_point" else {}
     if kind not in choices:
         raise HTTPException(422, f"Unsupported read-only diagnostic. Choose: {', '.join(choices) or 'none'}.")

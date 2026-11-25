@@ -23,6 +23,9 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "switch.port.stp_bpdu_guard", label: "BPDU guard (edge port)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "BPDU guard", kind: "select", options: ["enabled", "disabled"] }] },
     { op: "switch.port.storm_control", label: "Storm control", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "broadcast_kbps", label: "Broadcast kbps", kind: "int" },
       { key: "multicast_kbps", label: "Multicast kbps (optional)", kind: "int", optional: true }, { key: "unknown_unicast_kbps", label: "Unknown-unicast kbps (optional)", kind: "int", optional: true }] },
+    { op: "switch.vlan.voice", label: "Voice VLAN advertisement", fields: [{ key: "vlan", label: "Existing VLAN", kind: "int" }, { key: "value", label: "Voice", kind: "select", options: ["enabled", "disabled"] }, { key: "acknowledge_voice_change", label: "Acknowledge voice change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.port.auth_dot1x", label: "Enable existing 802.1X on disabled access port", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "method", label: "Authentication method", kind: "select", options: ["dot1x"] }, { key: "value", label: "Action", kind: "select", options: ["enabled"] }, { key: "acknowledge_auth_change", label: "Acknowledge NAC change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.port.auth_mab", label: "Enable existing MAB on disabled access port", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "method", label: "Authentication method", kind: "select", options: ["mac-auth"] }, { key: "value", label: "Action", kind: "select", options: ["enabled"] }, { key: "acknowledge_auth_change", label: "Acknowledge NAC change", kind: "select", options: ["no", "yes"] }] },
     { op: "switch.port.qos_trust", label: "QoS trust (voice)", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "Trust", kind: "select", options: ["dscp", "cos", "none"] }] },
     { op: "switch.system.ntp", label: "NTP server", fields: [{ key: "value", label: "NTP server IP", kind: "text" }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
     { op: "switch.system.dns", label: "DNS servers", fields: [{ key: "value", label: "DNS server IPs (comma separated)", kind: "ips" }, { key: "domain", label: "Domain (optional)", kind: "text", optional: true }, { key: "vrf", label: "VRF", kind: "select", options: ["mgmt", "default"] }] },
@@ -32,6 +35,15 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "ap.radio.channel", label: "Radio channel", fields: [{ key: "band", label: "Band", kind: "select", options: ["5", "2.4"] }, { key: "value", label: "Channel", kind: "int" }, { key: "power", label: "EIRP dBm", kind: "int" }] },
     { op: "ap.radio.width", label: "Channel width", fields: [{ key: "value", label: "Width (MHz)", kind: "select", options: ["20", "40"] }] },
     { op: "ap.radio.tx_power", label: "Transmit power range", fields: [{ key: "min_dbm", label: "Min dBm", kind: "int" }, { key: "max_dbm", label: "Max dBm", kind: "int" }] },
+    { op: "ap.radio.allowed_channels", label: "5 GHz allowed channels (DFS / 20–40 MHz)", fields: [{ key: "value", label: "Channels e.g. 36,40,44,48,36+,44+", kind: "ips" }] },
+    { op: "ap.ssid.roaming", label: "SSID fast roaming (802.11k/v/r)", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" },
+      { key: "dot11k", label: "802.11k", kind: "select", options: ["enabled", "disabled"] }, { key: "dot11v", label: "802.11v", kind: "select", options: ["enabled", "disabled"] },
+      { key: "dot11r", label: "802.11r (client compatibility required)", kind: "select", options: ["disabled", "enabled"] }] },
+    { op: "ap.ssid.guest_auth", label: "Existing guest captive portal and MAC roles", fields: [{ key: "ssid", label: "Existing guest SSID", kind: "text" },
+      { key: "portal_profile", label: "Existing external portal profile", kind: "text" }, { key: "pre_auth_role", label: "Existing pre-auth role", kind: "text" },
+      { key: "mac_role", label: "Existing MAC-auth role", kind: "text" }, { key: "acknowledge_guest_auth_change", label: "Acknowledge authentication changes", kind: "select", options: ["no", "yes"] }] },
+    { op: "ap.ssid.accounting", label: "SSID RADIUS accounting", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" }, { key: "value", label: "Accounting", kind: "select", options: ["enabled", "disabled"] },
+      { key: "interval_minutes", label: "Interim interval minutes (required when enabled)", kind: "int", optional: true }] },
     { op: "ap.ssid.vlan", label: "SSID VLAN", fields: [{ key: "ssid", label: "SSID", kind: "text" }, { key: "value", label: "VLAN", kind: "int" }] },
     { op: "ap.band_steering", label: "Band steering", fields: [{ key: "value", label: "Mode", kind: "select", options: ["prefer-5ghz", "force-5ghz", "balance-bands", "disabled"] }] },
     { op: "ap.client_match", label: "ClientMatch", fields: [{ key: "value", label: "State", kind: "select", options: ["enabled", "disabled"] }] },
@@ -58,7 +70,7 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
     for (const f of def.fields) {
       const v = vals[f.key] ?? (f.options?.[0] ?? "");
       if (f.optional && !v.trim()) continue;
-      o[f.key] = def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
+      o[f.key] = ["acknowledge_guest_auth_change", "acknowledge_voice_change", "acknowledge_auth_change"].includes(f.key) ? v === "yes" : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "ips" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "int" || (f.key === "value" && def.op === "ap.radio.width") ? Number(v)
         : f.kind === "list" ? v.split(/[\s,]+/).filter(Boolean).map(Number) : v;
@@ -130,12 +142,13 @@ export default function ChangePlans() {
   const [title, setTitle] = useState(params.get("port") ? `Change port ${params.get("port")}` : "");
   const [items, setItems] = useState<Op[]>([]);
   const [excluded, setExcluded] = useState("");
+  const [allowDfs, setAllowDfs] = useState(false);
   const [uplinks, setUplinks] = useState("");
   const act = useAction();
   const step = !device ? 0 : !items.length ? 1 : 2;
   const submit = () => act.run(async () => {
     const p = await ops.createChange({ device_id: device!.id, title, operations: items,
-      excluded_channels: excluded.split(/[\s,]+/).filter(Boolean).map(Number), protected_uplinks: uplinks.split(/[\s,]+/).filter(Boolean) });
+      allow_dfs: device!.family === "access_point" && allowDfs, excluded_channels: excluded.split(/[\s,]+/).filter(Boolean).map(Number), protected_uplinks: uplinks.split(/[\s,]+/).filter(Boolean) });
     setItems([]); setTitle(""); plans.reload();
     return `Change plan submitted for approval (${p.operations.length} operation(s)). Policy validation passed.`;
   });
@@ -152,6 +165,7 @@ export default function ChangePlans() {
             ? <label className="text-sm">Excluded channels (site policy)<input className={inputCls} value={excluded} onChange={e => setExcluded(e.target.value)} placeholder="e.g. 144, 165" /></label>
             : <label className="text-sm">Protected uplink ports<input className={inputCls} value={uplinks} onChange={e => setUplinks(e.target.value)} placeholder="e.g. 1/1/49, 1/1/50" /></label>}
         </div>
+        {device?.family === "access_point" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowDfs} onChange={e => setAllowDfs(e.target.checked)} />Request DFS only under an administrator-configured site channel policy and independent approval</label>}
         {device && <OpBuilder family={device.family} onAdd={o => setItems([...items, o])} />}
         {items.length > 0 && <ul className="space-y-1 text-sm">{items.map((o, i) => <li key={i} className="flex items-center gap-2 font-mono text-xs">
           <span>{i + 1}. {JSON.stringify(o)}</span><button className="text-red-300" onClick={() => setItems(items.filter((_, j) => j !== i))}>remove</button></li>)}</ul>}

@@ -227,8 +227,21 @@ _ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
     r"^configure terminal$", r"^end$", r"^commit apply$", r"^exit$",
     r"^arm$", r"^(no )?client-match$", r"^band-steering-mode (prefer-5ghz|force-5ghz|balance-bands|disable)$",
     r"^air-time-fairness-mode (default-access|fair-access|preferred-access)$",
-    r"^(min|max)-tx-power \d{1,2}$", r"^wide-bands (none|5ghz|2.4ghz|all)$", r"^no 80mhz-support$",
-    r"^(a|g)-channel \d{1,3} \d{1,2}$",
+    r"^(min|max)-tx-power \d{1,2}$", r"^wide-bands (none|5ghz|2.4ghz|all)$", r"^(no )?80mhz-support$",
+    r"^no (band-steering-mode|air-time-fairness-mode|wide-bands|min-tx-power|max-tx-power)$",
+    r"^(no )?wlan (ssid-profile|auth-server) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^essid [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$", r"^type employee$", r"^enable$",
+    r"^vlan ([0-9]{1,4}|[A-Za-z][A-Za-z0-9_.-]{0,31})$", r"^no vlan$", r"^opmode (wpa2-aes|wpa3-aes-ccm-128)$",
+    r"^auth-server [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^ip (?:[0-9]{1,3}\.){3}[0-9]{1,3}$",
+    r"^(port|acctport) [0-9]{1,5}$", r"^key [A-Za-z0-9!@#%^*_+=.,:\-]{1,128}$",
+    r"^(a|g)-channel \d{1,3} -?\d{1,2}(?:\.\d)?$",
+    r"^(no )?(dot11k|dot11v|dot11r|radius-accounting)$",
+    r"^radius-interim-accounting-interval (?:[0-9]|[1-5][0-9]|60)(?: (?:[0-9]|[1-5][0-9]))?$",
+    r"^no radius-interim-accounting-interval$",
+    r"^a-channels [0-9]{1,3}\+?(?:,[0-9]{1,3}\+?){0,47}$",
+    r"^captive-portal external profile [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^mac-authentication$", r"^set-role-(pre-auth|mac-auth) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
 )]
 
 
@@ -237,8 +250,9 @@ def run_config_lines(host: str, username: str, password: str, expected_fingerpri
     """Run an allowlisted command sequence with host-key pinning. Raises on the first rejected line."""
     if not get_settings().device_writes_permitted:
         raise ArubaUnsupportedError("Configuration changes are disabled (device writes not permitted).")
+    lines = [ln.strip() for ln in lines]
     for ln in lines:
-        if not any(p.match(ln) for p in _ALLOWED_CONFIG_LINES):
+        if not any(p.fullmatch(ln) for p in _ALLOWED_CONFIG_LINES):
             raise ArubaUnsupportedError(f"Command not in the allowlisted grammar: {ln[:60]!r}")
     t = _open_transport(host, port, timeout)
     try:
@@ -258,9 +272,10 @@ def run_config_lines(host: str, username: str, password: str, expected_fingerpri
             out = _read_until_prompt(chan, timeout)
             reply = [ln for ln in out.replace("\r", "").split("\n")[1:] if ln.strip()]
             bad = next((ln for ln in reply if any(m in ln.lower() for m in _ERRORS)), None)
-            results.append({"command": cmd, "ok": bad is None})
+            display = "key ********" if cmd.startswith("key ") else cmd
+            results.append({"command": display, "ok": bad is None})
             if bad:
-                raise ArubaSshError(f"The AP rejected '{cmd}': {bad.strip()[:120]}")
+                raise ArubaSshError(f"The AP rejected '{display}' (configuration command failed).")
         return results
     finally:
         t.close()

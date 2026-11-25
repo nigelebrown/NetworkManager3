@@ -142,7 +142,7 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
 
     # Known APs missing from this poll are down.
     for key, ap in existing.items():
-        if key not in seen and ap.status != "down":
+        if snap.aps_ok and key not in seen and ap.status != "down":
             ap.status = "down"
             ap.client_count = 0
             _raise_alert(db, site_id=site.id, ap_id=ap.id, kind="ap_offline", severity="critical",
@@ -190,19 +190,21 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
         select(ClientEvent.mac, func.count()).where(
             ClientEvent.site_id == site.id, ClientEvent.kind == "disconnect", ClientEvent.ts >= window,
         ).group_by(ClientEvent.mac))}
-    for rec in live:
+    for rec in live if snap.clients_ok else []:
         observed = (now - _aware(rec.first_seen)).total_seconds() / 60
         r = score_client(ClientMetrics(snr_db=rec.snr_db, rssi_dbm=rec.rssi_dbm, speed_mbps=rec.speed_mbps,
                                        disconnects=disc.get(rec.mac, 0), observed_minutes=observed), cfg)
         rec.exp_score, rec.exp_band = r["score"], r["band"]
         rec.poor_streak = (rec.poor_streak or 0) + 1 if r["band"] == "poor" else 0
     for ap in existing.values():
+        if not snap.aps_ok and ap.mac not in seen:
+            continue
         if ap.status != "up":
             ap.exp_score, ap.exp_band = None, "offline"
             continue
         d = ap_data.get(ap.id, {})
         utils = [u for u in (d.get("util_2g_percent"), d.get("util_5g_percent")) if u is not None]
-        r = score_ap(ApMetrics(status="up", client_scores=[c.exp_score for c in live if c.ap_name == ap.name and c.exp_score is not None],
+        r = score_ap(ApMetrics(status="up", client_scores=[c.exp_score for c in live if snap.clients_ok and c.ap_name == ap.name and c.exp_score is not None],
                                util_pct=max(utils) if utils else None, client_count=ap.client_count,
                                cpu_pct=ap.cpu_percent, memory_pct=ap.memory_percent), cfg)
         ap.exp_score, ap.exp_band = r["score"], r["band"]
@@ -213,18 +215,21 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
     snrs = [c["snr_db"] for c in snap.clients if c.get("snr_db") is not None]
     rssis = [c["rssi_dbm"] for c in snap.clients if c.get("rssi_dbm") is not None]
     utils = [u for d in snap.aps for u in (d.get("util_2g_percent"), d.get("util_5g_percent")) if u is not None]
-    db.add(SiteSample(
-        site_id=site.id, ts=now,
-        aps_total=len(existing), aps_up=sum(1 for a in existing.values() if a.status == "up"),
-        clients_total=len(snap.clients),
-        avg_snr_db=round(sum(snrs) / len(snrs), 1) if snrs else None,
-        avg_rssi_dbm=round(sum(rssis) / len(rssis), 1) if rssis else None,
-        avg_util_percent=round(sum(utils) / len(utils), 1) if utils else None,
-        exp_score=site_exp["score"], exp_good=site_exp["good"], exp_fair=site_exp["fair"], exp_poor=site_exp["poor"],
-        simulated=sim,
-    ))
-    rules.evaluate(db, site, aps=list(existing.values()), prev_uptime=prev_uptime, clients=live,
-                   disconnects=disc, cfg=cfg, now=now)
+    # Site aggregates cannot express unknown counts; omit incomplete points.
+    if snap.aps_ok and snap.clients_ok:
+        db.add(SiteSample(
+            site_id=site.id, ts=now,
+            aps_total=len(existing), aps_up=sum(1 for a in existing.values() if a.status == "up"),
+            clients_total=len(snap.clients),
+            avg_snr_db=round(sum(snrs) / len(snrs), 1) if snrs else None,
+            avg_rssi_dbm=round(sum(rssis) / len(rssis), 1) if rssis else None,
+            avg_util_percent=round(sum(utils) / len(utils), 1) if utils else None,
+            exp_score=site_exp["score"], exp_good=site_exp["good"], exp_fair=site_exp["fair"], exp_poor=site_exp["poor"],
+            simulated=sim,
+        ))
+    rules.evaluate(db, site, aps=[a for a in existing.values() if snap.aps_ok or a.mac in seen],
+                   prev_uptime=prev_uptime, clients=live if snap.clients_ok else [],
+                   disconnects=disc, cfg=cfg, now=now, inventory_complete=snap.aps_ok, firmware_observed=bool(snap.firmware))
     _resolve_alerts(db, site_id=site.id, ap_id=None, kind="poll_failed")
     site.last_poll_at, site.last_poll_ok, site.last_poll_error = now, True, None
     if snap.warnings:

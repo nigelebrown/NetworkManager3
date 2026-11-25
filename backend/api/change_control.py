@@ -63,6 +63,8 @@ def create_plan(body: PlanInput, request: Request, db: Session = Depends(get_db)
         ops = [CC.validate_operation(o, family=d.family, excluded_channels=set(body.excluded_channels),
                                      allow_dfs=body.allow_dfs, uplink_ports=set(body.protected_uplinks))
                for o in body.operations]
+        from ..infrastructure.change_executor import validate_site_rf_policy
+        validate_site_rf_policy(db, d, ops)
     except CC.PolicyViolation as exc:
         audit(db, "change_plan_policy_rejected", username=user.username, target=d.id,
               detail=f"{exc}; rejected before any adapter call", request=request, success=False)
@@ -102,12 +104,12 @@ def _plan(db: Session, plan_id: str) -> ChangePlan:
 
 def _transition(db: Session, p: ChangePlan, body: Decision, new_state: str, user: User) -> None:
     """Compare-and-set on (state, revision) so two concurrent approvers cannot both win."""
-    res = db.execute(update(ChangePlan).where(ChangePlan.id == p.id, ChangePlan.state == "PENDING_APPROVAL",
+    changed = db.scalar(update(ChangePlan).where(ChangePlan.id == p.id, ChangePlan.state == "PENDING_APPROVAL",
                                               ChangePlan.revision == body.expected_revision)
                      .values(state=new_state, approver=user.username, approved_at=now(),
                              decision_note=body.note, revision=ChangePlan.revision + 1)
-                     .execution_options(synchronize_session=False))
-    if res.rowcount != 1:
+                     .returning(ChangePlan.id).execution_options(synchronize_session=False))
+    if changed is None:
         raise HTTPException(409, "Plan is not pending at this revision (already decided or changed).")
     db.refresh(p)
 

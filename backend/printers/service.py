@@ -377,13 +377,17 @@ def apply_poll(db: Session, printer: PrinterDevice, res: C.PollResult, *, poll_i
                                      raw={"source": f["source"]}))
             summary["faults_opened"] += 1
     for code, row in open_faults.items():
-        if code not in active:
+        if res.faults_observed and code not in active:
             row.ended_at = at
             summary["faults_closed"] += 1
-    mon.operational_state = res.operational_state
-    _period(db, printer.id, "OPERATIONAL", res.operational_state, at,
-            {"device_status": res.device_status, "faults": sorted(active)} if active else {"device_status": res.device_status})
-    printer.status = "fault" if any(f["severity"] == "critical" for f in res.faults) else "up"
+    if res.operational_state != "UNKNOWN":
+        mon.operational_state = res.operational_state
+        _period(db, printer.id, "OPERATIONAL", res.operational_state, at,
+                {"device_status": res.device_status, "faults": sorted(active)} if active else {"device_status": res.device_status})
+    critical = any(f["severity"] == "critical" for f in res.faults) or any(
+        row.ended_at is None and row.severity == "critical" for row in open_faults.values()
+    )
+    printer.status = "fault" if critical else "up"
 
     # capabilities
     caps = {c.capability: c for c in db.scalars(select(PrinterCapability).where(PrinterCapability.printer_id == printer.id))}
@@ -788,12 +792,12 @@ def create_job(db: Session, kind: str, params: dict, actor: str, total: int = 0)
 
 def claim_job(db: Session, job_id: str, owner: str) -> bool:
     at = now_utc()
-    r = db.execute(update(PrinterJob).where(PrinterJob.id == job_id, PrinterJob.status.in_(("QUEUED", "RUNNING")),
+    claimed = db.scalar(update(PrinterJob).where(PrinterJob.id == job_id, PrinterJob.status.in_(("QUEUED", "RUNNING")),
                                             or_(PrinterJob.lease_expires_at.is_(None), PrinterJob.lease_expires_at < at))
                    .values(lease_owner=owner, lease_expires_at=at + timedelta(seconds=600), status="RUNNING",
-                           started_at=func.coalesce(PrinterJob.started_at, at)))
+                           started_at=func.coalesce(PrinterJob.started_at, at)).returning(PrinterJob.id))
     db.commit()
-    return r.rowcount == 1
+    return claimed is not None
 
 
 def _job_update(session_factory, job_id, **values):
@@ -815,7 +819,7 @@ async def run_job(session_factory: Callable, job_id: str, owner: str) -> None:
         kind, params = job.kind, dict(job.params)
     try:
         if kind == "DISCOVERY":
-            await _run_discovery(session_factory, job_id, params)
+            await _run_discovery(session_factory, job_id, params, owner)
         elif kind == "POLL":
             r = await poll_printer(session_factory, params["printer_id"], force_all_metrics=True)
             _job_update(session_factory, job_id, status="SUCCEEDED" if r.get("snmp_ok") else "FAILED", result=r,
@@ -832,51 +836,118 @@ async def run_job(session_factory: Callable, job_id: str, owner: str) -> None:
                     finished_at=now_utc())
 
 
-async def _run_discovery(session_factory, job_id, params):
-    hosts = params["hosts"]
+def discovery_batch_size(params):
+    return min(128, max(16, int(params.get("concurrency", 16)) * 2))
+
+
+def discovery_batch(params, cursor, size):
+    """Only materialize one batch, even for a /9. Match IPv4Network.hosts semantics."""
+    if params.get("network_cidr"):
+        net = IPv4Network(params["network_cidr"])
+        total = net.num_addresses - (2 if net.prefixlen < 31 else 0)
+        first = int(net.network_address) + (1 if net.prefixlen < 31 else 0)
+        return [str(IPv4Address(first + i)) for i in range(cursor, min(cursor + size, total))]
+    return params["hosts"][cursor:cursor + size]
+
+
+async def _run_discovery(session_factory, job_id, params, owner):
+    cursor = int(params.get("next_index", 0))
+    hosts = discovery_batch(params, cursor, discovery_batch_size(params))
+    credentials = params.get("credential_profile_ids") or [params.get("credential_profile_id")]
     with session_factory() as db:
         profiles = profile_dicts(db)
-        cred = params.get("credential_profile_id")
-        db.commit()
-    results, errors = [], []
-    sem = asyncio.Semaphore(16)
-    done = 0
+    sem = asyncio.Semaphore(max(1, min(64, int(params.get("concurrency", 16)))))
 
-    async def one(host):
-        nonlocal done
-        async with sem:
+    async def attempt(host):
+        last_error = "no SNMP response"
+        for cred in credentials:
             if _cancelled(session_factory, job_id):
-                return
+                return None
+            reader = None
             try:
                 with session_factory() as db:
                     reader = make_reader(db, host, cred)
-                r = await asyncio.wait_for(C.poll(reader, profiles, metric_filter={"printer_status", "marker_life_count", "marker_counter_unit", "supply_level"}, now=now_utc()), timeout=20)
-                await reader.close()
+                if isinstance(reader, C.PysnmpReader):
+                    reader.timeout, reader.retries = 1.5, 0
+                    await asyncio.wait_for(reader.get(mib.SYS_OBJECT_ID), timeout=3)
+                r = await asyncio.wait_for(C.poll(reader, profiles,
+                    metric_filter={"printer_status", "marker_life_count", "marker_counter_unit", "supply_level"},
+                    now=now_utc()), timeout=20)
                 if not r.snmp_ok:
-                    errors.append({"address": host, "error": r.error or "no SNMP response"})
-                elif not (r.meters or r.supplies or any(s.metric_key == "printer_status" and s.value_state == "VALID" for s in r.samples)):
-                    errors.append({"address": host, "error": "SNMP responded but no Printer-MIB data (not a printer)"})
-                else:
-                    with session_factory() as db:
-                        match = db.scalar(select(PrinterDevice).where(func.lower(PrinterDevice.serial_number) ==
-                                                                      (r.identity.get("serial_number") or "\x00").lower()))
-                    results.append({"management_ip": host, **{k: r.identity.get(k) for k in (
-                        "manufacturer", "model", "model_confidence", "reported_model", "serial_number", "hostname",
-                        "system_object_id", "firmware", "mac_address")},
-                        "profile": r.profile_key, "meters": r.meters, "supplies": len(r.supplies),
-                        "confidence": "HIGH" if r.identity.get("serial_number") and r.identity.get("model_confidence") == "HIGH"
+                    last_error = r.error or "no SNMP response"
+                    continue
+                if not (r.meters or r.supplies or any(s.metric_key == "printer_status" and s.value_state == "VALID" for s in r.samples)):
+                    last_error = "SNMP responded but no Printer-MIB data (not a printer)"
+                    continue
+                with session_factory() as db:
+                    match = db.scalar(select(PrinterDevice).where(func.lower(PrinterDevice.serial_number) ==
+                        (r.identity.get("serial_number") or "").lower()))
+                    existing_id = match.id if match else None
+                return {"printer": {"management_ip": host, **{k: r.identity.get(k) for k in (
+                    "manufacturer", "model", "model_confidence", "reported_model", "serial_number", "hostname",
+                    "system_object_id", "firmware", "mac_address")},
+                    "credential_profile_id": cred, "profile": r.profile_key, "meters": r.meters,
+                    "supplies": len(r.supplies),
+                    "confidence": "HIGH" if r.identity.get("serial_number") and r.identity.get("model_confidence") == "HIGH"
                         else "MEDIUM" if r.identity.get("serial_number") else "LOW",
-                        "unsupported_oids": len(r.unsupported_oids), "source": r.source,
-                        "existing_printer_id": match.id if match else None})
+                    "unsupported_oids": len(r.unsupported_oids), "source": r.source,
+                    "existing_printer_id": existing_id}}
             except Exception as exc:  # noqa: BLE001
-                errors.append({"address": host, "error": type(exc).__name__})
-            done += 1
-            if done % 8 == 0:
-                _job_update(session_factory, job_id, progress=done)
-    await asyncio.gather(*(one(h) for h in hosts))
-    cancelled = _cancelled(session_factory, job_id)
-    _job_update(session_factory, job_id, progress=done, result={"printers": results, "scanned": done},
-                errors=errors[:2000], status="CANCELLED" if cancelled else "SUCCEEDED", finished_at=now_utc())
+                last_error = type(exc).__name__
+            finally:
+                if reader is not None:
+                    try:
+                        await reader.close()
+                    except Exception:
+                        pass
+        return {"error": {"address": host, "error": last_error}}
+
+    async def one(host):
+        async with sem:
+            if _cancelled(session_factory, job_id):
+                return None
+            try:
+                return await asyncio.wait_for(attempt(host), timeout=60)
+            except TimeoutError:
+                return {"error": {"address": host, "error": "Selected profile attempts exceeded 60 seconds"}}
+
+    observations = await asyncio.gather(*(one(host) for host in hosts))
+    # A cursor is a contiguous completed prefix, never a count of out-of-order tasks.
+    completed = 0
+    for item in observations:
+        if item is None:
+            break
+        completed += 1
+    with session_factory() as db:
+        job = db.scalar(select(PrinterJob).where(PrinterJob.id == job_id).with_for_update())
+        if job.lease_owner != owner:
+            return
+        found = {r["management_ip"]: r for r in (job.result or {}).get("printers", [])}
+        errors = {e.get("address", str(i)): e for i, e in enumerate(job.errors or []) if isinstance(e, dict)}
+        for item in observations:
+            if not item:
+                continue
+            if item.get("printer"):
+                p = item["printer"]
+                found[p["management_ip"]] = p
+                errors.pop(p["management_ip"], None)
+            elif item.get("error") and len(errors) < 2000:
+                errors[item["error"]["address"]] = item["error"]
+        next_index = cursor + completed
+        job.params = {**params, "next_index": next_index}
+        job.progress = next_index
+        job.result = {"printers": list(found.values()), "scanned": next_index}
+        job.errors = list(errors.values())[:2000]
+        if job.status == "PAUSED":
+            pass
+        elif job.cancel_requested:
+            job.status, job.finished_at = "CANCELLED", now_utc()
+        elif next_index >= job.total:
+            job.status, job.finished_at = "SUCCEEDED", now_utc()
+        else:
+            job.status = "QUEUED"
+        job.lease_owner, job.lease_expires_at = None, None
+        db.commit()
 
 
 async def _run_walk(session_factory, job_id, params):
@@ -929,7 +1000,7 @@ async def tick_jobs(session_factory: Callable, owner: str, limit: int = 5) -> in
         ids = list(db.scalars(select(PrinterJob.id).where(
             or_(PrinterJob.status == "QUEUED",
                 and_(PrinterJob.status == "RUNNING", PrinterJob.lease_expires_at < at)))
-            .order_by(PrinterJob.created_at).limit(limit)))
+            .order_by(PrinterJob.lease_expires_at.asc().nullsfirst(), PrinterJob.created_at).limit(limit)))
     for jid in ids:
         await run_job(session_factory, jid, owner)
     return len(ids)

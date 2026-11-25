@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,7 @@ class SiteSnapshot:
     firmware: str | None = None
     clients_ok: bool = True  # False when the client list could not be read (do not treat clients as gone)
     warnings: list[str] = field(default_factory=list)
+    aps_ok: bool = True
 
 
 def collect_snapshot(client: ArubaClient) -> SiteSnapshot:
@@ -31,13 +33,21 @@ def collect_snapshot(client: ArubaClient) -> SiteSnapshot:
     snap = SiteSnapshot()
 
     resp = client.show("show aps")
-    snap.aps = parsers.normalize_aps(parsers.extract_rows(resp, "show aps"))
-    if not snap.aps:
-        snap.warnings.append("`show aps` returned no recognizable AP rows (format pending verification).")
+    rows = parsers.extract_rows(resp, "show aps")
+    snap.aps = parsers.normalize_aps(rows)
+    if not snap.aps or len(rows) != len(snap.aps):
+        snap.aps_ok = False
+        snap.warnings.append("`show aps` returned incomplete or unrecognized AP inventory; absence is not offline evidence.")
 
     try:
         resp = client.show("show clients")
-        snap.clients = parsers.normalize_clients(parsers.extract_rows(resp, "show clients"))
+        rows = parsers.extract_rows(resp, "show clients")
+        snap.clients = parsers.normalize_clients(rows)
+        raw = parsers.output_text(resp) or ""
+        explicit_empty = resp.get("show clients") == [] or bool(re.search(r"(?im)^\s*(?:0 clients?|total(?: number of)? clients\s*[:=]?\s*0|num(?:ber of)? clients\s*[:=]?\s*0|no clients(?: found)?)\s*$", raw))
+        if len(rows) != len(snap.clients) or (not snap.clients and not explicit_empty):
+            snap.clients_ok = False
+            snap.warnings.append("Client inventory is incomplete or unrecognized; disconnect inference suppressed.")
     except ArubaCommandError as exc:
         snap.clients_ok = False
         snap.warnings.append(f"Client list unavailable: {exc}")

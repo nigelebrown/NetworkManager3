@@ -27,8 +27,12 @@ done
   die "Usage: sudo bash deployment/centos9/verify-production.sh --manifest FILE --keyring FILE --evidence-root DIR" 2
 [[ -f "$ENV_FILE" && -f "$MANIFEST" && -f "$KEYRING" && -d "$EVIDENCE" ]] ||
   die "Missing installation env, signed manifest, trusted reviewer keyring or evidence folder" 3
-[[ "$(stat -c %a "$KEYRING")" == 600 ]] ||
-  die "Trusted reviewer keyring must be root-protected (mode 0600)" 3
+[[ ! -L "$KEYRING" && "$(stat -c %u "$KEYRING")" == 0 && "$(stat -c %a "$KEYRING")" == 600 ]] ||
+  die "Trusted reviewer keyring must be a non-symlink root-owned file (mode 0600)" 3
+[[ ! -L "$MANIFEST" && "$(stat -c %u "$MANIFEST")" == 0 && "$(stat -c %a "$MANIFEST")" == 600 ]] ||
+  die "Signed manifest must be a non-symlink root-owned file (mode 0600)" 3
+[[ ! -L "$EVIDENCE" && "$(stat -c %u "$EVIDENCE")" == 0 && "$(stat -c %a "$EVIDENCE")" == 700 ]] ||
+  die "Evidence root must be a non-symlink root-owned directory (mode 0700)" 3
 [[ "$(env_get INM_MODE)" == live ]] ||
   die "Production acceptance requires INM_MODE=live; demo evidence is not production" 3
 [[ "$(env_get INM_PROFILE)" == lab-readonly ]] ||

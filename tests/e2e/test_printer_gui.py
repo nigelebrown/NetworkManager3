@@ -80,10 +80,10 @@ def test_discovery_job_and_approval(page):
     cid = api(page, "post", "/printers/credential-profiles",
               {"name": "E2E SNMPv3", "version": "3", "username": "inm-ro", "auth_passphrase": "auth-pass-123", "privacy_passphrase": "priv-pass-123"})["id"]
     page.goto(URL + "/printers/inventory")
-    page.get_by_label("Credential profile").select_option(cid)
-    page.get_by_label("CIDR (/22–/32) or IP list").fill("10.103.70.20, 10.103.70.99")
+    page.get_by_role("checkbox", name="E2E SNMPv3 (SNMPv3)", exact=True).check()
+    page.get_by_label("CIDR (/9–/32) or IP list").fill("10.103.70.20, 10.103.70.99")
     page.get_by_role("button", name="Start discovery").click()
-    expect(page.get_by_text(re.compile(r"SUCCEEDED: 1 printer\(s\) identified, 1 address"))).to_be_visible(timeout=30000)
+    expect(page.get_by_text(re.compile(r"SUCCEEDED: 2/2 checked · 1 printers found"))).to_be_visible(timeout=30000)
     page.get_by_label("Select 10.103.70.20").check()
     page.get_by_role("button", name="Approve selected for monitoring").click()
     expect(page.get_by_text("1 registered")).to_be_visible()

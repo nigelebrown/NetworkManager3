@@ -5,7 +5,7 @@ import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { Notice, PageHeader, Pill, ago, btn, btn2, inputCls, useAction } from "../components/viz";
 import { getSession } from "../services/api";
-import { prn, waitJob, type Job } from "../services/printerSrs";
+import { prn, waitJob, type Job, type PrinterChange } from "../services/printerSrs";
 import { PrinterDetails as ManualRecords } from "./Printers";
 import { PrinterNav, UtilizationChart } from "./PrinterSuite";
 
@@ -34,7 +34,7 @@ export default function PrinterDevice() {
   return <div className="space-y-4">
     <Link className="inm-link text-sm" to="/printers/inventory">← Printer inventory</Link>
     <PageHeader eyebrow="Sites & inventory · Printers" title={dev ? `${dev.hostname || dev.serial_number} — ${dev.manufacturer} ${dev.model}` : "Printer"}
-      subtitle="Read-only observations with provenance. Printer configuration is never changed from here." />
+      subtitle="Printer health, monitoring, and verified device configuration." />
     <PrinterNav />
     <ErrorNote error={d.error} />
     <div role="tablist" className="inm-actionbar">{TABS.map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k}
@@ -200,6 +200,7 @@ function Config({ id, d, reload }: { id: string; d: any; reload: () => void }) {
   const act = useAction();
   const ro = !admin();
   return <div className="space-y-4"><Notice error={act.error} message={act.message} />
+    {admin() && <DeviceConfiguration id={id} />}
     <Box title="Monitoring (read-only SNMP)">
       <div className="grid gap-2 md:grid-cols-4 text-sm">
         <label><input type="checkbox" disabled={ro} checked={v.enabled} onChange={e => setV({ ...v, enabled: e.target.checked })} /> Monitoring enabled</label>
@@ -232,7 +233,64 @@ function Config({ id, d, reload }: { id: string; d: any; reload: () => void }) {
       {!ro && <button className={`${btn} mt-2`} disabled={act.busy} onClick={() => act.run(async () => {
         await prn.organization(id, { site_id: o.site_id === "" ? null : Number(o.site_id), location_ref: o.location_ref || null, division_ref: o.division_ref || null,
           section_ref: o.section_ref || null, unit_ref: o.unit_ref || null, model_id: o.model_id || null }); reload(); return "Saved."; })}>Save organisation</button>}
-      <p className="mt-2 text-xs text-slate-500">Printer settings are read-only attributes; remote configuration of printers is not enabled.</p>
+      <p className="mt-2 text-xs text-slate-500">Organisation fields update your inventory records. Device settings are managed in the separate configuration form above.</p>
     </Box>
   </div>;
+}
+
+
+function DeviceConfiguration({ id }: { id: string }) {
+  const cfg = useLoad(() => prn.configuration(id), [id], 0);
+  const [location, setLocation] = useState("");
+  const [preview, setPreview] = useState<PrinterChange | null>(null);
+  const [result, setResult] = useState<PrinterChange | null>(null);
+  const act = useAction();
+  const ready = !!cfg.data?.hardware_verified && !!cfg.data?.writes_enabled && cfg.data?.current_location != null;
+  const finish = (r: PrinterChange) => {
+    setResult(r); setPreview(null); cfg.reload();
+    if (r.state === "APPLIED_VERIFIED") return "Printer location saved and verified.";
+    if (r.state === "ROLLED_BACK") return "Original printer location restored and verified.";
+    throw new Error(r.state === "FAILED_RESTORED" ? "The change failed. The original location is restored."
+      : "The result could not be verified. Recovery is required; inspect the saved change below.");
+  };
+  return <Box title="Device configuration">
+    <Notice error={act.error} message={act.message} />
+    <ErrorNote error={cfg.error} />
+    {cfg.data && <>
+      {!cfg.data.hardware_verified && <p className="text-sm">Configuration is not yet verified for this printer. Monitoring remains available.</p>}
+      {cfg.data.hardware_verified && <div className="space-y-3">
+        <p className="text-sm"><Pill value="Hardware write test passed" tone="good" /> Printer location is available for this device.</p>
+        {!cfg.data.writes_enabled && <p role="alert">Device writes are locked or emergency stop is active.</p>}
+        {cfg.data.read_error && <p role="alert">{cfg.data.read_error}</p>}
+        <dl className="text-sm"><dt>Current printer location</dt><dd>{cfg.data.current_location === "" ? "(empty)" : cfg.data.current_location ?? "Unavailable"}</dd></dl>
+        <form className="space-y-2" onSubmit={e => { e.preventDefault(); act.run(async () => {
+          const r = await prn.previewLocation(id, location); setPreview(r); setResult(null);
+        }); }}>
+          <label className="block text-sm">New printer location
+            <input aria-label="New printer location" className={inputCls} value={location} maxLength={255} disabled={!ready || act.busy}
+              onChange={e => { setLocation(e.target.value); setPreview(null); }} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button className={btn2} disabled={!ready || act.busy} type="submit">Preview change</button>
+            <button className={btn2} disabled={act.busy} type="button" onClick={() => { setPreview(null); cfg.reload(); }}>Read current settings</button>
+          </div>
+        </form>
+        {preview && <div className="rounded border p-3 text-sm" role="region" aria-label="Printer change preview">
+          <p><b>Location:</b> {preview.before || "(empty)"} → {preview.after || "(empty)"}</p>
+          <button className={btn + " mt-2"} disabled={act.busy || !ready} onClick={() => act.run(async () =>
+            finish(await prn.applyConfiguration(id, preview.id)))}>Apply location change</button>
+        </div>}
+      </div>}
+      {result && <div className="mt-3 text-sm" role="status">Result: <b>{result.state.replace(/_/g, " ")}</b></div>}
+      {!!cfg.data.history.length && <div className="mt-4">
+        <h3 className="mb-2 font-semibold">Configuration history</h3>
+        <Rows head={["When", "Location change", "Result", "Action"]} empty="No device changes yet." rows={cfg.data.history.map(r => [
+          new Date(r.created_at).toLocaleString(), <span>{r.before || "(empty)"} → {r.after || "(empty)"}</span>, r.state.replace(/_/g, " "),
+          ["APPLIED_VERIFIED", "RECOVERY_REQUIRED"].includes(r.state) && <button className={btn2} disabled={act.busy || !cfg.data?.writes_enabled}
+            onClick={() => act.run(async () => finish(await prn.rollbackConfiguration(id, r.id)))}>Restore original location</button>,
+        ])} />
+      </div>}
+      <p className="mt-3 text-xs text-slate-500">Print defaults, trays, network, security and firmware controls are not enabled yet.</p>
+    </>}
+  </Box>;
 }

@@ -33,9 +33,7 @@ def scheduled_analysis() -> dict | None:
 
 
 def optimizer() -> dict | None:
-    from .optimizer import feature_enabled, run_optimizer
-    if not feature_enabled():
-        return None
+    from .optimizer import run_optimizer
     with session_scope() as db:
         return run_optimizer(db, actor="optimizer")
 

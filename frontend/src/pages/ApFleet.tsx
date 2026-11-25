@@ -20,64 +20,94 @@ const Radio = ({ r, warn }: { r: FleetAp["radio_2g"]; warn: number }) => r.chann
 
 function AutoOnboard({ onDone }: { onDone: () => void }) {
   const status = useLoad(wl.autodiscoverStatus, [], 4000);
+  const policy = useLoad(wl.onboardingPolicy, [], 0);
+  const profiles = useLoad(wl.onboardingProfiles, [], 0);
   const pending = useLoad(wl.pendingKeys, [], 0);
-  const [sel, setSel] = useState<Record<string, boolean>>({});
+  const [enabled, setEnabled] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [autoRest, setAutoRest] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const s = status.data;
+  const running = s?.state === "RUNNING" || s?.state === "QUEUED";
+  useEffect(() => {
+    if (policy.data && profiles.data) {
+      setEnabled(policy.data.enabled);
+      setAutoRest(policy.data.auto_enable_rest);
+      setSelected(policy.data.credential_ids ?? profiles.data.filter(p => p.enabled).map(p => p.id));
+    }
+  }, [policy.data, profiles.data]);
   useEffect(() => { if (s?.state === "SUCCEEDED" || s?.clusters_saved) onDone(); },
     [s?.state, s?.finished_at, s?.clusters_saved]); // eslint-disable-line react-hooks/exhaustive-deps
-  const run = async (fn: () => Promise<string>) => { setBusy(true); setMsg(null);
-    try { setMsg(await fn()); } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setBusy(false); } };
-  const keys = pending.data ?? [];
-  return <section className="inm-card" id="autodiscover"><div className="inm-cardhead"><h2>Auto-onboard access points (cluster-aware)</h2></div>
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true); setMsg(null);
+    try { setMsg(await fn()); }
+    catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); }
+    finally { setBusy(false); }
+  };
+  const changed = (pending.data ?? []).filter(k => k.changed_from);
+  const available = (profiles.data ?? []).filter(p => p.enabled);
+  const exceptions = (s?.results ?? []).filter(r =>
+    !["LINKED", "CLUSTER_REGISTERED", "ALREADY_MONITORED", "SWITCH_MONITORING_ENABLED"].includes(r.result));
+  return <section className="inm-card" id="autodiscover">
+    <div className="inm-cardhead"><h2>Automatic AP and switch onboarding</h2></div>
     <div className="inm-cardbody space-y-3 text-sm">
-      <p className="text-slate-600">One run finds each AP's Instant cluster from its own IP, registers the Virtual Controller once and links every member AP —
-        no per-AP onboarding. Where a cluster's REST API is off, it is read over a read-only SSH CLI session; credentials are only sent to hosts whose SSH key you approved.</p>
-      <ol className="grid gap-3 md:grid-cols-3">
-        <li className="rounded-lg border p-3"><b>1 · Scan SSH host keys</b><p className="text-xs text-slate-500">Unauthenticated: no password is sent. Only APs not yet in a polled cluster.</p>
-          <button className="inm-btn-secondary mt-2" disabled={busy} onClick={() => run(async () => { const r = await wl.scanKeys(); pending.reload();
-            const changed = r.results.filter(x => x.status === "CHANGED").length;
-            return `Scanned ${r.scanned} host(s): ${r.results.filter(x => x.status === "NEW").length} new key(s), ${r.results.filter(x => x.status === "ALREADY_APPROVED").length} already approved, ${r.results.filter(x => x.error).length} unreachable on TCP/22.` +
-              (changed ? ` ${changed} host key(s) CHANGED since approval — polling of those controllers is stopped until you verify and re-approve.` : ""); })}>Scan host keys</button></li>
-        <li className="rounded-lg border p-3"><b>2 · Approve fingerprints</b><p className="text-xs text-slate-500">{keys.length} pending. Compare with the AP console if in doubt.</p>
-          {keys.length > 0 && <div className="mt-2 max-h-40 overflow-auto text-xs">
-            <label className="flex gap-1 font-semibold"><input type="checkbox" checked={keys.every(k => sel[k.ip])}
-              onChange={e => setSel(Object.fromEntries(keys.map(k => [k.ip, e.target.checked])))} />Select all</label>
-            {keys.map(k => <label key={k.ip} className="flex gap-1 font-mono"><input type="checkbox" checked={!!sel[k.ip]}
-              onChange={e => setSel({ ...sel, [k.ip]: e.target.checked })} />{k.ip} {k.fingerprint.slice(0, 22)}…
-              {k.changed_from && <span className="ml-1 rounded bg-red-100 px-1 font-sans font-bold text-red-700" title={`Previously approved: ${k.changed_from}`}>KEY CHANGED — verify before approving</span>}</label>)}</div>}
-          <button className="inm-btn-secondary mt-2" disabled={busy || !Object.values(sel).some(Boolean)} onClick={() => run(async () => {
-            const items = keys.filter(k => sel[k.ip]).map(k => ({ ip: k.ip, fingerprint: k.fingerprint }));
-            if (!window.confirm(`Approve ${items.length} SSH host key(s)? Credentials will be sent to these hosts for read-only commands.`)) return "Cancelled.";
-            const r = await wl.approveKeys(items); pending.reload(); setSel({}); return `${r.filter(x => x.approved).length} key(s) approved.`; })}>Approve selected</button></li>
-        <li className="rounded-lg border p-3"><b>3 · Run auto-onboarding</b>
-          <label className="mt-1 flex items-start gap-2 text-xs"><input className="mt-0.5" type="checkbox" checked={autoRest} onChange={e => setAutoRest(e.target.checked)} />
-            <span>Also try to enable REST on clusters where it is off (fixed 4-command <code>allow-rest-api</code> bootstrap; only runs where the write policy and /32 approval permit — otherwise the cluster is read over SSH).</span></label>
-          <button className="inm-btn-primary mt-2" disabled={busy || s?.state === "RUNNING"} onClick={() => run(async () => { await wl.autodiscover(autoRest); status.reload(); return "Auto-onboarding started."; })}>
-            {s?.state === "RUNNING" ? `Checked ${s.done ?? 0}/${s.total ?? "?"} APs` : "Run auto-onboarding"}</button>
-          {s?.state === "RUNNING" && <p className="mt-1 text-xs" role="status">Clusters saved: {s.clusters_saved ?? 0}</p>}</li>
-      </ol>
-      {msg && <p className="rounded bg-slate-50 p-2" role="status">{msg}</p>}
-      {s && s.state !== "NEVER_RUN" && s.state !== "RUNNING" && <details open={s.state === "FAILED"}><summary className="cursor-pointer font-semibold">
-        Last run: {s.state} {s.finished_at && `· ${ago(s.finished_at)}`} {s.counts && "· " + Object.entries(s.counts).map(([k, v]) => `${k.replace(/_/g, " ").toLowerCase()} ${v}`).join(" · ")}</summary>
-        {s.error && <p className="text-red-700">{s.error}{s.clusters_saved ? ` Clusters saved: ${s.clusters_saved}.` : ""}</p>}
-        {!!s.clusters?.length && <table className="inm-table mt-2"><thead><tr><th>Cluster</th><th>VC</th><th>Members</th><th>Read via</th><th>REST</th><th>First poll</th></tr></thead>
-          <tbody>{s.clusters.map(c => <tr key={c.name}><td>{c.name}</td><td>{c.vc_ip}</td><td>{c.members}</td><td>{c.transport}</td><td className="text-xs">{c.rest_state}</td>
-            <td>{c.first_poll_ok ? <Pill value="OK" tone="good" /> : <span className="text-xs text-red-700">{c.first_poll_error ?? "failed"}</span>}</td></tr>)}</tbody></table>}
-        {!!s.results?.filter(r => !["LINKED", "CLUSTER_REGISTERED", "ALREADY_MONITORED"].includes(r.result)).length && <>
-          <p className="mt-2 font-semibold">Needs attention</p>
-          <table className="inm-table"><thead><tr><th>AP</th><th>IP</th><th>Result</th><th>What to do</th></tr></thead><tbody>
-            {s.results.filter(r => !["LINKED", "CLUSTER_REGISTERED", "ALREADY_MONITORED"].includes(r.result)).slice(0, 100).map(r =>
-              <tr key={r.device_id}><td>{r.hostname}</td><td>{r.ip ?? "—"}</td><td><Pill value={r.result} tone="fair" /></td>
-                <td className="text-xs">{r.detail ?? {
-                  NO_CREDENTIAL: "Create an AP credential profile (it is tried automatically).", NO_MANAGEMENT_IP: "Add the AP's IP in inventory.",
-                  TARGET_NOT_ALLOWED: "Add the management range to the approved CIDRs.", AUTH_REJECTED: "Credential refused — check the profile.",
-                  NEEDS_HOSTKEY_APPROVAL: "Approve its SSH key in step 2, then run again.", UNREACHABLE: "No route / TCP 4343 and 22 closed.",
-                }[r.result] ?? r.result}</td></tr>)}</tbody></table></>}
+      <p>Choose saved credentials once. New or imported devices are checked in the background.
+        A successful login links the working profile, registers the AP cluster or switch monitoring plan,
+        and starts collection. Progress survives API and worker restarts.</p>
+      <ErrorNote error={policy.error || profiles.error || status.error} />
+      <label className="flex items-center gap-2 font-semibold">
+        <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
+        Automatically onboard new and imported APs and switches
+      </label>
+      <fieldset className="rounded-lg border p-3"><legend>Saved credentials to try</legend>
+        <div className="grid gap-2 md:grid-cols-2">{available.map(p =>
+          <label key={p.id} className="flex items-center gap-2">
+            <input type="checkbox" checked={selected.includes(p.id)} onChange={e =>
+              setSelected(e.target.checked ? [...selected, p.id] : selected.filter(id => id !== p.id))} />
+            {p.name} <span className="text-xs text-slate-500">{p.device_family.replace(/_/g, " ")}</span>
+          </label>)}</div>
+        {!available.length && <p>No enabled device credential profiles are available.</p>}
+      </fieldset>
+      <p className="text-xs text-slate-600">New SSH keys are recorded after a saved credential authenticates
+        and a device read succeeds. A changed known key is listed for review.</p>
+      <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={autoRest}
+        onChange={e => setAutoRest(e.target.checked)} />
+        Try the existing REST-enablement bootstrap where permitted. APs can also be monitored through SSH.
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <button className="inm-btn-primary" disabled={busy || !selected.length} onClick={() => run(async () => {
+          await wl.saveOnboardingPolicy({ enabled, credential_ids: selected, auto_trust_new_hosts: true, auto_enable_rest: autoRest });
+          policy.reload(); return enabled ? "Automatic onboarding enabled." : "Automatic onboarding disabled.";
+        })}>Save automation</button>
+        <button className="inm-btn-secondary" disabled={busy || running || !selected.length} onClick={() => run(async () => {
+          await wl.autodiscover(autoRest, undefined, selected); status.reload();
+          return "Onboarding queued. The worker will continue even if you leave this page.";
+        })}>Retry onboarding now</button>
+      </div>
+      {msg && <p role="status" className="rounded bg-slate-50 p-2">{msg}</p>}
+      {running && <p role="status">{s?.state === "QUEUED" ? "Queued for worker" : "Onboarding"}:
+        {" "}{s?.done ?? 0}/{s?.total ?? "?"} devices checked · {s?.clusters_saved ?? 0} clusters saved</p>}
+      {s && s.state !== "NEVER_RUN" && <details open={s.state === "FAILED" || exceptions.length > 0}>
+        <summary className="font-semibold">Latest run: {s.state}{s.finished_at && " · " + ago(s.finished_at)}</summary>
+        {s.error && <p className="text-red-700">{s.error}</p>}
+        {s.counts && <p>{Object.entries(s.counts).map(([k, v]) => k.replace(/_/g, " ").toLowerCase() + ": " + v).join(" · ")}</p>}
+        {!!exceptions.length && <table className="inm-table mt-2"><thead><tr><th>Device</th><th>IP</th><th>Result</th><th>Detail</th></tr></thead>
+          <tbody>{exceptions.slice(0,100).map(r => <tr key={r.device_id}><td>{r.hostname}</td><td>{r.ip ?? "—"}</td>
+            <td>{r.result.replace(/_/g, " ")}</td><td>{r.detail ?? "Check credentials, identity and reachability."}</td></tr>)}</tbody></table>}
       </details>}
-    </div></section>;
+      {!!changed.length && <details><summary>{changed.length} changed SSH key(s) need review</summary>
+        {changed.map(k => <div className="mt-2 flex flex-wrap gap-2" key={k.ip}>
+          <code>{k.ip} · {k.fingerprint}</code>
+          <button className="inm-btn-secondary" disabled={busy} onClick={() => run(async () => {
+            if (!window.confirm("Replace the saved SSH key for " + k.ip + "? Verify the device identity before continuing.")) return "Cancelled.";
+            await wl.approveKeys([{ip:k.ip,fingerprint:k.fingerprint}]); pending.reload();
+            return "Replacement key saved. Retry onboarding when ready.";
+          })}>Approve replacement key</button>
+        </div>)}
+      </details>}
+    </div>
+  </section>;
 }
 
 export default function ApFleet({ mode = "aps" }: { mode?: "aps" | "rf" }) {

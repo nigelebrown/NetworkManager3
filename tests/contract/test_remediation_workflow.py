@@ -209,10 +209,16 @@ def test_multi_device_deployment_with_progress_and_stop_on_failure(demo):
         c.post(f"/api/v1/changes/plans/{plan['id']}/approve", headers=appr, json={"expected_revision": plan["revision"]})
     # the second device will reject a write -> automatic rollback there, and the batch stops
     order = [p["device_id"] for p in st["plans"]]
-    X._EMULATORS[order[1]].fail_path = "/system/ntp_associations"
+    X._EMULATORS[order[1]].fail_path = "/system/vrfs/mgmt/ntp_associations"
     r = c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"stop_on_failure": True}).json()
     outcomes = [e["outcome"] for e in r["executed"]]
     assert outcomes[0] == "APPLIED_VERIFIED" and outcomes[1] == "ROLLED_BACK" and len(outcomes) == 2
     assert r["stopped_at"] == st["plans"][1]["plan_id"]
     prog = c.get(f"/api/v1/deployments/{batch}", headers=adm).json()["progress"]
     assert prog["applied_verified"] == 1 and prog["failed_rolled_back"] == 1 and prog["approved"] == len(sws) - 2
+    assert c.get(f"/api/v1/deployments/{batch}", headers=adm).json()["wave"]["state"] == "PAUSED"
+    assert c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 26}).status_code == 422
+    assert c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 1}).status_code == 409
+    resumed = c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 1,
+                     "resume_after_failure": True, "review_note": "Rollback reviewed and confirmed"}).json()
+    assert len(resumed["executed"]) == min(1, len(sws) - 2)

@@ -124,10 +124,13 @@ def record_aaa(body: AaaSession, request: Request, db: Session = Depends(get_db)
 def change_timeline(device_id: str, db: Session = Depends(get_db),
                     user: User = Depends(require_any_role("admin", "auditor", "operator"))):
     d = real_device(db, device_id)
+    from .production_ops import _require_hardware_log_scope
+    _require_hardware_log_scope(db, user, d)
     attrs = list(db.scalars(select(ChangeAttribution).where(ChangeAttribution.device_id == d.id)
                             .order_by(ChangeAttribution.change_at.desc(), ChangeAttribution.created_at.desc())))
     superseded = {a.supersedes_id for a in attrs if a.supersedes_id}
-    logs = list(db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id == d.id)
+    logs = list(db.scalars(select(DeviceLogEvent).where(DeviceLogEvent.device_id == d.id,
+                           DeviceLogEvent.transport_quality != "AUTHENTICATED_POLL")
                            .order_by(DeviceLogEvent.observed_at.desc()).limit(200)))
     sources = set()
     if logs:
@@ -146,8 +149,17 @@ def change_timeline(device_id: str, db: Session = Depends(get_db),
 
 @router.get("/drift")
 def drift(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor", "operator"))):
-    rows = db.scalars(select(ChangeAttribution).where(ChangeAttribution.change_type == "DIRECT_DEVICE")
-                      .order_by(ChangeAttribution.change_at.desc()).limit(300))
+    from .workflows import _authorized_sites
+    from ..security.deps import user_site_scope
+    allowed = _authorized_sites(db, user)
+    scope = user_site_scope(db, user)
+    query = select(ChangeAttribution).where(ChangeAttribution.change_type == "DIRECT_DEVICE")
+    if scope is not None:
+        from sqlalchemy import and_, or_
+        query = query.join(InmDevice, InmDevice.id == ChangeAttribution.device_id).where(
+            or_(and_(InmDevice.family == "access_point", InmDevice.legacy_site_id.in_(scope)),
+                and_(InmDevice.family != "access_point", InmDevice.site_id.in_(allowed or set()))))
+    rows = db.scalars(query.order_by(ChangeAttribution.change_at.desc()).limit(300))
     return [_attr_public(a) for a in rows]
 
 

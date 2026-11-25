@@ -25,6 +25,7 @@ export default function Firmware() {
   useEffect(() => { if (comp.data && !policy) setPolicy(comp.data.policy); }, [comp.data, policy]);
   const [siteId, setSiteId] = useState<number | "">("");
   useEffect(() => { if (siteId === "" && liveSites.length) setSiteId(liveSites[0].id); }, [liveSites, siteId]);
+  const history = useLoad(() => isAdmin && siteId !== "" ? fwApi.upgradeHistory(siteId) : Promise.resolve([]), [siteId, isAdmin], 0);
   const [picked, setPicked] = useState<number[]>([]);
   const [downgrade, setDowngrade] = useState(false);
   const [certFile, setCertFile] = useState<File | null>(null);
@@ -110,7 +111,21 @@ export default function Firmware() {
           </form>
         </Card>)}
 
-      {plan && <FwPlanDialog change={plan} onClose={() => { setPlan(null); comp.reload(); }} onDone={() => comp.reload()} />}
+      {isAdmin && siteId !== "" && <Card title="Firmware staging and recovery history">
+        <ErrorNote error={history.error} />
+        <p className="text-xs text-slate-500">After an approved manual reboot, verify the running build on every planned AP. To prepare a rollback, select the exact previous images in the image library and create a separate recovery plan.</p>
+        {(history.data ?? []).filter(c => c.site_id === siteId).map(c => <div key={c.id} className="border-t border-slate-800 py-3 text-sm">
+          <b>#{c.id} · {c.summary}</b> · {c.status}<p>Previous: {c.plan.running ?? "unknown"} · target: {c.plan.target ?? "unknown"}</p>
+          {c.plan.member_verification && <div className="my-2"><b>{c.plan.member_verification.state}</b> · {c.plan.member_verification.checked_at}
+            <div className="text-xs">Missing: {c.plan.member_verification.missing_serials.join(", ") || "none"} {c.plan.member_verification.failure ?? ""}</div>
+            <table className="inm-table"><thead><tr><th>AP serial</th><th>IP</th><th>Version</th><th>State</th></tr></thead><tbody>{(c.plan.member_verification.members as import("../services/api").FwVerification["members"]).map((m, i) => <tr key={i}><td>{m.serial ?? "—"}</td><td>{m.ip ?? "—"}</td><td>{m.version ?? "—"}</td><td>{m.state}</td></tr>)}</tbody></table>
+            <p className="text-xs text-slate-500">{c.plan.member_verification.note}</p></div>}
+          {["applied", "applied_unverified"].includes(c.status) && <div className="flex flex-wrap gap-2 mt-2">
+            <button className="inm-btn-secondary" disabled={busy} onClick={() => run(async () => { const v = await fwApi.verifyUpgrade(c.id); setMsg(v.state); history.reload(); })}>Verify running member versions</button>
+            <button className="inm-btn-secondary" disabled={!writable || busy || !picked.length} onClick={() => run(async () => setPlan(await fwApi.recoveryPlan(c.id, picked)))}>Plan rollback to prior version</button></div>}
+        </div>)}
+      </Card>}
+      {plan && <FwPlanDialog change={plan} onClose={() => { setPlan(null); comp.reload(); history.reload(); }} onDone={() => { comp.reload(); history.reload(); }} />}
     </div>
   );
 }

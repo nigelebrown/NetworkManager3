@@ -160,10 +160,12 @@ export const ops = {
 export interface Port { name: string; admin: string | null; link: string; speed_bps: number | null; duplex: string | null;
   vlan_mode: string | null; vlan: number | null; description: string; rx_errors: number | null; tx_errors: number | null;
   poe_w: number | null; poe_status: string | null; lldp: { system_name: string; port: string } | null;
+  rx_packets?: number | null; tx_packets?: number | null; rx_crc_errors?: number | null;
+  optical_dom?: { type: string; temperature_c: number | null; voltage_v: number | null; tx_bias_ma: number | null; rx_power_mw: number | null; rx_power_dbm: number | null; tx_power_mw: number | null; tx_power_dbm: number | null } | null;
   rates?: { rx_bps: number | null; tx_bps: number | null; util_percent: number | null } | null }
 export interface Ports { device_id: string; collected_at: string | null; environment?: string; ports: Port[];
   hardware: { cpu_percent?: number | null; memory_percent?: number | null; temp_max_c?: number | null; fans_total?: number;
-    fans_failed?: number; psu_total?: number; psu_failed?: number }; note?: string }
+    fans_failed?: number; psu_total?: number; psu_failed?: number; optical_dom?: { state: string; reason?: string; unparsed_port_rows?: number } }; note?: string }
 export interface Cert { id: string; adapter_key: string; model_family: string; firmware_train: string; operation: string;
   status: string; environment: string; run_id: string; device_id: string; evidence: Record<string, unknown>;
   tested_by: string; tested_at: string; approved_by: string | null }
@@ -183,6 +185,17 @@ export interface DeviceOriginLogs {
   device_id: string; environment: string; kind: string; count: number;
   hardware_verified: boolean; records: DeviceOriginLog[];
 }
+export interface DeviceLogSchedule {
+  device_id: string; eligible: boolean; enabled?: boolean; interval_minutes?: number;
+  next_due_at?: string; last_attempt_at?: string; last_completed_at?: string;
+  last_result?: { state: string; reason?: string; records_added?: number;
+    categories?: Record<string, { state: string; received?: number; added?: number; reason?: string; possibly_truncated?: boolean }> };
+}
+export interface DeviceLogHistory {
+  device_id: string; timestamp_semantics: string; attribution_verified: boolean;
+  records: { id: string; collected_at: string; kind: string; scope: string; level: string;
+    reported_actor: string | null; message: string }[];
+}
 export interface DeviceDiagnostic {
   device_id: string; environment: string; kind: string; command: string; source: string;
   output: string; hardware_verified: boolean; device_writes: number;
@@ -199,8 +212,15 @@ export const rw = {
   decideCert: (id: string, action: "approve" | "revoke") => post<Cert>(`/v1/certification/${enc(id)}/${action}`),
   deviceCert: (id: string) => request<{ environment: string; model_family: string; firmware_train: string; operations: Record<string, string> }>(`/v1/devices/${enc(id)}/certification`),
   ports: (id: string) => request<Ports>(`/v1/devices/${enc(id)}/ports`),
+  switchFirmwareStatus: (id: string) => request<{ device_id: string; environment: string; state: string; current_version: string | null; primary_version: string | null; secondary_version: string | null; booted_image: string | null; default_image: string | null; device_writes: number }>(`/v1/devices/${enc(id)}/firmware-status`),
   deviceLogs: (id: string, kind: "audit" | "event" | "system" | "security" | "user", limit = 50) =>
     request<DeviceOriginLogs>(`/v1/devices/${enc(id)}/device-logs?kind=${enc(kind)}&limit=${limit}`),
+  deviceLogSchedule: (id: string) => request<DeviceLogSchedule>(`/v1/devices/${enc(id)}/device-log-collection`),
+  setDeviceLogSchedule: (id: string, enabled: boolean, interval_minutes: number) =>
+    request<DeviceLogSchedule>(`/v1/devices/${enc(id)}/device-log-collection`, {
+      method: "PUT", body: JSON.stringify({ enabled, interval_minutes })
+    }),
+  deviceLogHistory: (id: string) => request<DeviceLogHistory>(`/v1/devices/${enc(id)}/device-log-history`),
   diagnostics: (id: string, kind: string) =>
     request<DeviceDiagnostic>(`/v1/devices/${enc(id)}/diagnostics?kind=${enc(kind)}`),
   authority: (id: string) => request<{ authority: string; detail: string; environment: string }>(`/v1/devices/${enc(id)}/authority`),

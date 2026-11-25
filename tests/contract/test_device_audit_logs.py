@@ -84,6 +84,8 @@ def test_generic_log_normalization_drops_unknown_and_secret_fields():
     assert "ABCDEFG.private_token" not in json.dumps(result)
     assert len(normalize_cx(cx, limit=1)) == 1
     assert "credentials" not in sanitize("Basic text")
+    assert "two word secret" not in sanitize('{"password": "two word secret"}')
+    assert "sample-private-value" not in sanitize("community=sample-private-value")
     with pytest.raises(ValueError):
         normalize_instant({"Command output": 1234})
     with pytest.raises(ValueError):

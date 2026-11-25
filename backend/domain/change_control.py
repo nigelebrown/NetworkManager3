@@ -14,12 +14,13 @@ from datetime import datetime, timedelta, timezone
 ALLOWED_WIDTHS_MHZ = (20, 40)          # 80/160 MHz are never permitted
 APPROVAL_TTL = timedelta(hours=24)
 AP_OPERATIONS = {"ap.radio.channel", "ap.radio.width", "ap.radio.tx_power", "ap.ssid.vlan",
-                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise"}
+                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise",
+                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth"}
 SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
                      "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
                      "switch.port.stp_bpdu_guard", "switch.port.storm_control", "switch.port.qos_trust",
-                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog"}
+                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab"}
 # Operations whose secret (PSK / RADIUS shared secret) is referenced by an encrypted credential profile id.
 # Plans never contain the secret itself; the executor resolves it only at apply time.
 SECRET_REF_OPS = {"ap.ssid.create", "ap.ssid.enterprise"}
@@ -42,6 +43,42 @@ class PolicyViolation(ValueError):
     pass
 
 
+# Standard 40-MHz primary/secondary pairs for the supported 5-GHz channel set.
+# Device regulatory domain and local policy remain additional constraints.
+PAIR_5G = {36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157}
+
+
+def channel_components(value) -> set[int]:
+    import re
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,3}\+?", value):
+        raise PolicyViolation("Allowed channels must use 20-MHz channel numbers or 40-MHz lower-channel '+' notation.")
+    ch = int(value.rstrip("+"))
+    if ch not in VALID_5G or (value.endswith("+") and ch not in PAIR_5G):
+        raise PolicyViolation("Invalid 5-GHz channel or 40-MHz channel pair.")
+    return {ch, ch + 4} if value.endswith("+") else {ch}
+
+
+def normalize_channel_list(values, *, excluded_channels=None, allow_dfs=False) -> list[str]:
+    if not isinstance(values, list) or not 1 <= len(values) <= 48:
+        raise PolicyViolation("Supply a nonempty list of at most 48 allowed 5-GHz channels.")
+    tokens = []
+    for value in values:
+        components = channel_components(value)
+        if components & (excluded_channels or set()):
+            raise PolicyViolation("An allowed channel or bonded secondary channel is excluded by site policy.")
+        if components & DFS_5G and not allow_dfs:
+            raise PolicyViolation("DFS channels require an approved site compatibility profile.")
+        tokens.append(str(int(str(value).rstrip("+"))) + ("+" if str(value).endswith("+") else ""))
+    if len(set(tokens)) != len(tokens):
+        raise PolicyViolation("Duplicate allowed channel.")
+    if not any(not t.endswith("+") for t in tokens):
+        raise PolicyViolation("Include at least one 20-MHz channel.")
+    return sorted(tokens, key=lambda t: (int(t.rstrip("+")), t.endswith("+")))
+
+
+
 def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | None = None,
                        allow_dfs: bool = False, uplink_ports: set[str] | None = None) -> dict:
     """Validate one typed operation. Raises PolicyViolation before any adapter is involved."""
@@ -59,6 +96,32 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
     if family == "access_point":
         if kind not in AP_OPERATIONS:
             raise PolicyViolation(f"Operation {kind!r} is not an AP operation.")
+        if kind == "ap.radio.allowed_channels":
+            channels = normalize_channel_list(op.get("value"), excluded_channels=excluded_channels, allow_dfs=allow_dfs)
+            # The approval binds the validated channel set and explicit DFS permission.
+            return {**op, "value": channels, "allow_dfs": bool(allow_dfs)}
+        if kind == "ap.ssid.guest_auth":
+            import re as _re
+            for field in ("ssid", "portal_profile", "pre_auth_role", "mac_role"):
+                if not isinstance(op.get(field), str) or not _re.fullmatch(_NAME, op[field]):
+                    raise PolicyViolation(f"{field} must identify an existing safe-named profile or role.")
+            if op.get("acknowledge_guest_auth_change") is not True:
+                raise PolicyViolation("Explicitly acknowledge guest authentication and role changes.")
+        if kind in ("ap.ssid.roaming", "ap.ssid.accounting"):
+            import re as _re
+            if not isinstance(op.get("ssid"), str) or not _re.fullmatch(_NAME, op["ssid"]):
+                raise PolicyViolation("An existing SSID profile name is required (1–32 safe characters).")
+            if kind == "ap.ssid.roaming":
+                if any(op.get(k) not in ("enabled", "disabled") for k in ("dot11k", "dot11v", "dot11r")):
+                    raise PolicyViolation("Specify enabled or disabled for each of 802.11k, 802.11v and 802.11r.")
+            else:
+                if op.get("value") not in ("enabled", "disabled"):
+                    raise PolicyViolation("RADIUS accounting must be enabled or disabled.")
+                interval = op.get("interval_minutes")
+                if op["value"] == "enabled" and (type(interval) is not int or not 0 <= interval <= 60):
+                    raise PolicyViolation("Enabled accounting requires an interim interval of 0–60 minutes.")
+                if op["value"] == "disabled" and interval is not None:
+                    raise PolicyViolation("Do not specify an interim interval when disabling accounting.")
         if kind == "ap.radio.width":
             if op.get("value") not in ALLOWED_WIDTHS_MHZ:
                 raise PolicyViolation("Channel width must be 20 or 40 MHz; 80/160 MHz are refused.")
@@ -66,12 +129,18 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             ch, band = op.get("value"), op.get("band")
             if band not in ("2.4", "5"):
                 raise PolicyViolation("Radio band must be 2.4 or 5.")
+            if op.get("arm_managed") is True:
+                if ch != 0 or op.get("power") != 0:
+                    raise PolicyViolation("Native ARM assignment requires channel=0 and power=0.")
+                return dict(op)
             if not isinstance(ch, int) or ch not in (VALID_2G if band == "2.4" else VALID_5G):
                 raise PolicyViolation(f"Channel {ch} is not valid for {band} GHz.")
             if ch in excluded_channels:
                 raise PolicyViolation(f"Channel {ch} is excluded by site policy.")
-            if band == "5" and ch in DFS_5G and not allow_dfs:
-                raise PolicyViolation(f"DFS channel {ch} requires an approved site compatibility profile.")
+            if band == "5" and ch in DFS_5G:
+                if not allow_dfs:
+                    raise PolicyViolation(f"DFS channel {ch} requires an approved site compatibility profile.")
+                return {**op, "allow_dfs": True}
         if kind == "ap.radio.tx_power":
             lo, hi = op.get("min_dbm"), op.get("max_dbm")
             if not (isinstance(lo, int) and isinstance(hi, int) and 3 <= lo <= hi <= 30):
@@ -127,6 +196,21 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
         if port and uplink_ports and port in uplink_ports and kind in (
                 "switch.port.admin_state", "switch.port.access_vlan"):
             raise PolicyViolation(f"Port {port} is a protected uplink; refusing {kind}.")
+        if kind == "switch.vlan.voice":
+            if type(op.get("vlan")) is not int or not 2 <= op["vlan"] <= 4094:
+                raise PolicyViolation("Select an existing non-default VLAN (2–4094).")
+            if op.get("value") not in ("enabled", "disabled") or op.get("acknowledge_voice_change") is not True:
+                raise PolicyViolation("Explicitly acknowledge the voice VLAN advertisement change.")
+        if kind in ("switch.port.auth_dot1x", "switch.port.auth_mab"):
+            import re
+            if not isinstance(port, str) or not re.fullmatch(r"[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?", port):
+                raise PolicyViolation("Select a physical access port.")
+            if uplink_ports and port in uplink_ports:
+                raise PolicyViolation("Port authentication is prohibited on protected uplinks.")
+            if op.get("method") != ("dot1x" if kind == "switch.port.auth_dot1x" else "mac-auth") or op.get("acknowledge_auth_change") is not True:
+                raise PolicyViolation("Select 802.1X or MAC authentication and acknowledge the access-policy change.")
+            if op.get("value") != "enabled":
+                raise PolicyViolation("Only enabling an existing authentication method is supported; disabling it can bypass NAC.")
         if kind in ("switch.vlan.define", "switch.port.access_vlan"):
             v = op.get("value")
             if not (isinstance(v, int) and 1 <= v <= 4094):

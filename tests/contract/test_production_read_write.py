@@ -229,7 +229,15 @@ def test_per_device_automatic_optimization_end_to_end(env, monkeypatch):
     assert c.post(f"/api/v1/devices/{ap['id']}/optimization/enroll", headers=adm, json=bad).status_code == 422
     e = c.post(f"/api/v1/devices/{ap['id']}/optimization/enroll", headers=adm, json=body).json()
     assert c.post(f"/api/v1/optimization/enrollments/{e['id']}/approve", headers=appr).json()["status"] == "ARMED"
-    # make the AP congested now (fresh measured telemetry)
+    # Seed measured ARM evidence: automatic interventions return a known static override to native ARM.
+    from tests.unit.test_arm_intelligence import measured
+    from backend.infrastructure.ap_autodiscovery import _put
+    from backend.database.session import session_scope
+    with session_scope() as db:
+        arm=measured()
+        arm["overrides"]["5"]={"chan":149,"tx_power":18}
+        _put(db,"arm-rf:"+ap["id"],arm,"test")
+    # Fresh telemetry still supplies collection readiness for this isolated protocol test.
     from backend.domain.model import DataQuality, SourceType, TelemetryPoint
     from backend.infrastructure.runtime import telemetry_store
     now = datetime.now(timezone.utc)

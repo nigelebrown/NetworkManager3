@@ -18,6 +18,9 @@ export default function Deployments() {
   const [dev, setDev] = useState("");
   const [batch, setBatch] = useState<Batch | null>(null);
   const [stop, setStop] = useState(true);
+  const [waveSize, setWaveSize] = useState(5);
+  const [oneSite, setOneSite] = useState(true);
+  const [review, setReview] = useState("");
   const refresh = async (id: string) => setBatch(await rem.batch(id));
   const plans = useLoad(() => ops.changePlans(), [batch?.batch_id], 10000, ["changes"]);
   return <div className="space-y-4">
@@ -51,11 +54,15 @@ export default function Deployments() {
               <td><Pill value={p.state} tone={statusTone(p.state === "APPLIED_VERIFIED" ? "PASS" : p.state.includes("FAIL") ? "FAIL" : p.state)} /></td>
               <td>{p.execution?.environment && <Pill value={p.execution.environment} tone={p.execution.environment === "EMULATED" ? "demo" : "info"} />}</td>
               <td>{can && <button className={btn2} onClick={() => act.run(async () => { await ops.decideChange(full!.id, "approve", full!.revision, "Approved in deployment"); await refresh(batch.batch_id); plans.reload(); return "Approved."; })}>Approve</button>}</td></tr>; })}</tbody></table>
+          <div className="mt-2 text-xs">Wave status: <b>{batch.wave?.state ?? "READY"}</b>. Hardware starts with one canary and always stays within one site and pauses on failure.</div>
+          {["PAUSED", "RUNNING"].includes(batch.wave?.state ?? "") && <label className="block text-xs mt-2">Failure / interruption review (required to resume)<input className={inputCls} value={review} onChange={e => setReview(e.target.value)} placeholder="Record recovery and review outcome" /></label>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            <label className="text-xs">Wave size (1–25)<input className={inputCls} type="number" min={1} max={25} value={waveSize} onChange={e => setWaveSize(Number(e.target.value))} /></label>
+            <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={oneSite} onChange={e => setOneSite(e.target.checked)} /> One site per wave</label>
             <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={stop} onChange={e => setStop(e.target.checked)} /> Stop at first failure</label>
-            {me?.role === "admin" && <button className={btn} disabled={act.busy || !batch.progress.approved} onClick={() => act.run(async () => {
-              const r = await rem.executeBatch(batch.batch_id, stop); await refresh(batch.batch_id);
-              return `Executed ${r.executed.length}: ${r.executed.map(e => e.outcome ?? e.decision).join(", ")}${r.stopped_at ? " — stopped after a failure." : ""}`; })}>Execute approved plans</button>}
+            {me?.role === "admin" && <button className={btn} disabled={act.busy || !batch.progress.approved || !Number.isInteger(waveSize) || waveSize < 1 || waveSize > 25 || (["PAUSED", "RUNNING"].includes(batch.wave?.state ?? "") && review.trim().length < 10)} onClick={() => act.run(async () => {
+              const r = await rem.executeBatch(batch.batch_id, stop, waveSize, oneSite, ["PAUSED", "RUNNING"].includes(batch.wave?.state ?? ""), review); setReview(""); await refresh(batch.batch_id);
+              return `Executed ${r.executed.length}: ${r.executed.map(e => e.outcome ?? e.decision).join(", ")}${r.stopped_at ? " — stopped after a failure." : ""}`; })}>Execute approved wave</button>}
             <button className={btn2} onClick={() => refresh(batch.batch_id)}>Refresh</button>
             <Link className="text-xs text-sky-300" to="/changes">Change workflow →</Link>
           </div></>}

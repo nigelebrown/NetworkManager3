@@ -20,7 +20,7 @@ from .aruba_instant import ArubaInstantWriter
 
 
 IFACE_WRITABLE = {"admin", "vlan_mode", "vlan_tag", "vlan_trunks", "description", "other_config", "stp_config",
-                  "rate_limits", "rate_limits_units", "qos_trust"}
+                  "rate_limits", "qos_config"}
 
 
 class CxEmulator:
@@ -55,6 +55,15 @@ class CxEmulator:
                                                            "detection_status": "delivering" if i <= 4 else "searching"}}}
                            for i in range(1, ports + 1)},
         }
+        # Explicit synthetic AAA baseline on the designated certification port.
+        lab_port = f"1/1/{min(ports, 24)}"
+        if lab_port in self.state["interfaces"]:
+            self.state["interfaces"][lab_port].update({
+                "port_access_auth_mode": "client-mode",
+                "auth_methods": {method: {"authentication_method": method,
+                    "radius_server_group": "LAB-RADIUS", "auth_enable": False,
+                    "cached_reauth_enable": False, "canned_eap_success_enable": False}
+                    for method in ("dot1x", "mac-auth")}})
         self.cli_commands = ["show port-access clients", "show power-over-ethernet",
                              "show qos trust", "show lacp interfaces",
                              "show interface transceiver detail", "show interface dom"]
@@ -196,6 +205,10 @@ class CxEmulator:
         body = json.loads(req.content) if req.content else {}
         if p in ("/logs/audit", "/logs/event") and m == "GET":
             return httpx.Response(200, json=copy.deepcopy(self.audit_records[p.rsplit("/", 1)[-1]]))
+        if p == "/firmware" and m == "GET":
+            return httpx.Response(200, json={"current_version": self.state["system"]["software_version"],
+                "primary_version": self.state["system"]["software_version"], "secondary_version": "",
+                "default_image": "primary", "booted_image": "primary"})
         if p == "/system":
             return httpx.Response(200, json=self.state["system"])
         if p == "/system/subsystems":
@@ -233,9 +246,9 @@ class CxEmulator:
                     self.state = copy.deepcopy(body)
                     return httpx.Response(200)
         for coll, keyf in (("ntp_associations", "address"), ("syslog_remotes", "remote_host")):
-            if p == f"/system/{coll}" and m == "GET":
+            if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "GET":
                 return httpx.Response(200, json=copy.deepcopy(self.state[coll]))
-            if p == f"/system/{coll}" and m == "POST":
+            if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "POST":
                 self.writes += 1
                 if not isinstance(body.get(keyf), str) or "vrf" not in body:
                     return httpx.Response(400, text=f"{keyf} and vrf are required")
@@ -270,13 +283,37 @@ class CxEmulator:
             if vid in self.state["vlans"]:
                 return httpx.Response(400, text="VLAN exists")
             if not self.lie:
-                self.state["vlans"][vid] = {"id": body["id"], "name": body.get("name")}
+                self.state["vlans"][vid] = {"id": body["id"], "name": body.get("name"), "type": "static", "voice": False}
             return httpx.Response(201)
-        if p.startswith("/system/vlans/") and m == "GET":
+        if p.startswith("/system/vlans/") and m in ("GET", "PUT"):
             v = self.state["vlans"].get(p.rsplit("/", 1)[-1])
-            return httpx.Response(200, json=v) if v else httpx.Response(404)
+            if v is None:
+                return httpx.Response(404)
+            if m == "GET":
+                return httpx.Response(200, json=v)
+            if set(body) - {"id", "name", "type", "voice"} or body.get("id") != v["id"] or type(body.get("voice")) is not bool:
+                return httpx.Response(400, text="Invalid writable VLAN configuration")
+            self.writes += 1
+            if not self.lie:
+                v.update(copy.deepcopy(body))
+            return httpx.Response(204)
         if p.startswith("/system/interfaces/"):
             rest = p[len("/system/interfaces/"):]
+            if "/port_access_auth_configurations/" in rest:
+                name, method = rest.split("/port_access_auth_configurations/", 1)
+                item = self.state["interfaces"].get(name, {}).get("auth_methods", {}).get(method)
+                if item is None:
+                    return httpx.Response(404)
+                if m == "GET":
+                    return httpx.Response(200, json=item)
+                if m == "PATCH":
+                    if set(body) != {"auth_enable", "cached_reauth_enable", "canned_eap_success_enable"} or any(type(v) is not bool for v in body.values()):
+                        return httpx.Response(400, text="Invalid authentication attributes")
+                    self.writes += 1
+                    if not self.lie:
+                        item.update(body)
+                    return httpx.Response(204)
+                return httpx.Response(405)
             if rest.endswith("/lldp_neighbors"):
                 it = self.state["interfaces"].get(rest[: -len("/lldp_neighbors")])
                 if it is None:
@@ -293,14 +330,15 @@ class CxEmulator:
             if it is None:
                 return httpx.Response(404)
             if m == "GET":
-                return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items() if k != "poe"})
-            if m == "PATCH":
+                return httpx.Response(200, json=it["poe"] if poe else {k: v for k, v in it.items()
+                    if k != "poe" and (req.url.params.get("selector") != "writable" or k in IFACE_WRITABLE)})
+            if m in ("PATCH", "PUT"):
                 self.writes += 1
                 if not poe:
                     unknown = set(body) - IFACE_WRITABLE
                     if unknown:          # strict schema: an unknown attribute is a 400, as on AOS-CX
                         return httpx.Response(400, text=f"Unknown or read-only attribute(s): {sorted(unknown)}")
-                    if body.get("qos_trust") not in (None, "none", "cos", "dscp"):
+                    if (body.get("qos_config") or {}).get("qos_trust") not in (None, "none", "cos", "dscp"):
                         return httpx.Response(400, text="qos_trust must be none, cos or dscp")
                 if "vlan_tag" in body and body["vlan_tag"].rsplit("/", 1)[-1] not in self.state["vlans"]:
                     return httpx.Response(400, text="VLAN does not exist")
@@ -334,10 +372,37 @@ arm
  air-time-fairness-mode default-access
  client-match
  no 80mhz-support
+ a-channels 36,40,44,48,149,153,157,161,36+,44+,149+,157+
 wlan ssid-profile Corp-WiFi
  essid Corp-WiFi
  opmode wpa2-psk-aes
  vlan 100
+wlan auth-server INM-LAB-RADIUS
+ ip 192.0.2.80
+ port 1812
+ acctport 1813
+ key emulated-only
+wlan ssid-profile INM-LAB-1X
+ essid INM-LAB-1X
+ opmode wpa2-aes
+ auth-server INM-LAB-RADIUS
+ vlan 100
+wlan external-captive-portal LAB-PORTAL-A
+ server portal-a.example.test
+wlan external-captive-portal LAB-PORTAL-B
+ server portal-b.example.test
+wlan access-rule LAB-PRE
+ rule any any match any any any deny
+wlan access-rule LAB-MAC
+ rule any any match any any any deny
+wlan ssid-profile INM-LAB-GUEST
+ essid INM-LAB-GUEST
+ type guest
+ vlan 100
+ captive-portal external profile LAB-PORTAL-A
+ mac-authentication
+ set-role-pre-auth LAB-PRE
+ set-role-mac-auth LAB-MAC
 """
 
 
@@ -361,6 +426,7 @@ class InstantEmulator:
             "show ap debug system-status": "EMULATED SYSTEM: CPU 10%",
         }
         self.radios = [{"band": "5", "channel": "36", "tx_power_dbm": 15}, {"band": "2.4", "channel": "1", "tx_power_dbm": 12}]
+        self.radio_overrides = {"5": {"channel": "36", "power": "15"}, "2.4": {"channel": "1", "power": "12"}}
         self.fail_on: str | None = None
         self.lie = False
         self.fingerprint = "SHA256:emulated"
@@ -374,6 +440,16 @@ class InstantEmulator:
                 return None
 
             def show(self, cmd, iap_ip=None):
+                if cmd == "show aps":
+                    return {"show aps": [{"Name": "emulated", "IP Address": "emulated-vc*", "Type": emu.model, "Serial #": "EMULATED-AP"}]}
+                if cmd == "show ap allowed-channels":
+                    return {"Command output": "Allowed Channels for AP Type 505 Country Code US\n5GHz (indoor) 36 40 44 48 149 153 157 161\n5GHz (outdoor) 36 40 44 48 149 153 157 161\n5GHz 40MHz (indoor) 36-40 44-48 149-153 157-161\n5GHz 40MHz (outdoor) 36-40 44-48 149-153 157-161"}
+                if cmd == "show ap-env":
+                    values = ["name:emulated"]
+                    for band, prefix in (("5", "a"), ("2.4", "g")):
+                        setting = emu.radio_overrides[band]
+                        values += [f"{prefix}_chan:{setting['channel']}", f"{prefix}_tx_power:{setting['power']}"]
+                    return {"Command output": "\n".join(values)}
                 if cmd in emu.diagnostic_text:
                     from ...aruba.client import validate_command
                     validate_command(cmd)
@@ -444,10 +520,11 @@ class InstantEmulator:
             ln = raw.strip()
             if ln in ("configure terminal", "end", "commit apply", ""):
                 continue
-            if ln.startswith(("a-channel", "g-channel")):
+            if ln.startswith(("a-channel ", "g-channel ")):
                 _, ch, pw_ = ln.split()
                 r = next(x for x in self.radios if x["band"] == ("5" if ln[0] == "a" else "2.4"))
-                r["channel"], r["tx_power_dbm"] = ch, int(pw_)
+                r["channel"], r["tx_power_dbm"] = ch, float(pw_)
+                self.radio_overrides[r["band"]] = {"channel": ch, "power": pw_}
                 continue
             if ln.startswith("no wlan "):
                 self._drop_block(ln[3:])

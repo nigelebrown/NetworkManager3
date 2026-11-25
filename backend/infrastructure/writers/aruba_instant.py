@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from . import Credentials, WriterError
+from ...domain import change_control as CC
 
 ARM_KEYS = {
     "ap.client_match": "client-match", "ap.band_steering": "band-steering-mode",
@@ -45,6 +46,8 @@ def arm_block(text: str) -> dict:
             out[m.group(1)] = m.group(2)
         elif m := re.match(r"^(min|max)-tx-power (\d+)$", s):
             out[f"{m.group(1)}-tx-power"] = int(m.group(2))
+        elif m := re.fullmatch(r"a-channels ([0-9A-Za-z+,\-]+)", s):
+            out["a-channels"] = m.group(1)
         elif s == "80mhz-support":
             out["80mhz-support"] = True
         elif s == "no 80mhz-support":
@@ -78,6 +81,89 @@ def block_dict(lines: list[str] | None) -> dict:
 
 ENTERPRISE_OPMODES = {"wpa2-enterprise": "wpa2-aes", "wpa3-enterprise": "wpa3-aes-ccm-128"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+SSID_FLAGS = ("dot11k", "dot11v", "dot11r", "radius-accounting")
+ACCOUNTING_INTERVAL = "radius-interim-accounting-interval"
+GUEST_KEYS = ("captive-portal", "mac-authentication", "set-role-pre-auth", "set-role-mac-auth")
+
+
+def guest_auth_settings(lines):
+    if lines is None or "type guest" not in lines:
+        raise WriterError("PRECONDITION", "An existing guest SSID is required.")
+    result = {}
+    for key in GUEST_KEYS:
+        matches = [line for line in lines if line == key or line.startswith(key + " ") or line == "no " + key]
+        if len(matches) != 1:
+            raise WriterError("PRECONDITION", "An explicit, unambiguous guest authentication baseline is required.")
+        value = matches[0]
+        valid = (re.fullmatch(r"captive-portal external profile [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", value) if key == "captive-portal" else
+                 value == "mac-authentication" if key == "mac-authentication" else
+                 re.fullmatch(key + r" [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", value))
+        if not valid:
+            raise WriterError("PRECONDITION", "Existing guest authentication setting cannot be safely restored.")
+        result[key] = value
+    return result
+
+
+def ssid_settings(lines: list[str] | None) -> dict:
+    if lines is None:
+        raise WriterError("PRECONDITION", "The exact existing SSID profile was not found.")
+    result = {}
+    for key in SSID_FLAGS:
+        matches = [line for line in lines if line == key or line == "no " + key
+                   or line.startswith(key + " ") or line.startswith("no " + key + " ")]
+        if len(matches) > 1 or (matches and matches[0] not in (key, "no " + key)):
+            raise WriterError("PRECONDITION", "SSID setting format is ambiguous; no write attempted.")
+        result[key] = matches[0] if matches else None
+    intervals = [line for line in lines if line.startswith(ACCOUNTING_INTERVAL + " ")]
+    if len(intervals) > 1 or (intervals and not re.fullmatch(
+            r"radius-interim-accounting-interval (?:[0-9]|[1-5][0-9]|60)(?: (?:[0-9]|[1-5][0-9]))?", intervals[0])):
+        raise WriterError("PRECONDITION", "Prior RADIUS accounting interval cannot be safely restored.")
+    result[ACCOUNTING_INTERVAL] = intervals[0] if intervals else None
+    return result
+
+
+def regulatory_channels(text: str) -> tuple[str, set[str]]:
+    """Read documented 5 GHz 20/40 MHz regulatory rows; use the indoor/outdoor intersection."""
+    country = re.search(r"(?im)^Allowed Channels for AP Type\s+\S+\s+Country Code\s+([A-Z]{2})\s*$", text)
+    if not country:
+        raise WriterError("PRECONDITION", "Regulatory domain is unavailable.")
+    rows = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*(?:5\s*GHz|802\.11a)(?:\s+(40)\s*MHz)?\s*\((indoor|outdoor)\)\s+(.+?)\s*", line, re.I)
+        if not match:
+            continue
+        width, placement, raw = match.groups()
+        key = (int(width or 20), placement.lower())
+        if key in rows:
+            raise WriterError("PRECONDITION", "Duplicate regulatory channel row.")
+        tokens = set()
+        for value in raw.split():
+            if width and re.fullmatch(r"[0-9]{1,3}-[0-9]{1,3}", value):
+                lo, hi = map(int, value.split("-"))
+                if hi == lo + 4:
+                    tokens.add(str(lo) + "+")
+            elif not width and value.isdecimal():
+                tokens.add(str(int(value)))
+        rows[key] = tokens
+    if (20, "indoor") not in rows or (20, "outdoor") not in rows:
+        raise WriterError("PRECONDITION", "Unrecognized 5 GHz regulatory channel output.")
+    allowed = rows[(20, "indoor")] & rows[(20, "outdoor")]
+    allowed |= rows.get((40, "indoor"), set()) & rows.get((40, "outdoor"), set())
+    return country.group(1).upper(), allowed
+
+
+def _ssid_header(op):
+    if not NAME_RE.fullmatch(str(op.get("ssid", ""))):
+        raise WriterError("INVALID", "Invalid SSID profile.")
+    return "wlan ssid-profile " + op["ssid"]
+
+
+def _validated(op):
+    try:
+        return CC.validate_operation(op, family="access_point", allow_dfs=op.get("allow_dfs") is True)
+    except CC.PolicyViolation as exc:
+        raise WriterError("INVALID", str(exc)) from None
+
 
 
 class ArubaInstantWriter:
@@ -85,7 +171,8 @@ class ArubaInstantWriter:
     key = "aruba_instant_8_10"
     # Every typed operation implemented below (asserted equal to domain.adapters.INSTANT_TYPED_OPS).
     OPERATIONS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
-                  "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness")
+                  "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness",
+                  "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, client=None, ssh_runner=None,
                  snapshot=None, diagnostic_target=None):
@@ -115,13 +202,30 @@ class ArubaInstantWriter:
         except Exception:
             pass
 
-    def _running(self) -> str:
+    def _read_configuration(self, *, full_fidelity: bool = False) -> str:
+        """Retry only idempotent configuration reads after transient transport/503 errors."""
+        import time
+        from ...aruba import parsers
         from ...aruba.configuration import fetch_running_config
-        from ...aruba.errors import ArubaError
-        try:
-            return fetch_running_config(self.client)
-        except ArubaError as exc:
-            raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
+        from ...aruba.errors import ArubaConnectionError, ArubaError
+        for attempt in range(3):
+            try:
+                if not full_fidelity:
+                    return fetch_running_config(self.client)
+                text = parsers.output_text(self.client.show("show running-config no-encrypt"))
+                if not text or not re.search(r"(?m)^arm\s*$", text):
+                    raise WriterError("BACKUP_UNVERIFIED", "Full Instant configuration was not returned.")
+                return text
+            except ArubaError as exc:
+                transient = isinstance(exc, ArubaConnectionError) or "HTTP 503" in str(exc)
+                if transient and attempt < 2:
+                    time.sleep(attempt + 1)
+                    continue
+                raise WriterError("CONNECTION_LOST", str(exc)[:200]) from None
+        raise WriterError("CONNECTION_LOST", "Configuration read retries exhausted.")
+
+    def _running(self) -> str:
+        return self._read_configuration()
 
     def _ssh_lines(self, lines: list[str], *, exec_mode: bool = False, host: str | None = None) -> None:
         from ...aruba.errors import ArubaError
@@ -159,6 +263,24 @@ class ArubaInstantWriter:
         return {"kind": kind, "command": cmd, "output": safe_output(result),
                 "source": "INSTANT_SSH_SHOW" if ssh else "INSTANT_REST_SHOW"}
 
+    def identity(self) -> dict:
+        """Read the exact target AP identity, never assume a controller's identity is its member's."""
+        from ...aruba import parsers
+        from ...aruba.errors import ArubaError
+        try:
+            aps = parsers.normalize_aps(parsers.extract_rows(self.client.show("show aps"), "show aps"))
+            members = [ap for ap in aps if ap.get("ip") == self.ap_ip]
+            if len(members) != 1:
+                raise WriterError("IDENTITY_UNVERIFIED", "The target AP is not uniquely present in the controller inventory.")
+            member = members[0]
+            firmware = parsers.parse_version(self.client.show("show version", iap_ip=self.ap_ip))
+            if not member.get("serial") or not member.get("model") or not firmware:
+                raise WriterError("IDENTITY_UNVERIFIED", "Target AP serial, model or firmware could not be verified.")
+            return {"serial_number": member["serial"], "model": member["model"],
+                    "firmware": firmware, "management_ip": self.ap_ip}
+        except ArubaError:
+            raise WriterError("IDENTITY_UNVERIFIED", "Target AP identity commands failed.") from None
+
     def read_audit_logs(self, *, kind: str = "system", limit: int = 50) -> list[dict]:
         """Read a bounded Instant VC log view via the documented GET show-cmd API.
 
@@ -188,12 +310,21 @@ class ArubaInstantWriter:
 
     # ---- vault / checkpoint --------------------------------------------------------------
     def backup(self) -> bytes:
-        return self._running().encode()
+        """Full-fidelity vault input, never a redacted UI view or rotating ciphertext.
+
+        Instant randomizes some encrypted fields on every show. Read the
+        documented no-encrypt form so equality checks include the actual secrets;
+        the executor seals these bytes before persistence.
+        """
+        return self._read_configuration(full_fidelity=True).encode()
 
     def checkpoint(self) -> str:
         """Instant has no device checkpoint: capture the running config + radio state as the restore point."""
         import json
-        self._cp = {"running": self._running(), "radios": self._radios()}
+        if not self.creds.ssh_fingerprint:
+            raise WriterError("PRECONDITION", "Pin the device SSH host key before configuration tests.")
+        self._cp = {"running": self._running(), "radios": self._radios(),
+                    "radio_overrides": self._radio_overrides()}
         return "instant-prior-state:" + str(abs(hash(json.dumps(self._cp["radios"], sort_keys=True, default=str))))
 
     def export_checkpoint(self) -> dict:
@@ -211,46 +342,115 @@ class ArubaInstantWriter:
         ap = next((a for a in snap.aps if a.get("ip") == self.ap_ip), None)
         return list((ap or {}).get("radios") or [])
 
+    def _radio_overrides(self) -> dict | None:
+        """Capture configured overrides, not ARM's current dynamically selected RF values."""
+        from ...aruba.errors import ArubaError
+        try:
+            payload = self.client.show("show ap-env", iap_ip=self.ap_ip)
+        except ArubaError:
+            return None
+        text = payload.get("Command output") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not re.search(r"(?im)^name\s*:", text):
+            return None
+        values = dict(re.findall(r"(?im)^([ag]_(?:chan|tx_power))\s*:\s*(-?\d+(?:\.\d+)?)\s*$", text))
+        return {band: {"channel": values.get(f"{prefix}_chan", "0"),
+                       "power": values.get(f"{prefix}_tx_power", "0")}
+                for band, prefix in (("5", "a"), ("2.4", "g"))}
+
     def rollback(self, checkpoint: str) -> None:
         prior = getattr(self, "_cp", None)
         if not prior:
             raise WriterError("ROLLBACK_UNAVAILABLE", "No captured prior state.")
-        arm = arm_block(prior["running"])
-        lines = ["arm", "client-match" if arm.get("client-match") else "no client-match"]
-        for k in ("band-steering-mode", "air-time-fairness-mode", "wide-bands"):
-            if k in arm:
-                lines.append(f"{k} {arm[k]}")
-        for k in ("min-tx-power", "max-tx-power"):
-            if k in arm:
-                lines.append(f"{k} {arm[k]}")
-        lines += ["no 80mhz-support", "exit"]
-        self._ssh_lines(lines)
-        # SSID / RADIUS blocks created or changed by the change: delete new ones, re-apply prior ones
-        cur_text = self._running()
-        undo: list[str] = []
-        for hdr in sorted(set(re.findall(r"^(wlan (?:ssid-profile|auth-server) \S+)$", cur_text, re.M))):
-            before, after = cli_block(prior["running"], hdr), cli_block(cur_text, hdr)
-            if before is None:
-                undo.append(f"no {hdr}")
-            elif before != after:
-                undo += [hdr, *[ln for ln in before if not ln.startswith("key ")], "exit"]
-        if undo:
-            self._ssh_lines(undo)
+        before_text, cur_text = prior["running"], self._running()
+        before_arm, cur_arm = arm_block(before_text), arm_block(cur_text)
+        lines = []
+        for key in ("client-match", "band-steering-mode", "air-time-fairness-mode",
+                    "wide-bands", "min-tx-power", "max-tx-power", "80mhz-support"):
+            if before_arm.get(key) == cur_arm.get(key):
+                continue
+            old = before_arm.get(key)
+            if key in ("client-match", "80mhz-support"):
+                # 80 MHz is enabled by default; its positive command removes a
+                # temporary explicit disable when the original config omitted it.
+                enabled = old if old is not None else key == "80mhz-support"
+                lines.append(key if enabled else f"no {key}")
+            else:
+                lines.append(f"{key} {old}" if old is not None else f"no {key}")
+        if before_arm.get("a-channels") != cur_arm.get("a-channels"):
+            old_channels = before_arm.get("a-channels")
+            if not old_channels:
+                raise WriterError("ROLLBACK_FAILED", "No explicit previous channel list was captured.")
+            try:
+                CC.normalize_channel_list(old_channels.split(","), allow_dfs=True)
+            except CC.PolicyViolation as exc:
+                raise WriterError("ROLLBACK_FAILED", "Prior channel list is outside the supported 20/40 MHz grammar.") from None
+            lines.append("a-channels " + old_channels)
+        if lines:
+            self._ssh_lines(["arm", *lines, "exit"])
+
+        # Delete dependent SSIDs before their newly created RADIUS servers.
+        for kind in ("ssid-profile", "auth-server"):
+            headers = re.findall(rf"^(wlan {kind} \S+)$", cur_text, re.M)
+            undo = [f"no {hdr}" for hdr in headers if cli_block(before_text, hdr) is None]
+            if undo:
+                self._ssh_lines(undo)
+
         from ...aruba.configuration import SsidChange, build_ssid_payload, parse_running_config
         from ...aruba.errors import ArubaError
-        before = {x["profile"]: x for x in parse_running_config(prior["running"])["ssids"]}
+        before = {x["profile"]: x for x in parse_running_config(before_text)["ssids"]}
         now = {x["profile"]: x for x in parse_running_config(self._running())["ssids"]}
         for prof, old in before.items():
-            if isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
+            header = "wlan ssid-profile " + prof
+            prior_block = cli_block(before_text, header)
+            current_block = cli_block(self._running(), header)
+            if prior_block is not None and current_block is not None:
+                # Restore only settings managed by typed WLAN operations; never replay arbitrary CLI.
+                changed = []
+                for key in (*SSID_FLAGS, ACCOUNTING_INTERVAL):
+                    a = [x for x in prior_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                    b = [x for x in current_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                    if a != b:
+                        if not NAME_RE.fullmatch(prof):
+                            raise WriterError("ROLLBACK_FAILED", "Unsupported prior SSID profile name.")
+                        old_value = ssid_settings(prior_block)[key]
+                        changed.append(old_value or "no " + key)
+                if "type guest" in prior_block:
+                    guest_changed = []
+                    for key in GUEST_KEYS:
+                        a = [x for x in prior_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                        b = [x for x in current_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                        if a != b:
+                            if not NAME_RE.fullmatch(prof):
+                                raise WriterError("ROLLBACK_FAILED", "Unsupported prior guest SSID name.")
+                            guest_changed.append(guest_auth_settings(prior_block)[key])
+                    changed.extend(guest_changed)
+                if changed:
+                    self._ssh_lines([header, *changed, "exit"])
+            if old.get("vlan") is None and now.get(prof, {}).get("vlan") is not None:
+                self._ssh_lines([f"wlan ssid-profile {prof}", "no vlan", "exit"])
+            elif isinstance(old.get("vlan"), str) and now.get(prof, {}).get("vlan") != old["vlan"]:
+                if not NAME_RE.fullmatch(old["vlan"]):
+                    raise WriterError("ROLLBACK_FAILED", "Unsupported prior VLAN name.")
+                self._ssh_lines([f"wlan ssid-profile {prof}", f"vlan {old['vlan']}", "exit"])
+            elif isinstance(old.get("vlan"), int) and now.get(prof, {}).get("vlan") != old["vlan"]:
                 try:
                     self.client.config_post("ssid", build_ssid_payload(SsidChange(profile=prof, vlan=old["vlan"]), creating=False))
                 except ArubaError as exc:
                     raise WriterError("ROLLBACK_FAILED", str(exc)[:200]) from None
-        for r in prior["radios"]:
-            ch, pw = r.get("channel"), r.get("tx_power_dbm")
-            if ch and str(ch).rstrip("+-E").isdigit() and pw:
-                cmd = "a-channel" if str(r.get("band", "")).startswith("5") else "g-channel"
-                self._ssh_lines([f"{cmd} {int(str(ch).rstrip('+-E'))} {int(pw)}"], exec_mode=True, host=self.ap_ip)
+        overrides = prior.get("radio_overrides")
+        if overrides is not None:
+            current = self._radio_overrides()
+            if current is None:
+                raise WriterError("ROLLBACK_FAILED", "Cannot verify configured radio overrides.")
+            changed = False
+            for band, old in overrides.items():
+                if old != current.get(band):
+                    changed = True
+                    cmd = "a-channel" if band == "5" else "g-channel"
+                    self._ssh_lines([f"{cmd} {old['channel']} {old['power']}"],
+                                    exec_mode=True, host=self.ap_ip)
+            if changed and self._radio_overrides() != overrides:
+                raise WriterError("ROLLBACK_FAILED", "Radio override rollback readback does not match the baseline.")
 
     def save(self) -> None:
         """Instant `commit apply` already persists cluster configuration."""
@@ -261,6 +461,25 @@ class ArubaInstantWriter:
     # ---- typed operations ------------------------------------------------------------------
     def render(self, op: dict) -> list[dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "ap.ssid.guest_auth":
+            op = _validated(op)
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host, "lines": ["configure terminal", _ssid_header(op),
+                    "captive-portal external profile " + op["portal_profile"], "mac-authentication",
+                    "set-role-pre-auth " + op["pre_auth_role"], "set-role-mac-auth " + op["mac_role"], "exit", "end", "commit apply"]}]
+        if k in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
+            op = _validated(op)
+            if k == "ap.radio.allowed_channels":
+                lines = ["arm", "a-channels " + ",".join(op["value"]), "exit"]
+            elif k == "ap.ssid.roaming":
+                lines = [_ssid_header(op), *(key if op[key] == "enabled" else "no " + key
+                                              for key in SSID_FLAGS[:3]), "exit"]
+            else:
+                lines = [_ssid_header(op), "radius-accounting" if v == "enabled" else "no radius-accounting"]
+                if v == "enabled":
+                    lines.append(f"{ACCOUNTING_INTERVAL} {op['interval_minutes']}")
+                lines.append("exit")
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host,
+                     "lines": ["configure terminal", *lines, "end", "commit apply"]}]
         if k == "ap.ssid.vlan":
             from ...aruba.configuration import SsidChange, build_ssid_payload
             payload = build_ssid_payload(SsidChange(profile=op["ssid"], vlan=int(v)), creating=False)
@@ -304,12 +523,100 @@ class ArubaInstantWriter:
             lines.append("wide-bands none" if int(v) == 20 else "wide-bands 5ghz")
         else:
             raise WriterError("UNSUPPORTED", f"{k} is not supported by {self.key}")
-        lines += ["no 80mhz-support", "exit"]
+        if k == "ap.radio.width":
+            lines.append("no 80mhz-support")
+        lines.append("exit")
         return [{"transport": "SSH-CONFIG", "host": self.creds.host,
                  "lines": ["configure terminal", *lines, "end", "commit apply"]}]
 
+    def _check_cluster_channels(self, tokens: list[str]) -> None:
+        """Check each represented supported model against its reported country/channel table."""
+        from ...aruba import parsers
+        from ...aruba.errors import ArubaError
+        try:
+            members = parsers.normalize_aps(parsers.extract_rows(self.client.show("show aps"), "show aps"))
+            representatives = {}
+            for member in members:
+                raw_model = str(member.get("model") or "").upper()
+                match = re.search(r"\bAP-?(505|535)\b", raw_model)
+                model = "AP-" + match.group(1) if match else None
+                if model is None or not member.get("ip"):
+                    raise WriterError("PRECONDITION", "Cluster membership or model is outside the verified channel scope.")
+                representatives[model] = member["ip"]
+            if not representatives or not any(m.get("ip") == self.ap_ip for m in members):
+                raise WriterError("PRECONDITION", "The selected AP is not in the returned cluster membership.")
+            countries = set()
+            for target in representatives.values():
+                raw = parsers.output_text(self.client.show("show ap allowed-channels", iap_ip=target)) or ""
+                country, allowed = regulatory_channels(raw)
+                countries.add(country)
+                if not set(tokens) <= allowed:
+                    raise WriterError("PRECONDITION", "Requested channels are not in the reported regulatory intersection.")
+            if len(countries) != 1:
+                raise WriterError("PRECONDITION", "Cluster members report inconsistent regulatory domains.")
+        except ArubaError:
+            raise WriterError("PRECONDITION", "Could not verify cluster regulatory channels.") from None
+
     def apply(self, op: dict) -> list[dict]:
         from ...aruba.errors import ArubaError
+        prior = getattr(self, "_cp", None)
+        if op.get("op") == "ap.radio.channel" and (not prior or prior.get("radio_overrides") is None):
+            raise WriterError("PRECONDITION", "Capture configured radio overrides before changing a channel.")
+        if op.get("op") == "ap.ssid.guest_auth":
+            op = _validated(op)
+            if not prior or not prior.get("running"):
+                raise WriterError("PRECONDITION", "Capture a guest configuration checkpoint first.")
+            text = self._running()
+            header = _ssid_header(op)
+            guest_auth_settings(cli_block(prior["running"], header))
+            guest_auth_settings(cli_block(text, header))
+            portal = cli_block(text, "wlan external-captive-portal " + op["portal_profile"])
+            if not portal or any("fail-through" in line.lower() for line in portal):
+                raise WriterError("PRECONDITION", "Select an existing external portal without fail-through.")
+            for role in (op["pre_auth_role"], op["mac_role"]):
+                if not cli_block(text, "wlan access-rule " + role):
+                    raise WriterError("PRECONDITION", "Selected role must already exist with configured access rules.")
+        if op.get("op") in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
+            op = _validated(op)
+            if not prior or not prior.get("running"):
+                raise WriterError("PRECONDITION", "Capture a configuration checkpoint before changing WLAN or channel settings.")
+            text = self._running()
+            if op["op"] == "ap.radio.allowed_channels":
+                arm = arm_block(text)
+                baseline = arm_block(prior["running"])
+                if arm.get("80mhz-support") is not False or baseline.get("80mhz-support") is not False:
+                    raise WriterError("PRECONDITION", "Explicitly disable 80 MHz before changing the allowed channel list.")
+                if arm.get("wide-bands") not in ("none", "5ghz"):
+                    raise WriterError("PRECONDITION", "Set an explicit supported 20/40 MHz width policy first.")
+                for state in (baseline, arm):
+                    try:
+                        CC.normalize_channel_list((state.get("a-channels") or "").split(","), allow_dfs=True)
+                    except CC.PolicyViolation:
+                        raise WriterError("PRECONDITION", "An explicit, restorable 20/40 MHz channel baseline is required.") from None
+                if arm["wide-bands"] == "none" and any(t.endswith("+") for t in op["value"]):
+                    raise WriterError("PRECONDITION", "40-MHz allowed channels need a 40-MHz width policy.")
+                self._check_cluster_channels(op["value"])
+            else:
+                header = _ssid_header(op)
+                block = cli_block(text, header)
+                ssid_settings(block)
+                ssid_settings(cli_block(prior["running"], header))
+                if op["op"] == "ap.ssid.accounting" and op["value"] == "enabled":
+                    servers = [ln.split(" ", 1)[1] for ln in block if ln.startswith(("auth-server ", "accounting-server "))]
+                    if not any(NAME_RE.fullmatch(name) and cli_block(text, "wlan auth-server " + name) is not None
+                               for name in servers):
+                        raise WriterError("PRECONDITION", "Configure and validate an external RADIUS server before enabling accounting.")
+        if op.get("op") == "ap.ssid.vlan":
+            previous = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}")).get("vlan")
+            if previous and not (previous.isdigit() or NAME_RE.fullmatch(previous)):
+                raise WriterError("PRECONDITION", "Prior SSID VLAN cannot be safely restored.")
+        if op.get("op") in ("ap.ssid.create", "ap.ssid.enterprise"):
+            text = self._running()
+            headers = [f"wlan ssid-profile {op['ssid']}"]
+            if op.get("op") == "ap.ssid.enterprise":
+                headers.append(f"wlan auth-server {op['radius_name']}")
+            if any(cli_block(text, header) is not None for header in headers):
+                raise WriterError("PRECONDITION", "SSID or RADIUS profile already exists; refusing to overwrite it.")
         calls = self.render(op)
         for c in calls:
             if c["transport"] == "REST":
@@ -325,6 +632,35 @@ class ArubaInstantWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "ap.ssid.guest_auth":
+            op = _validated(op)
+            state = guest_auth_settings(cli_block(self._running(), _ssid_header(op)))
+            wanted = {"captive-portal": "captive-portal external profile " + op["portal_profile"],
+                      "mac-authentication": "mac-authentication", "set-role-pre-auth": "set-role-pre-auth " + op["pre_auth_role"],
+                      "set-role-mac-auth": "set-role-mac-auth " + op["mac_role"]}
+            return state == wanted, state
+        if k in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
+            op = _validated(op)
+            if k == "ap.radio.allowed_channels":
+                arm = arm_block(self._running())
+                try:
+                    got = CC.normalize_channel_list((arm.get("a-channels") or "").split(","), allow_dfs=True)
+                except CC.PolicyViolation:
+                    return False, {"channels": None, "reason": "Missing or unrecognized channel list."}
+                return got == op["value"] and arm.get("80mhz-support") is False, {"channels": got, "80mhz_support": arm.get("80mhz-support")}
+            state = ssid_settings(cli_block(self._running(), _ssid_header(op)))
+            if k == "ap.ssid.roaming":
+                got = {key: "enabled" if state[key] == key else "disabled" for key in SSID_FLAGS[:3]}
+                return all(got[key] == op[key] for key in got), got
+            enabled = state["radius-accounting"] == "radius-accounting"
+            interval = state[ACCOUNTING_INTERVAL]
+            expected_interval = f"{ACCOUNTING_INTERVAL} {op.get('interval_minutes')}"
+            ok = enabled == (v == "enabled") and (not enabled or interval in (expected_interval, expected_interval + " 0"))
+            return ok, {"enabled": enabled, "interval": interval}
+        if k=="ap.radio.channel" and op.get("arm_managed") is True:
+            got=(self._radio_overrides() or {}).get(op.get("band","5"))
+            ok=got is not None and float(got.get("channel",0))==0 and float(got.get("power",0))==0
+            return ok,{"overrides":got,"native_arm":True}
         if k == "ap.ssid.create":
             b = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}"))
             want = {"essid": op.get("essid") or op["ssid"], "vlan": str(int(op["vlan"])),
@@ -352,7 +688,7 @@ class ArubaInstantWriter:
             got = str((r or {}).get("channel") or "").rstrip("+-E")
             return got == str(int(v)), {"channel": got or None}
         arm = arm_block(self._running())
-        if arm.get("80mhz-support"):
+        if k == "ap.radio.width" and arm.get("80mhz-support"):
             return False, {"error": "80 MHz support is enabled on the device", **arm}
         want = {"ap.client_match": ("client-match", v == "enabled"),
                 "ap.band_steering": ("band-steering-mode", "disable" if v == "disabled" else v),

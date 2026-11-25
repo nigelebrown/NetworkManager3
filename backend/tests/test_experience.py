@@ -248,3 +248,24 @@ def test_corrupt_stored_config_falls_back_to_defaults(fresh_db):
         db.add(AppSetting(key="experience", value={"bands": {"good_min": 10, "fair_min": 90}}))
         db.flush()
         assert load_config(db).bands.good_min == 75
+
+
+def test_partial_poll_does_not_invent_outages_counts_or_poor_streak(site):
+    m = "11:11:11:00:00:09"
+    _run(site, _snap([_c(m, snr=5, speed=6)]))
+    with session_scope() as db:
+        prior = db.scalar(select(ClientRecord).where(ClientRecord.mac == m))
+        streak = prior.poor_streak
+        sample_count = len(list(db.scalars(select(SiteSample))))
+    for _ in range(6):
+        _run(site, SiteSnapshot(aps=[], clients=[], aps_ok=False, clients_ok=False,
+                               warnings=["Unrecognized table"]))
+    with session_scope() as db:
+        rec = db.scalar(select(ClientRecord).where(ClientRecord.mac == m))
+        assert rec.is_connected and rec.poor_streak == streak
+        assert db.scalar(select(AccessPoint)).status == "up"
+        assert len(list(db.scalars(select(SiteSample)))) == sample_count
+        assert not list(db.scalars(select(Alert).where(Alert.kind.in_(("ap_offline", "poor_experience")))))
+    assert _events(site) == []
+    _run(site, _snap([]))
+    assert _events(site) == [("disconnect", "ap1", None)]

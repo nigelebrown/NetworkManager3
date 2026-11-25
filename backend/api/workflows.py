@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from ..database.models import User
+from ..database.models import AppSetting, User
 from ..database.models_inm import InmDevice, InmSite, InmCluster, SiteAccessGrant
 from ..database.models_onboarding import OnboardingDiscovery
 from ..database.models_phases import ChangeExecution, ChangePlan, CollectionPlan
@@ -165,7 +165,7 @@ class DeploymentInput(BaseModel):
 
 
 def _batch_plans(db: Session, batch_id: str) -> list[ChangePlan]:
-    return [p for p in db.scalars(select(ChangePlan).where(ChangePlan.source == "TEMPLATE"))
+    return [p for p in db.scalars(select(ChangePlan).where(ChangePlan.source == "TEMPLATE").order_by(ChangePlan.created_at, ChangePlan.id))
             if (p.rollback_plan or {}).get("batch_id") == batch_id]
 
 
@@ -197,6 +197,8 @@ def create_deployment(body: DeploymentInput, request: Request, db: Session = Dep
     ids = list(dict.fromkeys(ids))
     if not ids:
         raise HTTPException(422, "Select devices or a group.")
+    if len(ids) > 500:
+        raise HTTPException(422, "Deployment is limited to 500 unique devices, including group members.")
     for did in ids:
         device = real_device(db, did)
         _require_site(db, user, device.site_id)
@@ -221,33 +223,105 @@ def get_deployment(batch_id: str, db: Session = Depends(get_db), user: User = De
                      for p in plans if db.get(InmDevice, p.device_id) is not None):
         raise HTTPException(404, "Deployment not found.")
     rows = [_plan_summary(db, p) for p in plans]
-    return {"batch_id": batch_id, "plans": rows, "progress": _progress(rows)}
+    state = db.get(AppSetting, "deployment-wave:" + batch_id) if len(batch_id) == 36 else None
+    return {"batch_id": batch_id, "plans": rows, "progress": _progress(rows),
+            "wave": dict(state.value) if state else {"state": "READY"}}
 
 
 class ExecuteInput(BaseModel):
     stop_on_failure: bool = True
+    wave_size: int = Field(default=10, ge=1, le=25)
+    one_site: bool = False
+    resume_after_failure: bool = False
+    review_note: str = Field(default="", max_length=500)
 
 
 @router.post("/deployments/{batch_id}/execute")
 def execute_deployment(batch_id: str, body: ExecuteInput, request: Request, db: Session = Depends(get_db),
                        user: User = Depends(require_role("admin"))):
-    """Execute every APPROVED plan in the batch, one device at a time, through the certified engine. Stops at
-    the first failure by default so a bad template never rolls across the fleet."""
-    from ..infrastructure.change_executor import execute_plan
-    out, stopped = [], None
-    for p in _batch_plans(db, batch_id):
-        if p.state != "APPROVED":
-            continue
-        r = execute_plan(db, p, actor=user.username)
-        out.append({"plan_id": p.id, "device_id": p.device_id, "decision": r["decision"], "outcome": r.get("outcome"),
-                    "denial_reason": r.get("denial_reason")})
-        if body.stop_on_failure and (r["decision"] != "ALLOW" or r.get("outcome") != "APPLIED_VERIFIED"):
-            stopped = p.id
-            break
-    audit(db, "deployment_executed", username=user.username, target=batch_id,
-          detail=f"executed={len(out)} stopped_at={stopped}", request=request)
-    rows = [_plan_summary(db, p) for p in _batch_plans(db, batch_id)]
-    return {"batch_id": batch_id, "executed": out, "stopped_at": stopped, "progress": _progress(rows)}
+    """Run a bounded, serialized wave; hardware failures always pause the rollout."""
+    from ..infrastructure.change_executor import execute_plan, _lease, _renew_lease, _release
+    from ..infrastructure.writers import WriterError
+    try:
+        batch_id = str(uuid.UUID(batch_id))
+    except ValueError:
+        raise HTTPException(404, "Deployment not found.") from None
+    holder = uuid.uuid4().hex
+    lease = "batch:" + batch_id
+    if not _lease(db, lease, holder, ttl=900):
+        raise HTTPException(409, "A deployment wave is already running.")
+    key = "deployment-wave:" + batch_id
+    try:
+        plans = _batch_plans(db, batch_id)
+        if not plans:
+            raise HTTPException(404, "Deployment not found.")
+        state = db.get(AppSetting, key)
+        prior = dict(state.value or {}) if state else {}
+        if prior.get("state") in ("PAUSED", "RUNNING") and (
+                not body.resume_after_failure or len(body.review_note.strip()) < 10):
+            raise HTTPException(409, "Review the previous failure or interrupted wave and supply a resume note.")
+        if any(p.state in ("ROLLBACK_FAILED", "EXECUTING") for p in plans):
+            raise HTTPException(409, "Resolve failed recovery or interrupted execution before resuming.")
+        if state is None:
+            state = AppSetting(key=key, value={}, updated_by=user.username)
+            db.add(state)
+        approved = [p for p in plans if p.state == "APPROVED"]
+        targets = {p.device_id: db.get(InmDevice, p.device_id) for p in approved}
+        if any(d is None for d in targets.values()):
+            raise HTTPException(409, "A planned device no longer exists.")
+        sources = {d.source_type for d in targets.values()}
+        if len(sources) > 1:
+            raise HTTPException(409, "Do not mix real and emulated devices in one approved deployment wave.")
+        hardware = any(d.source_type != "DEMO" for d in targets.values())
+        # Production canaries default to one target, and all subsequent waves
+        # stay within one physical site. Emulator runs retain existing semantics.
+        limit = min(body.wave_size, 1 if hardware and not any(p.state == "APPLIED_VERIFIED" for p in plans) else 25)
+        if hardware or body.one_site:
+            if approved:
+                site = targets[approved[0].device_id].site_id
+                if hardware and not site:
+                    raise HTTPException(409, "Assign every hardware target to a physical site before deployment.")
+                approved = [p for p in approved if targets[p.device_id].site_id == site]
+        approved = approved[:limit]
+        state.value = {"state": "RUNNING", "started_at": _now().isoformat(),
+                       "wave_size": limit, "selected_plans": [p.id for p in approved],
+                       "review_note": body.review_note.strip(), "executed": []}
+        state.updated_by, state.updated_at = user.username, _now()
+        db.commit()
+        out, stopped = [], None
+        for p in approved:
+            _renew_lease(db, lease, holder, ttl=900)
+            db.refresh(p)
+            if p.state != "APPROVED":
+                stopped = p.id
+                break
+            r = execute_plan(db, p, actor=user.username)
+            out.append({"plan_id": p.id, "device_id": p.device_id, "decision": r["decision"],
+                        "outcome": r.get("outcome"), "denial_reason": r.get("denial_reason")})
+            state.value = {**state.value, "executed": list(out)}
+            state.updated_at = _now()
+            db.commit()
+            if (hardware or body.stop_on_failure or r.get("outcome") == "ROLLBACK_FAILED") and (
+                    r["decision"] != "ALLOW" or r.get("outcome") != "APPLIED_VERIFIED"):
+                stopped = p.id
+                break
+        rows = [_plan_summary(db, p) for p in _batch_plans(db, batch_id)]
+        progress = _progress(rows)
+        state.value = {**state.value, "state": "PAUSED" if stopped else "READY" if progress["approved"] else "WAVE_COMPLETE",
+                       "finished_at": _now().isoformat(), "stopped_at": stopped}
+        state.updated_at = _now()
+        audit(db, "deployment_executed", username=user.username, target=batch_id,
+              detail=f"executed={len(out)} stopped_at={stopped} wave_size={limit}", request=request)
+        return {"batch_id": batch_id, "executed": out, "stopped_at": stopped, "progress": progress, "wave": state.value}
+    except WriterError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.category) from None
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        _release(db, lease, holder)
+        db.commit()
 
 
 # ---- persistent onboarding workflow ----------------------------------------------------------------------------

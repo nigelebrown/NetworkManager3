@@ -55,6 +55,32 @@ def firmware_train(fw: str | None) -> str:
     return ".".join(nums[:2]) if len(nums) >= 2 else "UNKNOWN"
 
 
+def firmware_build(fw: str | None) -> str | None:
+    """Compare the complete numeric release/build, ignoring vendor-prefix formatting."""
+    match = re.search(r"(?<!\d)\d+(?:\.\d+){2,}(?!\d)", fw or "")
+    if not match:
+        return None
+    return ".".join(str(int(part)) for part in match.group().split("."))
+
+
+def verify_hardware_identity(device: InmDevice, writer) -> dict:
+    if not hasattr(writer, "identity"):
+        raise WriterError("IDENTITY_UNVERIFIED", "No live device identity reader is available.")
+    observed = writer.identity()
+    expected_build = firmware_build(device.firmware)
+    actual_build = firmware_build(observed.get("firmware"))
+    expected_serial = (device.serial_number or "").strip().upper()
+    actual_serial = str(observed.get("serial_number") or "").strip().upper()
+    if (not expected_serial or not actual_serial or not expected_build or not actual_build
+            or not device.model or not observed.get("model")):
+        raise WriterError("IDENTITY_UNVERIFIED", "Complete serial, model and firmware evidence is required.")
+    if (expected_serial != actual_serial
+            or model_family(observed.get("model")) != model_family(device.model)
+            or expected_build != actual_build):
+        raise WriterError("IDENTITY_MISMATCH", "Live serial, model or firmware build differs from the registered device.")
+    return observed
+
+
 def environment(device: InmDevice) -> str:
     return "EMULATED" if device.source_type == "DEMO" else "HARDWARE"
 
@@ -67,7 +93,57 @@ def certification_map(db: Session, device: InmDevice) -> dict[str, str]:
         DeviceCertification.model_family == model_family(device.model),
         DeviceCertification.firmware_train == firmware_train(device.firmware),
         DeviceCertification.environment == environment(device)))
-    return {r.operation: r.status for r in rows}
+    return {r.operation: (r.status if environment(device) != "HARDWARE" or r.status != "CERTIFIED_WRITE"
+                          or (firmware_build(device.firmware) is not None and
+                              (r.evidence or {}).get("verified_firmware_build") == firmware_build(device.firmware))
+                          else "UNCERTIFIED") for r in rows}
+
+
+def validate_site_rf_policy(db: Session, device: InmDevice, operations: list[dict]) -> None:
+    """Apply administrator-maintained site RF limits to plans AND execution.
+
+    ARM allowed-channel changes affect the whole controller cluster, so enforce
+    every known member's physical site policy. DFS is fail-closed when any
+    affected site's explicit approved list is missing.
+    """
+    from ..database.models_phases import OptimizationSitePolicy
+    if device.family != "access_point":
+        return
+    for op in operations:
+        kind = op.get("op")
+        if kind not in ("ap.radio.allowed_channels", "ap.radio.channel"):
+            continue
+        if kind == "ap.radio.channel" and op.get("arm_managed") is True:
+            continue
+        if kind == "ap.radio.allowed_channels":
+            tokens = CC.normalize_channel_list(op.get("value"), allow_dfs=op.get("allow_dfs") is True)
+            channels = set().union(*(CC.channel_components(t) for t in tokens))
+            widths = {40 if t.endswith("+") else 20 for t in tokens}
+            members = [device]
+            if device.cluster_id:
+                members = list(db.scalars(select(InmDevice).where(InmDevice.cluster_id == device.cluster_id,
+                    InmDevice.source_type == device.source_type, InmDevice.family == "access_point",
+                    InmDevice.lifecycle.not_in(("merged", "retired", "decommissioned"))))) or [device]
+            elif device.legacy_site_id is not None:
+                members = list(db.scalars(select(InmDevice).where(InmDevice.legacy_site_id == device.legacy_site_id,
+                    InmDevice.source_type == device.source_type, InmDevice.family == "access_point",
+                    InmDevice.lifecycle.not_in(("merged", "retired", "decommissioned"))))) or [device]
+            band = "5"
+        else:
+            CC.validate_operation(op, family="access_point", allow_dfs=op.get("allow_dfs") is True)
+            channels, widths, members, band = {op["value"]}, set(), [device], op["band"]
+        dfs = band == "5" and bool(channels & CC.DFS_5G)
+        if dfs and op.get("allow_dfs") is not True:
+            raise CC.PolicyViolation("DFS requires an explicit approved request.")
+        for site_id in {member.site_id for member in members}:
+            policy = db.get(OptimizationSitePolicy, site_id) if site_id else None
+            allowed = set((policy.allowed_channels_5g if band == "5" else policy.allowed_channels_2g) or []) if policy else set()
+            if dfs and not allowed:
+                raise CC.PolicyViolation("DFS requires an administrator-configured channel list for every affected site.")
+            if allowed and not channels <= allowed:
+                raise CC.PolicyViolation("A requested channel or bonded secondary lies outside an affected site's policy.")
+            if policy and widths and not widths <= set(policy.allowed_widths_mhz or []):
+                raise CC.PolicyViolation("Requested channel width is outside an affected site's policy.")
 
 
 # ---- writer factory -------------------------------------------------------------------------------
@@ -219,12 +295,13 @@ def _lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> bool:
     try:
         ins = (sqlite_insert if dialect == "sqlite" else pg_insert)(JobLease).values(
             job=key, holder=holder, expires_at=until).on_conflict_do_nothing(index_elements=["job"])
-        created = db.execute(ins).rowcount == 1
+        created = db.execute(ins.returning(JobLease.holder)).scalar_one_or_none() == holder
         if not created:
             claimed = db.execute(update(JobLease).where(
                 JobLease.job == key, JobLease.expires_at <= now,
-            ).values(holder=holder, expires_at=until).execution_options(synchronize_session=False))
-            if claimed.rowcount != 1:
+            ).values(holder=holder, expires_at=until).returning(JobLease.holder)
+                .execution_options(synchronize_session=False)).scalar_one_or_none()
+            if claimed != holder:
                 db.rollback()
                 return False
         db.commit()  # ownership must be visible to other workers before ANY network call
@@ -240,8 +317,9 @@ def _renew_lease(db: Session, device_id: str, holder: str, ttl: int = 900) -> No
     result = db.execute(update(JobLease).where(
         JobLease.job == f"device-write:{device_id}", JobLease.holder == holder,
         JobLease.expires_at > now,
-    ).values(expires_at=now + timedelta(seconds=ttl)).execution_options(synchronize_session=False))
-    if result.rowcount != 1:
+    ).values(expires_at=now + timedelta(seconds=ttl)).returning(JobLease.holder)
+        .execution_options(synchronize_session=False)).scalar_one_or_none()
+    if result != holder:
         db.rollback()
         raise WriterError("LEASE_LOST", "Configuration ownership expired or was taken over; stop device operations.")
     db.commit()
@@ -344,6 +422,13 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
                              emergency_stop=control(db).emergency_stop, plan_state=plan.state,
                              approval_ok=ok_appr, capabilities=caps, pre_backup_verified=True,
                              device_lease_held=leased, executor_authenticated=bool(actor))
+    try:
+        validate_site_rf_policy(db, device, plan.operations)
+        gate["guards"].append({"guard": "current_site_rf_policy", "pass": True})
+    except CC.PolicyViolation as exc:
+        gate["guards"].append({"guard": "current_site_rf_policy", "pass": False})
+        gate["denial_reasons"].append("current_site_rf_policy: " + str(exc))
+        gate["decision"] = "DENY"
     dec = ExecutionDecision(kind="CHANGE_PLAN", plan_id=plan.id, device_id=device.id, proposed_diff_hash=plan.plan_hash,
                             global_lock_state="LOCKED" if lock else "UNLOCKED", decision=gate["decision"],
                             guards=gate["guards"] + [{"guard": f"environment:{env}", "pass": True}],
@@ -357,9 +442,9 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
         return {"decision": "DENY", "decision_id": dec.id, "denial_reason": dec.denial_reason, "guards": dec.guards,
                 "device_writes": 0, "adapter_called": False, "environment": env}
     # single execution: APPROVED -> EXECUTING compare-and-set
-    res = db.execute(update(ChangePlan).where(ChangePlan.id == plan.id, ChangePlan.state == "APPROVED")
-                     .values(state="EXECUTING").execution_options(synchronize_session=False))
-    if res.rowcount != 1:
+    claimed_plan = db.scalar(update(ChangePlan).where(ChangePlan.id == plan.id, ChangePlan.state == "APPROVED")
+                     .values(state="EXECUTING").returning(ChangePlan.id).execution_options(synchronize_session=False))
+    if claimed_plan is None:
         _release(db, device.id, holder)
         return {"decision": "DENY", "denial_reason": "Plan is already executing or executed.", "device_writes": 0,
                 "adapter_called": False, "environment": env}
@@ -377,13 +462,13 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
             writer, env2 = writer_for(db, device)
         writer.open()
         step("connect", True)
-        if hasattr(writer, "identity") and env == "HARDWARE":
-            ident = writer.identity()
-            same = model_family(ident.get("model")) == model_family(device.model) and \
-                firmware_train(ident.get("firmware")) == firmware_train(device.firmware)
-            step("identity_check", same, observed=ident)
-            if not same:
-                raise WriterError("IDENTITY_MISMATCH", "Device model/firmware differs from the approved plan.")
+        if env == "HARDWARE":
+            try:
+                ident = verify_hardware_identity(device, writer)
+                step("identity_check", True, observed=ident)
+            except WriterError as exc:
+                step("identity_check", False, reason=exc.category)
+                raise
         takeover = all(o["op"] == "switch.central.disable" for o in plan.operations)
         if hasattr(writer, "management_authority") and not takeover:
             auth = writer.management_authority()
@@ -514,7 +599,10 @@ TEST_OPS = {
         {"op": "switch.system.ntp", "value": t.get("test_ntp", "192.0.2.123")},
         {"op": "switch.system.dns", "value": [t.get("test_dns", "192.0.2.53")]},
         {"op": "switch.system.syslog", "value": t.get("test_syslog", "192.0.2.14"), "severity": "warning"},
-    ] + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
+    ] + [{"op": "switch.vlan.voice", "vlan": t.get("test_vlan", 4090), "value": "enabled", "acknowledge_voice_change": True}]
+      + ([{"op": "switch.port.auth_dot1x" if method == "dot1x" else "switch.port.auth_mab", "port": t["test_auth_port"], "method": method, "value": "enabled", "acknowledge_auth_change": True}
+          for method in ("dot1x", "mac-auth")] if t.get("test_auth_port") else [])
+      + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
     "access_point": lambda t: [
         {"op": "ap.client_match", "value": "disabled"}, {"op": "ap.band_steering", "value": "balance-bands"},
         {"op": "ap.airtime_fairness", "value": "fair-access"}, {"op": "ap.radio.width", "value": 20},
@@ -526,7 +614,16 @@ TEST_OPS = {
         {"op": "ap.ssid.enterprise", "ssid": "INM-CERT-1X", "vlan": t.get("test_vlan", 100), "radius_name": "inm-cert",
          "radius_ip": t.get("test_radius", "192.0.2.80"), "security": "wpa2-enterprise",
          "_secret": "cert-" + __import__("secrets").token_hex(8)},
-    ] + ([{"op": "ap.ssid.vlan", "ssid": t["test_ssid"], "value": t.get("test_vlan", 100)}] if t.get("test_ssid") else []),
+    ] + ([{"op": "ap.ssid.vlan", "ssid": t["test_ssid"], "value": t.get("test_vlan", 100)},
+          {"op": "ap.ssid.roaming", "ssid": t["test_ssid"], "dot11k": "enabled", "dot11v": "enabled", "dot11r": "enabled"}]
+         if t.get("test_ssid") else [])
+      + ([{"op": "ap.ssid.accounting", "ssid": t["test_enterprise_ssid"], "value": "enabled", "interval_minutes": 10}]
+         if t.get("test_enterprise_ssid") else [])
+      + ([{"op": "ap.radio.allowed_channels", "value": t["test_allowed_channels"]}]
+         if t.get("test_allowed_channels") else [])
+      + ([{"op": "ap.ssid.guest_auth", "ssid": t["test_guest_ssid"], "portal_profile": t["test_guest_portal"],
+           "pre_auth_role": t["test_guest_pre_auth_role"], "mac_role": t["test_guest_mac_role"],
+           "acknowledge_guest_auth_change": True}] if all(t.get(k) for k in ("test_guest_ssid", "test_guest_portal", "test_guest_pre_auth_role", "test_guest_mac_role")) else []),
 }
 
 
@@ -537,8 +634,34 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     env = environment(device)
     if env == "HARDWARE" and not (get_settings().allow_config_changes and not get_settings().device_write_lock):
         raise WriterError("WRITES_DISABLED", "Certification writes to a lab device; enable device writes first.")
+    if env == "HARDWARE":
+        import os
+        lab_serials = {s.strip().casefold() for s in os.environ.get("INM_CERTIFICATION_LAB_SERIALS", "").split(",") if s.strip()}
+        if device.environment != "lab" or not device.serial_number or device.serial_number.casefold() not in lab_serials:
+            raise WriterError("LAB_DEVICE_REQUIRED", "Certification requires an explicitly allowlisted spare laboratory device.")
     if control(db).emergency_stop:
         raise WriterError("EMERGENCY_STOP", "Emergency stop is active.")
+    test = dict(test)
+    if env == "EMULATED" and device.family == "switch" and writer is None:
+        port_count = re.search(r"(\d{2})G", device.model or "")
+        lab_port = f"1/1/{min(int(port_count.group(1)) if port_count else 48, 24)}"
+        test["test_auth_port"] = test.get("test_auth_port") or lab_port
+    if env == "EMULATED" and device.family == "access_point":
+        test["test_ssid"] = test.get("test_ssid") or "Corp-WiFi"
+        test["test_enterprise_ssid"] = test.get("test_enterprise_ssid") or "INM-LAB-1X"
+        test["test_allowed_channels"] = test.get("test_allowed_channels") or ["36", "40", "44", "48"]
+        for key, value in (("test_guest_ssid", "INM-LAB-GUEST"), ("test_guest_portal", "LAB-PORTAL-B"),
+                           ("test_guest_pre_auth_role", "LAB-PRE"), ("test_guest_mac_role", "LAB-MAC")):
+            test[key] = test.get(key) or value
+    test_ops = TEST_OPS[device.family](test)
+    try:
+        validate_site_rf_policy(db, device, test_ops)
+        for op in test_ops:
+            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
+                            "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab"):
+                CC.validate_operation(op, family=device.family)
+    except CC.PolicyViolation as exc:
+        raise WriterError("INVALID", str(exc)) from None
     if writer is None:
         writer, env = writer_for(db, device)
     spec = resolve(device.vendor, device.family, device.model)
@@ -550,20 +673,32 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     try:
         writer.open()
         try:
-            ident = writer.identity() if hasattr(writer, "identity") else {"model": device.model, "firmware": device.firmware}
+            ident = (verify_hardware_identity(device, writer) if env == "HARDWARE" else
+                     {"model": device.model, "firmware": device.firmware, "environment": "EMULATED"})
             base = writer.backup()
+            if not base:
+                raise WriterError("PRECONDITION", "Certification requires a nonempty restorable baseline.")
             seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
             results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
-            for op in TEST_OPS[device.family](test):
+            stopped = False
+            for op in test_ops:
+                if control(db).emergency_stop:
+                    stopped = True
+                    break
                 public_op = {k: v for k, v in op.items() if k != "_secret"}
                 ev = {"op": public_op}
+                cp = None
+                restored = False
                 try:
                     cp = writer.checkpoint()
                     ev["rendered"] = writer.render(public_op)     # masked: evidence never contains a secret
-                    if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans"):
+                    if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans", "switch.vlan.voice"):
                         # prerequisite inside the same checkpoint: the VLAN must exist on the switch
                         _renew_lease(db, device.id, holder)
                         writer.apply({"op": "switch.vlan.define", "value": test.get("test_vlan", 4090)})
+                    if env == "EMULATED" and op["op"] in ("switch.port.auth_dot1x", "switch.port.auth_mab"):
+                        _renew_lease(db, device.id, holder)
+                        writer.apply({"op": "switch.port.admin_state", "port": op["port"], "value": "down"})
                     _renew_lease(db, device.id, holder)
                     writer.apply(op)
                     ok, observed = writer.readback(public_op)
@@ -578,13 +713,22 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                     passed = False
                     try:
                         _renew_lease(db, device.id, holder)
-                        writer.rollback(cp)
-                    except Exception:
-                        pass
+                        if cp is not None:
+                            writer.rollback(cp)
+                        restored = _norm(writer.backup(), device.family) == _norm(base, device.family)
+                        ev["rollback_restored"] = restored
+                    except Exception as rollback_exc:
+                        ev["rollback_error"] = type(rollback_exc).__name__
                 results.append({"operation": op["op"], "passed": passed, "evidence": ev})
-            # full-configuration restore: write the captured baseline back and prove it reads back identically
+                if not restored:
+                    # Never attempt further test writes after an unverified rollback.
+                    stopped = True
+                    break
+            # A full restore drill is a separate test, not an automatic recovery attempt.
             ev = {}
             try:
+                if stopped or control(db).emergency_stop:
+                    raise WriterError("PRECONDITION", "Restore drill skipped: certification stopped; operator recovery/review required.")
                 _renew_lease(db, device.id, holder)
                 writer.restore(base)
                 ev["matches_baseline"] = _norm(writer.backup(), device.family) == _norm(base, device.family)
@@ -607,6 +751,9 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                 db.add(row)
             # An operation the adapter deliberately does not implement is UNSUPPORTED, not a failed test.
             row.status = "TESTED_PENDING_APPROVAL" if r["passed"] else ("UNSUPPORTED" if r.get("unsupported") else "FAILED")
+            if env == "HARDWARE":
+                r["evidence"] = {**r["evidence"], "verified_firmware_build": firmware_build(ident["firmware"]),
+                                 "verified_model_family": model_family(ident["model"])}
             row.run_id, row.device_id, row.evidence, row.tested_by = run_id, device.id, r["evidence"], actor
             row.tested_at, row.approved_by, row.approved_at = datetime.now(timezone.utc), None, None
         db.flush()

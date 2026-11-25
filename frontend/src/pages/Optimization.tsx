@@ -1,4 +1,6 @@
 import { useState } from "react";
+import DiagnosisPanel from "../components/DiagnosisPanel";
+import { ErrorNote } from "../components/ui";
 import { Card } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { DevicePicker, Notice, PageHeader, Pill, btn, btn2, btnDanger, statusTone, useAction } from "../components/viz";
@@ -12,21 +14,24 @@ export default function Optimization() {
   const [device, setDevice] = useState<Device | undefined>();
   const state = useLoad(() => device ? ops.optState(device.id) : Promise.resolve(null), [device?.id], 30000);
   const control = useLoad(ops.optControl, [], 30000);
-  const [mode, setMode] = useState("SHADOW");
+  const [mode, setMode] = useState("DEVICE_OPT_IN");
+  const [diagnosing,setDiagnosing] = useState(false);
   const [standing, setStanding] = useState(false);
-  const sites = useLoad(() => rw.sitePolicies().catch(() => []), [], 0);
-  const enrollments = useLoad(() => ops.optEnrollments().catch(() => []), [], 30000);
+  const sites = useLoad(() => rw.sitePolicies(), [], 0);
+  const enrollments = useLoad(() => ops.optEnrollments(), [], 30000);
   const act = useAction();
   const me = getSession();
   const enr = state.data?.enrollment as { id: string; status: string; requester_id: string } | null | undefined;
   return <div className="space-y-4">
-    <PageHeader title="RF optimization — per-device opt-in" subtitle="Automatic optimization is off unless the platform feature is enabled AND an individual AP is enrolled in DEVICE_OPT_IN with independent approval, scope, expiry, daily limit and cooldown. It is never inherited from a site, model or template. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
+    <PageHeader title="RF optimization — per-device opt-in" subtitle="Native Aruba ARM selects channels and power. This application uses its per-AP measurements to detect policy problems and persistent client-impacting degradation. Reviewed automatic interventions require an enabled feature and individual DEVICE_OPT_IN enrollment with independent approval, expiry, action limits and cooldown. It is never inherited from a site, model or template. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
     <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">AUTOMATIC OPTIMIZATION FEATURE: <b>{control.data?.automatic_optimization_feature ? "ENABLED (per-device opt-in only)" : "OFF (INM_AUTOMATIC_OPTIMIZATION=false)"}</b> · Global write lock: <b>{control.data?.global_write_lock ? "ON" : "OFF"}</b> ·
       Emergency stop: <b>{control.data?.emergency_stop ? "ACTIVE" : "clear"}</b>. Vendor-native features such as Aruba ARM remain as configured on each device.</div>
+    <ErrorNote error={control.error || state.error || enrollments.error || sites.error} />
     <GuidePanel guide="optimization" defaultOpen={false} />
     <ClusterOptimization onChanged={() => { enrollments.reload(); state.reload(); }} />
     <Card title="Single device">
       <div className="max-w-md"><DevicePicker family="access_point" value={device?.id ?? ""} onChange={(_, d) => setDevice(d)} /></div>
+      {device && <button className={btn2+" mt-3"} onClick={() => setDiagnosing(true)}>Review live ARM measurements and proposed adjustments</button>}
       {state.data && <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         <Pill value={state.data.badge} tone={state.data.badge === "AUTO OFF" ? "none" : "fair"} /><span>Mode <b>{state.data.mode}</b></span><span>Status <Pill value={state.data.status} tone={statusTone(state.data.status)} /></span>
         {state.data.display && <span className="text-amber-300">{state.data.display}</span>}</div>}
@@ -46,7 +51,7 @@ export default function Optimization() {
       <Notice error={act.error} message={act.message} />
     </Card>
     {me?.role === "admin" && <Card title="Optimizer">
-      <p className="mb-2 text-sm text-slate-400">The optimizer runs every 5 minutes. Run it now to evaluate enrolled APs immediately.</p>
+      <p className="mb-2 text-sm text-slate-400">The optimizer evaluates ARM measurements every 5 minutes. Healthy radios stay under native ARM control; static overrides can be returned to ARM through a reviewed change. Run now to evaluate enrolled APs.</p>
       <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { const r = await rw.optimizerRun(); enrollments.reload();
         return Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(" · "); })}>Run optimizer now</button>
       {!!sites.data?.length && <table className="mt-3 w-full text-xs"><thead><tr className="text-left text-slate-400"><th>Site</th><th>5 GHz channels</th><th>Widths</th><th>TX dBm</th></tr></thead>
@@ -58,6 +63,7 @@ export default function Optimization() {
       <button className={control.data?.emergency_stop ? btn2 : btnDanger} onClick={() => act.run(async () => {
         await ops.emergencyStop(!control.data?.emergency_stop, control.data?.emergency_stop ? "Cleared after review" : "Operator emergency stop"); control.reload(); enrollments.reload(); })}>
         {control.data?.emergency_stop ? "Clear emergency stop" : "Activate emergency stop"}</button></Card>}
+    {diagnosing && device && <DiagnosisPanel target={{kind:"ap",id:device.id,label:device.hostname || device.serial_number}} onClose={() => setDiagnosing(false)} />}
     <Card title="Enrollments (per device, never inherited)"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500"><th>Device</th><th>Mode</th><th>Status</th><th>Next action</th><th>Requested by</th><th>Approver</th><th>Expires</th><th></th></tr></thead>
       <tbody>{(enrollments.data ?? []).map(e => { const st = String(e.status); const mine = me?.username === e.requester_id;
         return <tr key={String(e.id)} className="border-t border-slate-200"><td className="py-1"><b>{String(e.hostname ?? String(e.device_id).slice(0, 8))}</b>

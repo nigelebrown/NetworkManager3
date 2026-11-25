@@ -36,3 +36,43 @@ def safe_output(text: object) -> str:
     # The log sanitizer bounds at 1200 characters per item; process in chunks so
     # diagnostics can display several pages while preserving redaction.
     return "\n".join(sanitize(line) for line in rendered.splitlines()[:200])
+
+
+# HPE AOS-CX 10.14 Fundamentals, 6200 Series, "show interface dom".
+# https://www.arubanetworks.com/techdocs/AOS-CX/10.14/PDF/fundamentals_6200.pdf
+# Preserve missing readings (n/a) and measured units, never guess alarm thresholds.
+def parse_optical_dom(text: str) -> dict:
+    import re
+    import math
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_DIAGNOSTIC_BYTES:
+        return {"state": "UNRECOGNIZED", "ports": {}, "reason": "Invalid or oversized DOM response."}
+    # Restrict to the documented single-channel SFP/SFP+ table; multi-lane QSFP
+    # output is explicitly reported as partial instead of misattributing lanes.
+    if not all(x in text for x in ("Temperature", "Voltage", "Tx Bias", "Rx Power", "Tx Power")):
+        return {"state": "UNRECOGNIZED", "ports": {}, "reason": "DOM table headings not present."}
+    number = r"(?:-?[0-9]+(?:\.[0-9]+)?|n/a)"
+    power = rf"(?:({number}),\s*({number})|n/a)"
+    row = re.compile(rf"^(\d+/\d+/\d+)\s+(SFP[+A-Za-z0-9_.-]*)\s+({number})\s+({number})\s+({number})\s+{power}\s+{power}$", re.I)
+    def numeric(value):
+        if value is None or value.lower() == "n/a":
+            return None
+        v = float(value)
+        return v if math.isfinite(v) else None
+    ports, unknown = {}, 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not re.match(r"^\d+/\d+/\d+\s", line):
+            continue
+        m = row.fullmatch(line)
+        if not m:
+            unknown += 1
+            continue
+        port, kind, temp, volt, bias, rxmw, rxdbm, txmw, txdbm = m.groups()
+        if port in ports:
+            unknown += 1
+            continue
+        ports[port] = {"type": kind, "temperature_c": numeric(temp), "voltage_v": numeric(volt),
+                       "tx_bias_ma": numeric(bias), "rx_power_mw": numeric(rxmw), "rx_power_dbm": numeric(rxdbm),
+                       "tx_power_mw": numeric(txmw), "tx_power_dbm": numeric(txdbm)}
+    return {"state": "PARTIAL" if unknown else "COLLECTED", "ports": ports,
+            "unparsed_port_rows": unknown, "source": "CX_REST_ANYCLI_DOM"}

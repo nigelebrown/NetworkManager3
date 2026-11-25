@@ -32,7 +32,7 @@ Reference: https://arubanetworking.hpe.com/techdocs/AOS-CX/10.14/HTML/rest_v10-0
 The `scripts/production-readiness.py` evaluator returns exit 0 (GO) **only if all conditions hold**:
 
 1. A recent (<30-day) successful GitHub CI run matching the **exact deployed 40-character commit SHA**.
-2. Every row in the updated acceptance CSV has PASS, a nonempty actual result and an artifact link;
+2. Every canonical test ID and phase in the updated acceptance CSV has PASS, a nonempty actual result and an artifact link;
    the register must have **at least 220 distinct tests**. Emulator claims cannot replace physical tests.
 3. Every one of **11 development phases** is marked PASS with referenced SHA-256 evidence.
 4. Every primary API/monitoring/configuration gap in `PRIMARY_GAPS` is closed with evidence,
@@ -94,7 +94,7 @@ Copy the completed attestation and test files to root-controlled storage, e.g.:
 
 - `/etc/inm/release-attestation.json` (mode 0600).
 - `/etc/inm/trusted-reviewers.json` (mode 0600; **public** keys only).
-- `/var/lib/inm/release-evidence/` (actual test artifacts, retained privately).
+- `/var/lib/inm/release-evidence/` (root-owned mode 0700; actual test artifacts retained privately).
 
 The trusted keyring schema is:
 
@@ -171,8 +171,17 @@ locally fabricated acceptance template. **NO_GO is the expected result until rea
 - Continuous log ingest, roaming/interference analytics, scheduled optics monitoring and full
   data-integrity/reconciliation tests.
 - Independent security review, capacity planning, HA/DR failover, restored backup drills
-  and signed 220-check acceptance.
+  and signed canonical 252-check acceptance.
 
 See `docs/DEVICE_API_GAP_REGISTER.md` and `docs/PRODUCTION_READWRITE_PHASE_ACCEPTANCE_DIRECTIVE.md`
 for the full capability and phase requirements. Work must remain in a dedicated review branch until
 the owner approves merging; do not treat the existence of this gate as acceptance itself.
+
+
+## Candidate release follow-through
+
+- Management schema **0014** separates hardware and emulator certification records. Use the normal encrypted backup and migration procedure; prior application releases must not run on the new schema. Roll back by restoring the matching pre-update database backup, not by discarding certification records.
+- Hardware certification is denied unless the device is recorded as a lab device and its exact serial is in the administrator-maintained `INM_CERTIFICATION_LAB_SERIALS` setting (comma-separated, empty by default). Recreate the API using the approved deployment procedure after changing the setting. Populate it only with isolated spare laboratory equipment and clear it when testing finishes. Never certify using a production uplink or live guest SSID. If rollback is not verified, the campaign stops and the full-restore drill is skipped.
+- The release gate requires every test ID and phase in the canonical acceptance CSV, including follow-up checks (252 at this revision), actual results, and artifact links that resolve to SHA-256-checked files. Use semicolon-delimited relative evidence filenames for multiple attachments. The signed manifest and keyring must be root-owned 0600 files; the evidence root must be root-owned 0700. Reviewer public keys must be distinct, and physical serial numbers cannot be reused across model attestations.
+- CX Device 360 now reads current/primary/secondary firmware and boot slots through the documented read-only REST firmware resource. This does not upload, stage or reboot an image. See HPE AOS-CX 10.14 REST API guide, firmware upgrade chapter: https://arubanetworking.hpe.com/techdocs/AOS-CX/10.14/PDF/rest_v10-0x.pdf
+- The CI baseline before the latest changes was 644 passed, 2 failures in AP campaign fixtures, with frontend and full-stack checks successful. The fixture correction and subsequent software changes must pass the exact candidate's CI before merging. No hardware test, acceptance signature, external security result or deployed release is represented as completed.

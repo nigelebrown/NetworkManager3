@@ -201,8 +201,13 @@ def audit(
         session_id_hash=actor.session_id_hash if actor and (username is None or username == actor.username) else None,
         channel=channel,
     )
-    with _chain_lock:
-        head = db.scalar(select(AuditChainHead).where(AuditChainHead.id == 1).with_for_update())
+    # PostgreSQL owns serialization for the transaction. A process lock here can deadlock:
+    # one session waits for the row while holding Python's lock, and its owner needs audit() again to commit.
+    from contextlib import nullcontext
+    serialization = nullcontext() if db.get_bind().dialect.name == "postgresql" else _chain_lock
+    with serialization:
+        head = db.scalar(select(AuditChainHead).where(AuditChainHead.id == 1).with_for_update()
+                         .execution_options(populate_existing=True))
         if head is None:
             head = AuditChainHead(id=1, last_hash=GENESIS_HASH)
             db.add(head)

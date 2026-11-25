@@ -190,3 +190,54 @@ def test_invalid_csrf_never_replays_state_changing_patch():
     assert emu.logins == 1
     assert "csrf-missing:/system/interfaces/1/1/2" in emu.violations
     writer.close()
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_duplicate_checkpoint_reuses_match_or_restores_exact_baseline(monkeypatch, matches):
+    import json
+    writer = ArubaCxWriter(Credentials("10.60.0.2", "admin", SECRET))
+    baseline = {"hostname": "lab-switch", "vlans": [1]}
+    monkeypatch.setattr(writer, "backup", lambda: json.dumps(baseline).encode())
+    calls = []
+
+    def request(method, path, **kwargs):
+        calls.append((method, path))
+        if method == "PUT":
+            raise WriterError("DEVICE_REJECTED", "HTTP 400 duplicate checkpoint")
+        if path == "/fullconfigs":
+            return httpx.Response(200, json=["/rest/v10.14/fullconfigs/customer",
+                                            "/rest/v10.14/fullconfigs/inm-cp-123"])
+        assert path == "/fullconfigs/inm-cp-123"
+        return httpx.Response(200, json=baseline if matches else {"hostname": "different"})
+
+    monkeypatch.setattr(writer, "_req", request)
+    if matches:
+        assert writer.checkpoint() == "inm-cp-123"
+    else:
+        restored = []
+        monkeypatch.setattr(writer, "restore", lambda data: restored.append(json.loads(data)))
+        checkpoint = writer.checkpoint()
+        assert checkpoint.startswith("inm-cp-")
+        writer.rollback(checkpoint)
+        assert restored == [baseline]
+        monkeypatch.setattr(writer, "backup", lambda: b'{"hostname": "different"}')
+        with pytest.raises(WriterError, match="did not match"):
+            writer.rollback(checkpoint)
+    assert all(path != "/fullconfigs/customer" for _, path in calls)
+
+
+@pytest.mark.parametrize("operation,reply", [
+    ({"op": "switch.port.access_vlan", "port": "1/1/1", "value": 4090},
+     {"vlan_mode": "access", "vlan_tag": {"4090": "/rest/v10.14/system/vlans/4090"}}),
+    ({"op": "switch.port.trunk_vlans", "port": "1/1/1", "value": [1, 4090]},
+     {"vlan_mode": "native-untagged", "vlan_tag": {"1": "/rest/v10.14/system/vlans/1"},
+      "vlan_trunks": {"1": "/rest/v10.14/system/vlans/1", "4090": "/rest/v10.14/system/vlans/4090"}}),
+    ({"op": "switch.port.qos_trust", "port": "1/1/1", "value": "dscp"},
+     {"qos_config": {"qos_trust": "dscp"}}),
+    ({"op": "switch.port.storm_control", "port": "1/1/1", "broadcast_kbps": 1000},
+     {"rate_limits": {"broadcast": 1000, "broadcast_units": "kbps"}}),
+])
+def test_hardware_configuration_reference_maps_and_nested_fields(monkeypatch, operation, reply):
+    writer = ArubaCxWriter(Credentials("10.60.0.2", "admin", SECRET))
+    monkeypatch.setattr(writer, "_req", lambda *args, **kwargs: httpx.Response(200, json=reply))
+    assert writer.readback(operation)[0]

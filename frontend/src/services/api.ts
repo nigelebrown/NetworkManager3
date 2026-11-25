@@ -225,6 +225,7 @@ export interface FwSiteReport {
 }
 export interface FwImage { id: number; filename: string; ap_class: string; version: string; size_bytes: number; sha256: string; uploaded_by: string; uploaded_at: string }
 export interface FwChange { id: number; site_id: number; kind: string; summary: string; status: string; expires_at: string; plan: Record<string, any> }  // eslint-disable-line @typescript-eslint/no-explicit-any
+export interface FwVerification { state: string; checked_at: string; target: string; members: { serial: string | null; ip: string | null; model: string | null; version: string | null; state: string }[]; missing_serials: string[]; failure: string | null; note: string }
 export const fwApi = {
   compliance: () => request<{ policy: FwPolicy; sites: FwSiteReport[] }>("/firmware/compliance"),
   setPolicy: (p: FwPolicy) => post<{ policy: FwPolicy }>("/firmware/policy", p),
@@ -233,6 +234,9 @@ export const fwApi = {
   deleteImage: (id: number) => request<{ deleted: string }>(`/firmware/images/${id}`, { method: "DELETE" }),
   planUpgrade: (siteId: number, imageIds: number[], allowDowngrade: boolean) =>
     post<FwChange>(`/firmware/sites/${siteId}/upgrade/plan`, { image_ids: imageIds, allow_downgrade: allowDowngrade }),
+  upgradeHistory: (siteId: number) => request<FwChange[]>(`/firmware/sites/${siteId}/upgrade/history`),
+  verifyUpgrade: (changeId: number) => post<FwVerification>(`/firmware/upgrades/${changeId}/verify`, {}),
+  recoveryPlan: (changeId: number, imageIds: number[]) => post<FwChange>(`/firmware/upgrades/${changeId}/recovery-plan`, { image_ids: imageIds, allow_downgrade: true }),
   planCert: (siteId: number, file: File, passphrase: string) => {
     const f = new FormData(); f.append("file", file, file.name); f.append("passphrase", passphrase);
     return request<FwChange>(`/firmware/sites/${siteId}/certificate/plan`, { method: "POST", body: f });

@@ -54,9 +54,17 @@ export interface HealthReport {
 }
 export interface Snapshot { id: string; label: string; generated_at: string; scope: string; source: string; tiers: Record<Tier, number>; saved_by: string }
 export interface Finding { id: string; severity: "high" | "medium" | "low" | "info"; title: string; why: string; actions: string[];
-  owner: string; confidence: string; proposal: { operation: string; band: string; from: number | null; to: number | null } | null }
+  owner: string; confidence: string; proposal: { operation: string; band: string; from: number | null; to: number | null; power?: number; arm_managed?: boolean; basis?: string } | null }
 export interface Diagnosis { subject: Record<string, unknown>; headline: string; findings: Finding[];
   proposals: Finding["proposal"][]; method: string;
+  arm?: { state: string; freshness?: string; observed_at?: string; collection_state?: string; last_attempt_at?: string;
+    transport?: string; unavailable?: string[]; errors?: Record<string,string>;
+    channels: { band: string; channel: number; util_percent: number; quality_percent: number;
+      retry_percent: number; noise_floor_dbm: number; interference_index: number | null }[];
+    assignments: { interface: string; band: string; channel: number; power_dbm: number }[] };
+  baseline?: { available: boolean; source_name?: string; scope?: string; reason?: string;
+    reference_channels_5g?: number[]; observed_channels_5g?: number[];
+    differences?: { setting: string; reference: unknown; observed: unknown; status: string }[] };
   ai?: { available: boolean; text?: string; model?: string; reason?: string };
   checked?: Record<string, string | number | null> }
 export interface WClient {
@@ -76,6 +84,7 @@ export interface ClientView {
 export interface Journey { id: number; mac: string; hostname: string | null; cluster: string;
   current: Record<string, string | number | boolean | null>; score: { score: number | null; band: string; inputs: Record<string, unknown>[] };
   events: { ts: string; kind: string; ap_from: string | null; ap_to: string | null; ssid: string | null }[];
+  native_client_match?: { source: string; note: string; coverage: { state: string; eligible_aps: number; fresh_aps: number }; records: { ap: string; estimated_at: string; collected_at: string; old_state: string; new_state: string; reason: string; radio: number }[] };
   aps_visited: { ap: string; times: number }[]; window_hours: number }
 export interface Incident {
   id: string; device_id: string; device: string | null; family: string | null; site: string | null; rule_id: string;
@@ -106,13 +115,19 @@ export interface ClusterOpt {
 }
 
 export const wl = {
+  collectArm: (id: string) => post<{state:string}>(`/v1/wireless/arm/${encodeURIComponent(id)}/collect`),
+  diagnosisPlan: (id: string, finding_id: string, observed_at: string) => post<{id:string; state:string}>(`/v1/wireless/diagnose/ap/${encodeURIComponent(id)}/change-plan`, {finding_id, observed_at}),
   fleet: () => request<Fleet>("/v1/wireless/fleet"),
   scanKeys: (device_ids?: string[]) => post<{ scanned: number; results: { ip: string; fingerprint?: string; key_type?: string; error?: string; status?: string }[];
     pending: { ip: string; fingerprint: string; key_type: string; scanned_at: string; changed_from?: string | null }[] }>("/v1/wireless/autodiscover/scan-keys", { device_ids }),
   pendingKeys: () => request<{ ip: string; fingerprint: string; key_type: string; scanned_at: string; changed_from?: string | null }[]>("/v1/wireless/autodiscover/pending-keys"),
   approveKeys: (items: { ip: string; fingerprint: string }[]) => post<{ ip: string; approved: boolean; reason?: string }[]>(
     "/v1/wireless/autodiscover/approve-keys", { items, confirm: "APPROVE HOST KEYS" }),
-  autodiscover: (auto_enable_rest: boolean, device_ids?: string[]) => post<{ state: string }>("/v1/wireless/autodiscover", { auto_enable_rest, device_ids }),
+  onboardingPolicy: () => request<{ enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }>("/v1/wireless/autodiscover/policy"),
+  saveOnboardingPolicy: (body: { enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }) =>
+    request("/v1/wireless/autodiscover/policy", { method: "PUT", body: JSON.stringify(body) }),
+  onboardingProfiles: () => request<{ id: string; name: string; device_family: string; enabled: boolean }[]>("/v1/onboarding/credentials"),
+  autodiscover: (auto_enable_rest: boolean, device_ids?: string[], credential_ids?: string[]) => post<{ state: string }>("/v1/wireless/autodiscover", { auto_enable_rest, device_ids, credential_ids, auto_trust_new_hosts: true }),
   autodiscoverStatus: () => request<{ state: string; done?: number; total?: number; clusters_saved?: number; counts?: Record<string, number>;
     clusters?: { name: string; vc_ip: string; members: number; transport: string; rest_state: string; first_poll_ok?: boolean; first_poll_error?: string | null }[];
     results?: { device_id: string; hostname: string; ip?: string; result: string; detail?: string | null }[]; error?: string;
