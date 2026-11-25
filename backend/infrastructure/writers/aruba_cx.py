@@ -239,7 +239,7 @@ class ArubaCxWriter:
                   "switch.port.admin_state", "switch.port.poe", "switch.lldp", "switch.lag.members",
                   "switch.central.disable", "switch.port.description", "switch.port.stp_bpdu_guard",
                   "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp", "switch.system.dns",
-                  "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_enable")
+                  "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, timeout: float = 15.0,
                  transport: httpx.BaseTransport | None = None):
@@ -494,7 +494,7 @@ class ArubaCxWriter:
     # ---- typed operations ------------------------------------------------------------------
     def render(self, op: dict) -> list[dict]:
         k, v = op.get("op"), op.get("value")
-        if k in ("switch.vlan.voice", "switch.port.auth_enable"):
+        if k in ("switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab"):
             from ...domain.change_control import validate_operation, PolicyViolation
             try:
                 validate_operation(op, family="switch")
@@ -572,14 +572,14 @@ class ArubaCxWriter:
                 if not isinstance(baseline, dict) or baseline.get("id") != op["vlan"] or baseline.get("type") != "static" or type(baseline.get("voice")) is not bool:
                     raise WriterError("PRECONDITION", "Existing static VLAN and explicit voice baseline required.")
                 body = {**baseline, **body}
-            if op["op"] == "switch.port.auth_enable":
+            if op["op"] in ("switch.port.auth_dot1x", "switch.port.auth_mab"):
                 port_path = f"/system/interfaces/{_port(op['port'])}"
                 port = self._req("GET", port_path, params={"selector": "configuration"}).json()
                 if not isinstance(port, dict) or port.get("admin") != "down" or port.get("vlan_mode") != "access":
                     raise WriterError("PRECONDITION", "Port must be administratively down in access mode.")
                 if port.get("port_access_auth_mode") != "client-mode" or any(
                     value for key, value in port.items() if key.startswith("port_access_") and
-                    ("role" in key or "override" in key)):
+                    ("role" in key or "override" in key)) or port.get("aaa_port_access_radius_override_enable")::
                     raise WriterError("PRECONDITION", "Require explicit client-mode and no configured fallback/override role.")
                 auth = self._req("GET", call["path"], params={"selector": "configuration"}).json()
                 if not isinstance(auth, dict) or auth.get("authentication_method") != op["method"] or not auth.get("radius_server_group"):
@@ -600,7 +600,7 @@ class ArubaCxWriter:
         if k == "switch.vlan.voice":
             d = self._req("GET", f"/system/vlans/{op['vlan']}", params={"selector": "configuration"}).json()
             return (d.get("id") == op["vlan"] and d.get("voice") is (v == "enabled")), {"id": d.get("id"), "voice": d.get("voice")}
-        if k == "switch.port.auth_enable":
+        if k in ("switch.port.auth_dot1x", "switch.port.auth_mab"):
             d = self._req("GET", f"/system/interfaces/{_port(op['port'])}/port_access_auth_configurations/{op['method']}", params={"selector": "configuration"}).json()
             return (d.get("authentication_method") == op["method"] and d.get("auth_enable") is True and d.get("cached_reauth_enable") is False and d.get("canned_eap_success_enable") is False), {key: d.get(key) for key in ("authentication_method", "auth_enable", "cached_reauth_enable", "canned_eap_success_enable")}
         if k == "switch.system.ntp":
