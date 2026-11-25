@@ -38,18 +38,18 @@ for certification or the independent approver.
 | Gap | State | Conditions to close |
 |---|---|---|
 | Instant automatic full-config restore | **GUIDED / UNSUPPORTED** | Aruba-supported restoration method validated on AP firmware; no invented REST endpoint |
-| Full enterprise WLAN lifecycle (RADIUS accounting, captive portal, user roles, multi-auth) | **EXTENDED / PARTIAL** | Typed RADIUS accounting now implemented for existing enterprise SSIDs with readback and rollback; captive portal, role management and multi-auth remain incomplete. |
+| Full enterprise WLAN lifecycle (RADIUS accounting, captive portal, user roles, multi-auth) | **EXTENDED / PARTIAL** | Typed RADIUS accounting and existing guest external portal/MAC/pre-auth role bindings are implemented with readback and rollback. Creating and editing complete role ACLs, external portal profiles, and other multi-auth modes remain incomplete. |
 | DFS controls and roaming-assist configuration | **IMPLEMENTED IN CANDIDATE / HARDWARE PENDING** | Typed 5 GHz channel allowlist and 802.11k/v/r; persisted site constraints, device regulatory checks, 20/40 MHz limits, explicit restorable baseline; validate physical syntax and behavior. |
 | CX 802.1X/MAB port write configuration | **NOT IMPLEMENTED** | REST schema on CX 6100/6200, bypass/fail-open protections, role/AAA testbed |
 | VSF stack provisioning | **NOT IMPLEMENTED** | Lab topology, out-of-band console, destructive failure/recovery testing |
 | CX ACL/routing/voice/QoS profiles | **PARTIAL / NOT IMPLEMENTED** | Explicit CLI/REST schema and model capability; impact validation/rollback |
-| AP/CX firmware rollout orchestration | **PARTIAL** | HPE images, signed firmware metadata, staged upgrade/rollback, device re-certification |
+| AP/CX firmware rollout orchestration | **EXTENDED / PARTIAL** | AP stage-only workflow now records planned members, verifies targeted running versions and creates separately approved previous-image recovery plans. Vendor signature verification, automatic reboot/rollback and CX firmware transport remain outstanding. |
 | Client roaming history and interference analytics | **EXTENDED / PARTIAL** | Opt-in native ClientMatch action history, estimated timestamps, site-scoped pseudonyms and separate UI evidence; full association stream, roam outcome verification and interference correlation remain incomplete. |
 | Device-initiated ping/traceroute/cable test/packet capture | **NOT IMPLEMENTED** | Per-model vendor diagnostics API and strongly bounded RBAC/effect controls |
-| Transceiver DOM and model-specific port counters | **PARTIAL** | Exact telemetry resource and hardware DOM support per firmware |
+| Transceiver DOM and model-specific port counters | **IMPLEMENTED FOR DOCUMENTED SINGLE-CHANNEL TABLE / HARDWARE PENDING** | Opt-in structured SFP/SFP+ DOM readings with missing values, supported packet counters and live faceplate. Other table formats, lane-level DOM, thresholds and physical support remain unverified. |
 | Continuous device accounting/audit log ingestion | **EXTENDED / HARDWARE PENDING** | Opt-in scheduled read-only device log ingestion, sanitization, dedupe and retention; validate physical log formats and external accounting feed. |
 | Cisco/UniFi/generic SNMPv3 adapters | **PLACEHOLDERS** | New protocol clients + test emulators + hardware scope agreement |
-| Production ZTP, multi-site batching and high-risk change review | **PARTIAL** | Phased site deployment, bounded concurrency, blast-radius analysis and approval |
+| Production ZTP, multi-site batching and high-risk change review | **EXTENDED / PARTIAL** | Bounded site waves, single initial hardware canary, durable exclusive batch lease, persistent failure pause, explicit review and recovery before resume. Factory ZTP, independently reviewed blast-radius analysis and fleet-scale validation remain incomplete. |
 | Production HA/DR, long-term load and external penetration testing | **BLOCKED** | Production infrastructure and independent test environment |
 | Physical AP-505/AP-535/CX 6100/CX 6200 read/write certification | **BLOCKED** | Isolated lab devices, firmware inventory, credentials, reachable VLAN and signed test results |
 
@@ -76,3 +76,11 @@ Vendor references:
 - `ap.ssid.roaming`, `ap.ssid.accounting`, `ap.radio.allowed_channels`: explicit typed change plans, independent approval, readback, inverse rollback, per-operation hardware certification still required.
 - Native ClientMatch history is opt-in via worker setting `INM_CLIENT_MATCH_HISTORY=true`. Requires an approved reachable AP and a verified local serial; malformed or unsupported responses are recorded as failures. History is bounded to 300 records/AP and seven days in queries and subsequent captures; disable collection if not approved by the data controller. Estimated action times are not measured roam completion times. No raw client MAC is persisted by this collector; site-keyed HMAC is used for lookup. Existing client inventory remains subject to existing privacy controls.
 - New tests: `tests/unit/test_wireless_policy_extensions.py`, `tests/unit/test_client_match_history.py`. CI must pass at the new candidate SHA before release.
+
+### Additional candidate controls
+
+- Fix the Instant emulator command prefix collision (`a-channel` versus `a-channels`). Prior CI: 632 passed, seven backend failures from that collision, frontend and full stack passed. The new exact candidate must pass CI.
+- `INM_CX_OPTICAL_DOM=true` enables structured optional optics polling. Read-only `show interface dom` is used only after the device advertises the command. Unsupported or unrecognized output is not recorded as healthy. HPE AOS-CX 10.14 6200 Fundamentals guide: https://www.arubanetworks.com/techdocs/AOS-CX/10.14/PDF/fundamentals_6200.pdf
+- Guest role binding is limited to already configured guest SSIDs, explicit restorable external portal/MAC/role settings and named existing roles. It does not create access policies or perform real authentication tests. HPE Instant CLI reference: https://arubanetworking.hpe.com/techdocs/CLI-Bank/Content/instant/wlan-ssid-prof.htm
+- Firmware member verification requires an exact pre-stage inventory (up to 128 members), an allowlisted controller/member address and targeted serial/IP evidence; aggregate VC firmware does not count as individual evidence. Recovery creates a new stage-only plan and never triggers automatic reboot. Verify the prior version and each image class; old incomplete plans may require recreation. No physical acceptance is implied.
+- Template deployment runs in waves of up to 25 plans with independent per-plan approval and persistent failure review. Production batches enforce a first single-device canary and one physical site per wave, and always stop on failure. No unattended fleet-wide writes.
