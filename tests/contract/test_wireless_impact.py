@@ -132,3 +132,24 @@ def test_after_requires_exact_hardware_execution_and_completed_real_windows(clie
     else:
         assert row["state"]==state,row
         assert row["after"]["link_score"]==80 and row["comparison"]["causal_claim"] is False
+
+
+def test_active_hardware_change_is_not_expired_or_reported_as_success(client,admin,impact,monkeypatch):
+    from backend.api import intelligence as API
+    did,sid,g,m=impact;r=capture(client,admin,g);created=W.utc(r["created_at"])
+    with session_scope() as db:
+        p=ChangePlan(device_id=did,title="ARM change in progress",operations=g["operations"],capability_report=[],
+             plan_hash="test",source="OPERATOR",requester="operator",state="EXECUTING",rollback_plan={})
+        db.add(p);db.flush()
+        db.add(ChangeExecution(plan_id=p.id,device_id=did,environment="HARDWARE",outcome="RUNNING",steps=[],
+            executed_by="executor",started_at=created+timedelta(minutes=1),finished_at=None))
+    monkeypatch.setattr(API,"_now",lambda:created+timedelta(minutes=12))
+    row=client.get("/api/v1/intelligence/wireless-impact/reviews/"+r["id"],headers=admin).json()["clusters"][0]
+    assert row["state"]=="CHANGE_PENDING_VERIFICATION" and row["after"] is None
+
+def test_viewer_cannot_freeze_evidence(client,admin,impact):
+    from tests.conftest import make_user
+    viewer=make_user(client,admin,"impact.viewer","viewer")
+    _,_,g,_=impact
+    r=client.post("/api/v1/intelligence/wireless-impact/reviews",headers=viewer,json={"cluster_keys":[g["key"]]})
+    assert r.status_code==403
