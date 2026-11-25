@@ -15,7 +15,7 @@ ALLOWED_WIDTHS_MHZ = (20, 40)          # 80/160 MHz are never permitted
 APPROVAL_TTL = timedelta(hours=24)
 AP_OPERATIONS = {"ap.radio.channel", "ap.radio.width", "ap.radio.tx_power", "ap.ssid.vlan",
                  "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise",
-                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"}
+                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth"}
 SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
                      "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
@@ -100,6 +100,13 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             channels = normalize_channel_list(op.get("value"), excluded_channels=excluded_channels, allow_dfs=allow_dfs)
             # The approval binds the validated channel set and explicit DFS permission.
             return {**op, "value": channels, "allow_dfs": bool(allow_dfs)}
+        if kind == "ap.ssid.guest_auth":
+            import re as _re
+            for field in ("ssid", "portal_profile", "pre_auth_role", "mac_role"):
+                if not isinstance(op.get(field), str) or not _re.fullmatch(_NAME, op[field]):
+                    raise PolicyViolation(f"{field} must identify an existing safe-named profile or role.")
+            if op.get("acknowledge_guest_auth_change") is not True:
+                raise PolicyViolation("Explicitly acknowledge guest authentication and role changes.")
         if kind in ("ap.ssid.roaming", "ap.ssid.accounting"):
             import re as _re
             if not isinstance(op.get("ssid"), str) or not _re.fullmatch(_NAME, op["ssid"]):
