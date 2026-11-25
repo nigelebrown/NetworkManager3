@@ -236,6 +236,10 @@ _ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
     r"^ip (?:[0-9]{1,3}\.){3}[0-9]{1,3}$",
     r"^(port|acctport) [0-9]{1,5}$", r"^key [A-Za-z0-9!@#%^*_+=.,:\-]{1,128}$",
     r"^(a|g)-channel \d{1,3} -?\d{1,2}(?:\.\d)?$",
+    r"^(no )?(dot11k|dot11v|dot11r|radius-accounting)$",
+    r"^radius-interim-accounting-interval (?:[0-9]|[1-5][0-9]|60)(?: (?:[0-9]|[1-5][0-9]))?$",
+    r"^no radius-interim-accounting-interval$",
+    r"^a-channels [0-9]{1,3}\+?(?:,[0-9]{1,3}\+?){0,47}$",
 )]
 
 
@@ -246,7 +250,7 @@ def run_config_lines(host: str, username: str, password: str, expected_fingerpri
         raise ArubaUnsupportedError("Configuration changes are disabled (device writes not permitted).")
     lines = [ln.strip() for ln in lines]
     for ln in lines:
-        if not any(p.match(ln) for p in _ALLOWED_CONFIG_LINES):
+        if not any(p.fullmatch(ln) for p in _ALLOWED_CONFIG_LINES):
             raise ArubaUnsupportedError(f"Command not in the allowlisted grammar: {ln[:60]!r}")
     t = _open_transport(host, port, timeout)
     try:
