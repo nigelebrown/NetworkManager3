@@ -599,7 +599,10 @@ TEST_OPS = {
         {"op": "switch.system.ntp", "value": t.get("test_ntp", "192.0.2.123")},
         {"op": "switch.system.dns", "value": [t.get("test_dns", "192.0.2.53")]},
         {"op": "switch.system.syslog", "value": t.get("test_syslog", "192.0.2.14"), "severity": "warning"},
-    ] + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
+    ] + [{"op": "switch.vlan.voice", "vlan": t.get("test_vlan", 4090), "value": "enabled", "acknowledge_voice_change": True}]
+      + ([{"op": "switch.port.auth_enable", "port": t["test_auth_port"], "method": method, "value": "enabled", "acknowledge_auth_change": True}
+          for method in ("dot1x", "mac-auth")] if t.get("test_auth_port") else [])
+      + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
     "access_point": lambda t: [
         {"op": "ap.client_match", "value": "disabled"}, {"op": "ap.band_steering", "value": "balance-bands"},
         {"op": "ap.airtime_fairness", "value": "fair-access"}, {"op": "ap.radio.width", "value": 20},
@@ -639,6 +642,8 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     if control(db).emergency_stop:
         raise WriterError("EMERGENCY_STOP", "Emergency stop is active.")
     test = dict(test)
+    if env == "EMULATED" and device.family == "switch" and writer is None:
+        test["test_auth_port"] = test.get("test_auth_port") or "1/1/24"
     if env == "EMULATED" and device.family == "access_point":
         test["test_ssid"] = test.get("test_ssid") or "Corp-WiFi"
         test["test_enterprise_ssid"] = test.get("test_enterprise_ssid") or "INM-LAB-1X"
@@ -650,8 +655,9 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
     try:
         validate_site_rf_policy(db, device, test_ops)
         for op in test_ops:
-            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth"):
-                CC.validate_operation(op, family="access_point")
+            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
+                            "switch.vlan.voice", "switch.port.auth_enable"):
+                CC.validate_operation(op, family=device.family)
     except CC.PolicyViolation as exc:
         raise WriterError("INVALID", str(exc)) from None
     if writer is None:
@@ -684,10 +690,13 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                 try:
                     cp = writer.checkpoint()
                     ev["rendered"] = writer.render(public_op)     # masked: evidence never contains a secret
-                    if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans"):
+                    if op["op"] in ("switch.port.access_vlan", "switch.port.trunk_vlans", "switch.vlan.voice"):
                         # prerequisite inside the same checkpoint: the VLAN must exist on the switch
                         _renew_lease(db, device.id, holder)
                         writer.apply({"op": "switch.vlan.define", "value": test.get("test_vlan", 4090)})
+                    if env == "EMULATED" and op["op"] == "switch.port.auth_enable":
+                        _renew_lease(db, device.id, holder)
+                        writer.apply({"op": "switch.port.admin_state", "port": op["port"], "value": "down"})
                     _renew_lease(db, device.id, holder)
                     writer.apply(op)
                     ok, observed = writer.readback(public_op)
