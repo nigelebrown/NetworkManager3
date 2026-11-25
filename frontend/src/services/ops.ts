@@ -212,6 +212,7 @@ export const rw = {
   decideCert: (id: string, action: "approve" | "revoke") => post<Cert>(`/v1/certification/${enc(id)}/${action}`),
   deviceCert: (id: string) => request<{ environment: string; model_family: string; firmware_train: string; operations: Record<string, string> }>(`/v1/devices/${enc(id)}/certification`),
   ports: (id: string) => request<Ports>(`/v1/devices/${enc(id)}/ports`),
+  switchFirmwareStatus: (id: string) => request<{ device_id: string; environment: string; state: string; current_version: string | null; primary_version: string | null; secondary_version: string | null; booted_image: string | null; default_image: string | null; device_writes: number }>(`/v1/devices/${enc(id)}/firmware-status`),
   deviceLogs: (id: string, kind: "audit" | "event" | "system" | "security" | "user", limit = 50) =>
     request<DeviceOriginLogs>(`/v1/devices/${enc(id)}/device-logs?kind=${enc(kind)}&limit=${limit}`),
   deviceLogSchedule: (id: string) => request<DeviceLogSchedule>(`/v1/devices/${enc(id)}/device-log-collection`),
