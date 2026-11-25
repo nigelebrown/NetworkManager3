@@ -239,7 +239,7 @@ class ArubaCxWriter:
                   "switch.port.admin_state", "switch.port.poe", "switch.lldp", "switch.lag.members",
                   "switch.central.disable", "switch.port.description", "switch.port.stp_bpdu_guard",
                   "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp", "switch.system.dns",
-                  "switch.system.syslog", "config.restore")
+                  "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_enable")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, timeout: float = 15.0,
                  transport: httpx.BaseTransport | None = None):
@@ -494,6 +494,16 @@ class ArubaCxWriter:
     # ---- typed operations ------------------------------------------------------------------
     def render(self, op: dict) -> list[dict]:
         k, v = op.get("op"), op.get("value")
+        if k in ("switch.vlan.voice", "switch.port.auth_enable"):
+            from ...domain.change_control import validate_operation, PolicyViolation
+            try:
+                validate_operation(op, family="switch")
+            except PolicyViolation as exc:
+                raise WriterError("INVALID", str(exc)) from None
+            if k == "switch.vlan.voice":
+                return [{"method": "PUT", "path": f"/system/vlans/{op['vlan']}", "json": {"voice": v == "enabled"}}]
+            return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}/port_access_auth_configurations/{op['method']}",
+                     "json": {"auth_enable": True, "cached_reauth_enable": False, "canned_eap_success_enable": False}}]
         if k == "switch.vlan.define":
             return [{"method": "POST", "path": "/system/vlans", "json": {"id": int(v), "name": op.get("name") or f"VLAN{int(v)}"}}]
         if k == "switch.port.access_vlan":
@@ -557,6 +567,25 @@ class ArubaCxWriter:
         sent = []
         for call in self.render(op):
             body = call["json"]
+            if op["op"] == "switch.vlan.voice":
+                baseline = self._req("GET", call["path"], params={"selector": "writable"}).json()
+                if not isinstance(baseline, dict) or baseline.get("id") != op["vlan"] or baseline.get("type") != "static" or type(baseline.get("voice")) is not bool:
+                    raise WriterError("PRECONDITION", "Existing static VLAN and explicit voice baseline required.")
+                body = {**baseline, **body}
+            if op["op"] == "switch.port.auth_enable":
+                port_path = f"/system/interfaces/{_port(op['port'])}"
+                port = self._req("GET", port_path, params={"selector": "configuration"}).json()
+                if not isinstance(port, dict) or port.get("admin") != "down" or port.get("vlan_mode") != "access":
+                    raise WriterError("PRECONDITION", "Port must be administratively down in access mode.")
+                if port.get("port_access_auth_mode") != "client-mode" or any(
+                    value for key, value in port.items() if key.startswith("port_access_") and
+                    ("role" in key or "override" in key)):
+                    raise WriterError("PRECONDITION", "Require explicit client-mode and no configured fallback/override role.")
+                auth = self._req("GET", call["path"], params={"selector": "configuration"}).json()
+                if not isinstance(auth, dict) or auth.get("authentication_method") != op["method"] or not auth.get("radius_server_group"):
+                    raise WriterError("PRECONDITION", "Provision the selected method and its RADIUS group first.")
+                if type(auth.get("auth_enable")) is not bool:
+                    raise WriterError("PRECONDITION", "No explicit authentication baseline.")
             if op["op"] == "switch.port.trunk_vlans":
                 # PATCH merges reference maps. PUT the writable configuration
                 # to replace the allowed VLAN set while preserving other settings.
@@ -568,6 +597,12 @@ class ArubaCxWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "switch.vlan.voice":
+            d = self._req("GET", f"/system/vlans/{op['vlan']}", params={"selector": "configuration"}).json()
+            return (d.get("id") == op["vlan"] and d.get("voice") is (v == "enabled")), {"id": d.get("id"), "voice": d.get("voice")}
+        if k == "switch.port.auth_enable":
+            d = self._req("GET", f"/system/interfaces/{_port(op['port'])}/port_access_auth_configurations/{op['method']}", params={"selector": "configuration"}).json()
+            return (d.get("authentication_method") == op["method"] and d.get("auth_enable") is True and d.get("cached_reauth_enable") is False and d.get("canned_eap_success_enable") is False), {key: d.get(key) for key in ("authentication_method", "auth_enable", "cached_reauth_enable", "canned_eap_success_enable")}
         if k == "switch.system.ntp":
             d = self._req("GET", f"/system/vrfs/{op.get('vrf', 'mgmt')}/ntp_associations",
                           params={"depth": 2, "selector": "configuration"}).json() or {}
