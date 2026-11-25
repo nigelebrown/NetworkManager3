@@ -189,7 +189,13 @@ def details(db, record, current_groups, now):
             if plan and ex.outcome=="APPLIED_VERIFIED" and ex.finished_at and utc(ex.finished_at)>=utc(record["created_at"]) and digest(sorted(plan.operations,key=lambda o:o["op"]))==digest(sorted(saved["group"]["operations"],key=lambda o:o["op"])):
                 matching.append(ex)
         if not matching:
-            row["state"]="BASELINE_EXPIRED" if now-utc(record["created_at"])>timedelta(minutes=10) else "NOT_APPLIED";result["clusters"].append(row);continue
+            running=False
+            for pending in exs:
+                plan=db.get(ChangePlan,pending.plan_id)
+                if pending.finished_at is None and pending.started_at and utc(record["created_at"])<=utc(pending.started_at)<=utc(record["created_at"])+timedelta(minutes=10) and plan and digest(sorted(plan.operations,key=lambda o:o["op"]))==digest(sorted(saved["group"]["operations"],key=lambda o:o["op"])):
+                    running=True
+            row["state"]="CHANGE_PENDING_VERIFICATION" if running else "BASELINE_EXPIRED" if now-utc(record["created_at"])>timedelta(minutes=10) else "NOT_APPLIED"
+            result["clusters"].append(row);continue
         ex=matching[0];row["execution_id"]=ex.id
         end=utc(ex.finished_at)+timedelta(minutes=10+record["window_minutes"])
         start=end-timedelta(minutes=record["window_minutes"])
@@ -227,7 +233,7 @@ def tick(session_factory, owner):
                     out=details(db,record,current,now)
                     completed=dict(record.get("completed",{}))
                     for row in out["clusters"]:
-                        if row["state"] not in ("NOT_APPLIED","OBSERVING"):
+                        if row["state"] not in ("NOT_APPLIED","OBSERVING","CHANGE_PENDING_VERIFICATION"):
                             completed[row["group"]["key"]]=row
                     record["completed"]=completed
                     record["complete"]=len(completed)==len(record["clusters"])
