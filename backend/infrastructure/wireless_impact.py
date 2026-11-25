@@ -79,7 +79,11 @@ def groups(db, allowed_sites):
         for d,arm,site in members:
             a=next((a for a in arm.get("assignments",[]) if a.get("band")=="5"),{})
             radio=next((r for r in arm.get("channels",[]) if r.get("band")=="5" and r.get("channel")==a.get("channel")),{})
-            aps.append({"id":d.id,"name":d.hostname,"serial":d.serial_number,"model":d.model,"firmware":d.firmware,
+            cm=db.get(AppSetting,"cm-history:"+d.id)
+            cmv=cm.value if cm and cm.value.get("legacy_site_id")==d.legacy_site_id else {}
+            aps.append({"native_clientmatch":{"state":cmv.get("state","NOT_COLLECTED"),
+                        "record_count":len(cmv.get("records",[])),"clock_alignment":cmv.get("clock_alignment"),
+                        "last_success_at":cmv.get("last_success_at")},"id":d.id,"name":d.hostname,"serial":d.serial_number,"model":d.model,"firmware":d.firmware,
                         "ip":(d.mgmt_addresses or [None])[0],"location":physical.get(d.site_id) or None,
                         "site_id":site.id,"arm_freshness":arm.get("freshness"),"observed_at":arm.get("observed_at"),
                         "channel":a.get("channel"),"quality_percent":radio.get("quality_percent"),
