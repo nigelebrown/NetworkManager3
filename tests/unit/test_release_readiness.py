@@ -202,7 +202,7 @@ def test_acceptance_register_rejects_partial_missing_actual_and_duplicates(tmp_p
     (root / "acceptance.csv").write_text("\n".join(rows) + "\n")
     m["artifacts"]["acceptance.csv"] = hashlib.sha256((root / "acceptance.csv").read_bytes()).hexdigest()
     sign(m, private)
-    assert any("minimum 220" in e for e in verdict(m, root, trusted)["failures"])
+    assert any("canonical checks absent" in e for e in verdict(m, root, trusted)["failures"])
 
 
 def test_generated_template_cannot_be_misread_as_production_pass(tmp_path):
