@@ -10,7 +10,7 @@ type Group={key:string;controller:string;port:number;sites:string[];aps:AP[];fre
 type Window={samples:number;span_minutes:number;link_score:number|null;poor_percent:number|null;snr_db:number|null;rssi_dbm:number|null;mean_clients:number|null;client_measurement_coverage:number|null;arm:{util_percent:number|null;quality_percent:number|null;retry_percent:number|null;coverage:number;repeated_coverage:number};inferred_events:{disconnect:number;roam:number};intelligence_findings_seen:number};
 type ClusterReview={group:Group;state:string;before:Window;after:Window|null;comparison:{state:string;reasons?:string[];link_score_delta?:number;poor_client_percentage_point_delta?:number}|null};
 type Review={id:string;created_at:string;clusters:ClusterReview[]};
-const root="/api/v1/intelligence/wireless-impact";
+const root="/v1/intelligence/wireless-impact";
 const value=(v:number|null|undefined,suffix="")=>v==null?"unavailable":String(Math.round(v*100)/100)+suffix;
 const percent=(v:number|null|undefined)=>v==null?"unavailable":value(v*100,"%");
 export default function WirelessImpactPanel(){
