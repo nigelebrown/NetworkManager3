@@ -41,6 +41,7 @@ READ_ONLY_COMMANDS = (
     "show ap bss-table",
     "show ap arm rf-summary",
     "show ap allowed-channels",
+    "show ap client-match-history",
     "show ap arm history",
     "show ap arm neighbors",
     "show arm config",
