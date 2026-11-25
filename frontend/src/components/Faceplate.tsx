@@ -19,14 +19,15 @@ const bps = (b: number | null | undefined) => b == null ? "—" : b >= 1e9 ? `${
 
 /** Live switch faceplate: port grid in physical order (odd top row, even bottom row like CX hardware). */
 export default function Faceplate({ data, deviceId }: { data: Ports; deviceId: string }) {
-  const [sel, setSel] = useState<Port | null>(null);
+  const [selectedPort, setSelectedPort] = useState<string | null>(null);
+  const sel = data.ports.find(p => p.name === selectedPort) ?? null;
   const ports = [...data.ports].sort((a, b) => Number(a.name.split("/").pop()) - Number(b.name.split("/").pop()));
   const top = ports.filter((_, i) => i % 2 === 0), bottom = ports.filter((_, i) => i % 2 === 1);
   const up = ports.filter(p => p.link === "up").length;
   const poe = ports.reduce((a, p) => a + (p.poe_w ?? 0), 0);
   const hw = data.hardware;
   if (!ports.length) return <p className="text-sm text-slate-500">{data.note ?? "No port data yet."}</p>;
-  const Cell = ({ p }: { p: Port }) => <button aria-label={`Port ${p.name}`} onClick={() => setSel(p)}
+  const Cell = ({ p }: { p: Port }) => <button aria-label={`Port ${p.name}`} onClick={() => setSelectedPort(p.name)}
     title={`${p.name} · ${p.link}${p.vlan ? ` · VLAN ${p.vlan}` : ""}${p.lldp ? ` · ${p.lldp.system_name}` : ""}`}
     className={`relative h-8 w-8 rounded-sm border text-[9px] font-semibold ${sel?.name === p.name ? "border-sky-400" : "border-slate-600"}`}
     style={{ background: portColor(p) }}>
@@ -55,7 +56,7 @@ export default function Faceplate({ data, deviceId }: { data: Ports; deviceId: s
     </div>
     {sel && <div className="rounded-lg border border-slate-700 p-3 text-sm" role="region" aria-label="Port details">
       <div className="flex items-center gap-2"><b>Port {sel.name}</b><Pill value={sel.link} tone={sel.link === "up" ? "good" : "none"} />
-        {sel.admin === "down" && <Pill value="admin down" tone="fair" />}<button className="ml-auto text-xs text-slate-400" onClick={() => setSel(null)}>close</button></div>
+        {sel.admin === "down" && <Pill value="admin down" tone="fair" />}<button className="ml-auto text-xs text-slate-400" onClick={() => setSelectedPort(null)}>close</button></div>
       <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-4">
         <dt className="text-slate-400">Speed / duplex</dt><dd>{speed(sel.speed_bps)} {sel.duplex ?? ""}</dd>
         <dt className="text-slate-400">VLAN</dt><dd>{sel.vlan_mode} {sel.vlan ?? ""}</dd>
@@ -65,7 +66,15 @@ export default function Faceplate({ data, deviceId }: { data: Ports; deviceId: s
         <dt className="text-slate-400">PoE</dt><dd>{sel.poe_w != null ? `${sel.poe_w} W` : "—"} {sel.poe_status ?? ""}</dd>
         <dt className="text-slate-400">Neighbour</dt><dd>{sel.lldp ? `${sel.lldp.system_name} (${sel.lldp.port})` : "—"}</dd>
         <dt className="text-slate-400">Description</dt><dd>{sel.description || "—"}</dd>
+        <dt className="text-slate-400">Packets RX/TX</dt><dd>{sel.rx_packets ?? "—"} / {sel.tx_packets ?? "—"}</dd>
+        <dt className="text-slate-400">RX CRC errors</dt><dd>{sel.rx_crc_errors ?? "—"}</dd>
       </dl>
+      <div className="mt-3 border-t border-slate-700 pt-2"><b>Optical diagnostics</b> · {hw.optical_dom?.state ?? "Not collected"}
+        {sel.optical_dom ? <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 md:grid-cols-4 text-xs">
+          <dt>Module</dt><dd>{sel.optical_dom.type}</dd><dt>Temperature</dt><dd>{sel.optical_dom.temperature_c ?? "—"} °C</dd>
+          <dt>Voltage</dt><dd>{sel.optical_dom.voltage_v ?? "—"} V</dd><dt>TX bias</dt><dd>{sel.optical_dom.tx_bias_ma ?? "—"} mA</dd>
+          <dt>RX power</dt><dd>{sel.optical_dom.rx_power_dbm ?? "—"} dBm</dd><dt>TX power</dt><dd>{sel.optical_dom.tx_power_dbm ?? "—"} dBm</dd>
+        </dl> : <p className="text-xs text-slate-500">No recognized reading for this port. Missing or unsupported readings are not zero.</p>}</div>
       <PortSeries deviceId={deviceId} port={sel.name} />
       <Link className="mt-2 inline-block text-xs text-sky-300" to={`/changes?device=${deviceId}&port=${encodeURIComponent(sel.name)}`}>Plan a change on this port →</Link>
     </div>}
