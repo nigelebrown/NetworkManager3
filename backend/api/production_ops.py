@@ -27,6 +27,7 @@ class CertInput(BaseModel):
     device_id: str
     lab_device_acknowledged: bool = False
     test_port: str | None = None
+    test_auth_port: str | None = Field(default=None, pattern=r"^[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?$")
     test_vlan: int = Field(default=4090, ge=2, le=4094)
     lag_ports: list[str] | None = None
     test_channel: int = 44
