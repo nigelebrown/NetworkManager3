@@ -196,6 +196,10 @@ class CxEmulator:
         body = json.loads(req.content) if req.content else {}
         if p in ("/logs/audit", "/logs/event") and m == "GET":
             return httpx.Response(200, json=copy.deepcopy(self.audit_records[p.rsplit("/", 1)[-1]]))
+        if p == "/firmware" and m == "GET":
+            return httpx.Response(200, json={"current_version": self.state["system"]["software_version"],
+                "primary_version": self.state["system"]["software_version"], "secondary_version": "",
+                "default_image": "primary", "booted_image": "primary"})
         if p == "/system":
             return httpx.Response(200, json=self.state["system"])
         if p == "/system/subsystems":
