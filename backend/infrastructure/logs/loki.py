@@ -44,24 +44,27 @@ class LokiLogStore:
         if r.status_code not in (200, 204):
             raise RuntimeError(f"Loki push failed: HTTP {r.status_code} {r.text[:200]}")
 
-    def query(self, logql: str, since: datetime, limit: int = 200, until: datetime | None = None) -> list[dict]:
+    def query(self, logql: str, since: datetime, limit: int = 200, until: datetime | None = None,
+              direction: str = "backward") -> list[dict]:
         until = until or datetime.now(timezone.utc)
+        if direction not in ("backward", "forward"):
+            raise ValueError("direction must be backward or forward")
         params = {"query": logql, "start": str(int(since.timestamp() * 1e9)), "end": str(int(until.timestamp() * 1e9)),
-                  "limit": str(min(max(limit, 1), 1000)), "direction": "backward"}
+                  "limit": str(min(max(limit, 1), 1000)), "direction": direction}
         r = self._http.get("/loki/api/v1/query_range", params=params)
         if r.status_code != 200:
             raise RuntimeError(f"Loki query failed: HTTP {r.status_code} {r.text[:200]}")
         out = []
         for stream in r.json().get("data", {}).get("result", []):
             for ns, line in stream.get("values", []):
-                entry = {"ts": datetime.fromtimestamp(int(ns) / 1e9, timezone.utc).isoformat(),
+                entry = {"ts": datetime.fromtimestamp(int(ns) / 1e9, timezone.utc).isoformat(), "ns": str(ns),
                          "labels": stream.get("stream", {}), "line": line}
                 try:
                     entry["json"] = json.loads(line)
                 except ValueError:
                     entry["json"] = None
                 out.append(entry)
-        out.sort(key=lambda e: e["ts"], reverse=True)
+        out.sort(key=lambda e: int(e["ns"]), reverse=direction == "backward")
         return out[:limit]
 
     def count_by(self, logql_metric: str, at: datetime | None = None) -> dict[str, float]:
