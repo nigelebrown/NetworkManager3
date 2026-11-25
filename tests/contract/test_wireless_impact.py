@@ -153,3 +153,34 @@ def test_viewer_cannot_freeze_evidence(client,admin,impact):
     _,_,g,_=impact
     r=client.post("/api/v1/intelligence/wireless-impact/reviews",headers=viewer,json={"cluster_keys":[g["key"]]})
     assert r.status_code==403
+
+
+def test_completed_evidence_is_frozen_before_short_arm_history_expires(client,admin,impact,monkeypatch):
+    from backend.api import intelligence as API
+    did,sid,g,m=impact;r=capture(client,admin,g);created=W.utc(r["created_at"])
+    with session_scope() as db:
+        plan=ChangePlan(device_id=did,title="Verified ARM trial",operations=g["operations"],capability_report=[],
+            plan_hash="test",source="OPERATOR",requester="operator",state="APPLIED_VERIFIED",rollback_plan={})
+        db.add(plan);db.flush()
+        db.add(ChangeExecution(plan_id=plan.id,device_id=did,environment="HARDWARE",outcome="APPLIED_VERIFIED",steps=[],
+            executed_by="executor",started_at=created+timedelta(minutes=1),finished_at=created+timedelta(minutes=2)))
+        for n in (15,25,35):
+            db.add(SiteSample(site_id=sid,ts=created+timedelta(minutes=n),aps_total=1,aps_up=1,
+                clients_total=10,exp_score=80,exp_good=9,exp_fair=0,exp_poor=1,simulated=False))
+        snap=deepcopy(m);snap["observed_at"]=(created+timedelta(minutes=35)).isoformat()
+        snap["recent"]=[{"observed_at":(created+timedelta(minutes=n)).isoformat(),"channels":m["channels"],"assignments":m["assignments"]} for n in (15,25)]
+        AD._put(db,"arm-rf:"+did,snap,"test")
+    future=created+timedelta(minutes=45)
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):return future
+    monkeypatch.setattr(W,"datetime",Clock)
+    result=W.tick(session_scope,"test")
+    assert result["updated"]>=1
+    with session_scope() as db:
+        saved=db.get(AppSetting,W.PREFIX+r["id"]).value
+        assert saved["complete"] and saved["completed"][g["key"]]["state"]=="OBSERVED_LINK_IMPROVEMENT"
+        AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
+    monkeypatch.setattr(API,"_now",lambda:future+timedelta(days=1))
+    row=client.get("/api/v1/intelligence/wireless-impact/reviews/"+r["id"],headers=admin).json()["clusters"][0]
+    assert row["state"]=="OBSERVED_LINK_IMPROVEMENT" and row["after"]["link_score"]==80
