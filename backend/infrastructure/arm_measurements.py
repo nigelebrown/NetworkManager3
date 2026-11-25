@@ -1,6 +1,7 @@
 """Persisted, bounded read-only ARM measurement collection for real Instant APs."""
 from __future__ import annotations
 import ipaddress
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -130,6 +131,9 @@ def collect(db, device, actor="arm-collector", *, client=None):
                                  timeout=8,verify=get_settings().tls_verify_arg)
             transport = "REST_TARGETED_AP" if target_ip else "REST_DIRECT_AP"
     identity = {"verified":False,"method":"UNAVAILABLE"}
+    native_attempt = None
+    native_result = None
+    native_error = None
     try:
         for key,command in arm.COMMANDS.items():
             try:
@@ -153,10 +157,23 @@ def collect(db, device, actor="arm-collector", *, client=None):
                 identity = _identity(client, outputs, device, target_ip)
             except Exception as exc:
                 errors["identity_read"] = type(exc).__name__
+        if os.environ.get("INM_CLIENT_MATCH_HISTORY", "false").lower() == "true" and site and site.enabled and not site.simulated:
+            from . import client_match_history as CM
+            native_attempt = datetime.now(timezone.utc)
+            try:
+                if not _identity(client, {}, device, target_ip)["verified"]:
+                    raise ValueError("ClientMatch target serial not verified")
+                raw = output_text(client.show(CM.COMMAND, iap_ip=target_ip) if target_ip else client.show(CM.COMMAND))
+                native_attempt = datetime.now(timezone.utc)
+                native_result = CM.parse(raw, site_id=device.legacy_site_id, collected=native_attempt)
+            except Exception as exc:
+                native_error = type(exc).__name__
     finally:
         if owned:
             client.close()
     now = datetime.now(timezone.utc)
+    if native_attempt is not None:
+        CM.save(db, device, native_result, collected=native_attempt, failure=native_error)
     old = snapshot(db,device.id)
     parsed = arm.parse(outputs)
     if outputs and not identity["verified"]:
