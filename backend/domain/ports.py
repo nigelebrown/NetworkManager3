@@ -48,7 +48,8 @@ class TelemetryStorePort(Protocol):
 @runtime_checkable
 class LogStorePort(Protocol):
     def push(self, labels: dict[str, str], line: str, ts: datetime) -> None: ...
-    def query(self, logql: str, since: datetime, limit: int) -> list[dict]: ...
+    def query(self, logql: str, since: datetime, limit: int, until: datetime | None = None,
+              direction: str = "backward") -> list[dict]: ...
 
 
 @runtime_checkable
