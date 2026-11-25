@@ -20,7 +20,7 @@ SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.po
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
                      "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
                      "switch.port.stp_bpdu_guard", "switch.port.storm_control", "switch.port.qos_trust",
-                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog"}
+                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog", "switch.vlan.voice", "switch.port.auth_enable"}
 # Operations whose secret (PSK / RADIUS shared secret) is referenced by an encrypted credential profile id.
 # Plans never contain the secret itself; the executor resolves it only at apply time.
 SECRET_REF_OPS = {"ap.ssid.create", "ap.ssid.enterprise"}
@@ -196,6 +196,21 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
         if port and uplink_ports and port in uplink_ports and kind in (
                 "switch.port.admin_state", "switch.port.access_vlan"):
             raise PolicyViolation(f"Port {port} is a protected uplink; refusing {kind}.")
+        if kind == "switch.vlan.voice":
+            if type(op.get("vlan")) is not int or not 2 <= op["vlan"] <= 4094:
+                raise PolicyViolation("Select an existing non-default VLAN (2–4094).")
+            if op.get("value") not in ("enabled", "disabled") or op.get("acknowledge_voice_change") is not True:
+                raise PolicyViolation("Explicitly acknowledge the voice VLAN advertisement change.")
+        if kind == "switch.port.auth_enable":
+            import re
+            if not isinstance(port, str) or not re.fullmatch(r"[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?", port):
+                raise PolicyViolation("Select a physical access port.")
+            if uplink_ports and port in uplink_ports:
+                raise PolicyViolation("Port authentication is prohibited on protected uplinks.")
+            if op.get("method") not in ("dot1x", "mac-auth") or op.get("acknowledge_auth_change") is not True:
+                raise PolicyViolation("Select 802.1X or MAC authentication and acknowledge the access-policy change.")
+            if op.get("value") != "enabled":
+                raise PolicyViolation("Only enabling an existing authentication method is supported; disabling it can bypass NAC.")
         if kind in ("switch.vlan.define", "switch.port.access_vlan"):
             v = op.get("value")
             if not (isinstance(v, int) and 1 <= v <= 4094):
