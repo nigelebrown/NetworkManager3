@@ -269,6 +269,9 @@ def execute_deployment(batch_id: str, body: ExecuteInput, request: Request, db: 
         targets = {p.device_id: db.get(InmDevice, p.device_id) for p in approved}
         if any(d is None for d in targets.values()):
             raise HTTPException(409, "A planned device no longer exists.")
+        sources = {d.source_type for d in targets.values()}
+        if len(sources) > 1:
+            raise HTTPException(409, "Do not mix real and emulated devices in one approved deployment wave.")
         hardware = any(d.source_type != "DEMO" for d in targets.values())
         # Production canaries default to one target, and all subsequent waves
         # stay within one physical site. Emulator runs retain existing semantics.
@@ -311,7 +314,11 @@ def execute_deployment(batch_id: str, body: ExecuteInput, request: Request, db: 
               detail=f"executed={len(out)} stopped_at={stopped} wave_size={limit}", request=request)
         return {"batch_id": batch_id, "executed": out, "stopped_at": stopped, "progress": progress, "wave": state.value}
     except WriterError as exc:
+        db.rollback()
         raise HTTPException(409, exc.category) from None
+    except Exception:
+        db.rollback()
+        raise
     finally:
         _release(db, lease, holder)
         db.commit()
