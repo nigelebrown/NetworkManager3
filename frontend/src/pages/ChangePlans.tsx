@@ -36,6 +36,9 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "ap.ssid.roaming", label: "SSID fast roaming (802.11k/v/r)", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" },
       { key: "dot11k", label: "802.11k", kind: "select", options: ["enabled", "disabled"] }, { key: "dot11v", label: "802.11v", kind: "select", options: ["enabled", "disabled"] },
       { key: "dot11r", label: "802.11r (client compatibility required)", kind: "select", options: ["disabled", "enabled"] }] },
+    { op: "ap.ssid.guest_auth", label: "Existing guest captive portal and MAC roles", fields: [{ key: "ssid", label: "Existing guest SSID", kind: "text" },
+      { key: "portal_profile", label: "Existing external portal profile", kind: "text" }, { key: "pre_auth_role", label: "Existing pre-auth role", kind: "text" },
+      { key: "mac_role", label: "Existing MAC-auth role", kind: "text" }, { key: "acknowledge_guest_auth_change", label: "Acknowledge authentication changes", kind: "select", options: ["no", "yes"] }] },
     { op: "ap.ssid.accounting", label: "SSID RADIUS accounting", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" }, { key: "value", label: "Accounting", kind: "select", options: ["enabled", "disabled"] },
       { key: "interval_minutes", label: "Interim interval minutes (required when enabled)", kind: "int", optional: true }] },
     { op: "ap.ssid.vlan", label: "SSID VLAN", fields: [{ key: "ssid", label: "SSID", kind: "text" }, { key: "value", label: "VLAN", kind: "int" }] },
@@ -64,7 +67,7 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
     for (const f of def.fields) {
       const v = vals[f.key] ?? (f.options?.[0] ?? "");
       if (f.optional && !v.trim()) continue;
-      o[f.key] = def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
+      o[f.key] = f.key === "acknowledge_guest_auth_change" ? v === "yes" : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "ips" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "int" || (f.key === "value" && def.op === "ap.radio.width") ? Number(v)
         : f.kind === "list" ? v.split(/[\s,]+/).filter(Boolean).map(Number) : v;
