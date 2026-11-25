@@ -95,14 +95,26 @@ def _check_artifacts(artifacts: Any, root: Path, errors: list[str]) -> dict[str,
     return result
 
 
+def required_acceptance_checks() -> dict[str, str]:
+    """Return the exact canonical test IDs and phases for this source release."""
+    source = Path(__file__).resolve().parents[2] / "docs" / "Unified_Acceptance_Register_v4.csv"
+    with source.open("r", encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    required = {r["test_id"].strip(): r["phase"].strip() for r in rows}
+    if len(required) < 220 or len(required) != len(rows) or "" in required:
+        raise ValueError("Canonical acceptance register is invalid.")
+    return required
+
+
 def _acceptance_register(manifest: dict, evidence_root: Path,
                          artifacts: dict[str, str], errors: list[str]) -> dict:
-    """Verify the 220-check acceptance register is complete, not merely a signed summary."""
+    """Require every canonical acceptance check, with real hashed artifact references."""
     rel = manifest.get("acceptance_register")
     if not isinstance(rel, str) or rel not in artifacts:
         errors.append("acceptance: register CSV not present in SHA-256-verified evidence")
         return {"total": 0, "passed": 0}
     try:
+        canonical = required_acceptance_checks()
         path = (evidence_root.resolve() / rel).resolve()
         with path.open("r", encoding="utf-8-sig", newline="") as fh:
             table = csv.DictReader(fh)
@@ -110,21 +122,28 @@ def _acceptance_register(manifest: dict, evidence_root: Path,
             if not table.fieldnames or not required.issubset(set(table.fieldnames)):
                 raise ValueError("missing acceptance register columns")
             rows = list(table)
-    except (OSError, UnicodeError, ValueError, csv.Error) as exc:
+    except (OSError, UnicodeError, ValueError, csv.Error, KeyError) as exc:
         errors.append(f"acceptance: unable to read register ({type(exc).__name__})")
         return {"total": 0, "passed": 0}
     ids = [str(r.get("test_id") or "").strip() for r in rows]
-    failures = [r for r in rows if str(r.get("status") or "").strip().upper() != "PASS" or
-                not str(r.get("actual_result") or "").strip() or
-                not str(r.get("artifact_link") or "").strip()]
-    if len(rows) < 220:
-        errors.append(f"acceptance: only {len(rows)} rows; minimum 220 required")
+    missing = sorted(set(canonical) - set(ids))
+    if missing:
+        errors.append(f"acceptance: {len(missing)} canonical checks absent ({', '.join(missing[:8])})")
     if len(set(ids)) != len(ids) or any(not x for x in ids):
         errors.append("acceptance: blank or duplicate test IDs")
+    def valid(row):
+        tid = str(row.get("test_id") or "").strip()
+        phase = str(row.get("phase") or "").strip()
+        refs = [x.strip() for x in str(row.get("artifact_link") or "").split(";") if x.strip()]
+        return (tid in canonical and canonical[tid] == phase
+                and str(row.get("status") or "").strip().upper() == "PASS"
+                and bool(str(row.get("actual_result") or "").strip())
+                and bool(refs) and all(ref in artifacts and ref != rel for ref in refs))
+    failures = [r for r in rows if not valid(r)]
     if failures:
         examples = ", ".join(str(r.get("test_id") or "?") for r in failures[:8])
         errors.append(f"acceptance: {len(failures)} rows not independently evidenced PASS ({examples})")
-    return {"total": len(rows), "passed": len(rows) - len(failures)}
+    return {"total": len(rows), "passed": len(rows) - len(failures), "required": len(canonical)}
 
 
 def _signatures(manifest: dict, keyring: Any, errors: list[str]) -> None:
@@ -138,17 +157,19 @@ def _signatures(manifest: dict, keyring: Any, errors: list[str]) -> None:
     payload = signed_payload(manifest)
     roles: set[str] = set()
     used: set[str] = set()
-    prepared_by = manifest.get("prepared_by")
+    public_keys: set[bytes] = set()
+    prepared_by = str(manifest.get("prepared_by") or "").strip().casefold()
     for signer in signoffs:
         if not isinstance(signer, dict) or not isinstance(signer.get("reviewer"), str):
             errors.append("signoff: malformed signer record")
             continue
         name = signer["reviewer"]
         info = keyring["reviewers"].get(name)
-        if name in used or name == prepared_by or not isinstance(info, dict):
+        normalized = name.strip().casefold()
+        if not normalized or normalized in used or normalized == prepared_by or not isinstance(info, dict):
             errors.append(f"signoff:{name}: duplicate, prepared-by, or untrusted reviewer")
             continue
-        used.add(name)
+        used.add(normalized)
         role = info.get("role")
         if role not in ("security", "operations"):
             errors.append(f"signoff:{name}: incorrect trusted reviewer role")
@@ -158,7 +179,10 @@ def _signatures(manifest: dict, keyring: Any, errors: list[str]) -> None:
             sig = base64.b64decode(signer["signature"], validate=True)
             if len(pk) != 32 or len(sig) != 64:
                 raise ValueError("invalid Ed25519 key/signature length")
+            if pk in public_keys:
+                raise ValueError("reviewer public key is already used")
             Ed25519PublicKey.from_public_bytes(pk).verify(sig, payload)
+            public_keys.add(pk)
         except Exception as exc:  # untrusted signature/key format; never leak key material
             errors.append(f"signoff:{name}: invalid signature ({type(exc).__name__})")
             continue
@@ -212,6 +236,7 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
         models = []
         errors.append("hardware: device_certifications must be a list")
     counts: dict[str, int] = {}
+    serials: set[str] = set()
     for device in models:
         if not isinstance(device, dict):
             errors.append("hardware: malformed model record")
@@ -227,6 +252,11 @@ def evaluate(manifest: Any, *, evidence_root: Path, trusted_keyring: Any,
             not isinstance(device.get("serial_number"), str) or not device["serial_number"].strip() or
             device["serial_number"].upper().startswith(("EMU", "DEMO"))):
             errors.append(f"hardware:{model}: physical serial/firmware/environment not evidenced")
+        serial = str(device.get("serial_number") or "").strip().casefold()
+        if serial and serial in serials:
+            errors.append(f"hardware:{model}: physical serial is reused across model records")
+        if serial:
+            serials.add(serial)
         for check in DEVICE_CHECKS:
             checks = device.get("checks")
             _check_references(f"hardware:{model}:{check}",
