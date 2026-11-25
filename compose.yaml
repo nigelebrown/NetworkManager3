@@ -277,6 +277,7 @@ services:
       INM_SCHEDULED_COLLECTION: ${INM_SCHEDULED_COLLECTION:-true}
       INM_SCHEDULED_DEVICE_LOGS: ${INM_SCHEDULED_DEVICE_LOGS:-false}
       INM_CLIENT_MATCH_HISTORY: ${INM_CLIENT_MATCH_HISTORY:-false}
+      INM_CX_OPTICAL_DOM: ${INM_CX_OPTICAL_DOM:-false}
     volumes:
       - app-data:/data
       # Non-secret host-applied exact-IP approval status: read-only in API/worker.
