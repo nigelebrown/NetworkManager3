@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 ALLOWED_WIDTHS_MHZ = (20, 40)          # 80/160 MHz are never permitted
 APPROVAL_TTL = timedelta(hours=24)
 AP_OPERATIONS = {"ap.radio.channel", "ap.radio.width", "ap.radio.tx_power", "ap.ssid.vlan",
-                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise"}
+                 "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise",
+                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"}
 SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
                      "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
@@ -42,6 +43,42 @@ class PolicyViolation(ValueError):
     pass
 
 
+# Standard 40-MHz primary/secondary pairs for the supported 5-GHz channel set.
+# Device regulatory domain and local policy remain additional constraints.
+PAIR_5G = {36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157}
+
+
+def channel_components(value) -> set[int]:
+    import re
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,3}\+?", value):
+        raise PolicyViolation("Allowed channels must use 20-MHz channel numbers or 40-MHz lower-channel '+' notation.")
+    ch = int(value.rstrip("+"))
+    if ch not in VALID_5G or (value.endswith("+") and ch not in PAIR_5G):
+        raise PolicyViolation("Invalid 5-GHz channel or 40-MHz channel pair.")
+    return {ch, ch + 4} if value.endswith("+") else {ch}
+
+
+def normalize_channel_list(values, *, excluded_channels=None, allow_dfs=False) -> list[str]:
+    if not isinstance(values, list) or not 1 <= len(values) <= 48:
+        raise PolicyViolation("Supply a nonempty list of at most 48 allowed 5-GHz channels.")
+    tokens = []
+    for value in values:
+        components = channel_components(value)
+        if components & (excluded_channels or set()):
+            raise PolicyViolation("An allowed channel or bonded secondary channel is excluded by site policy.")
+        if components & DFS_5G and not allow_dfs:
+            raise PolicyViolation("DFS channels require an approved site compatibility profile.")
+        tokens.append(str(int(str(value).rstrip("+"))) + ("+" if str(value).endswith("+") else ""))
+    if len(set(tokens)) != len(tokens):
+        raise PolicyViolation("Duplicate allowed channel.")
+    if not any(not t.endswith("+") for t in tokens):
+        raise PolicyViolation("Include at least one 20-MHz channel.")
+    return sorted(tokens, key=lambda t: (int(t.rstrip("+")), t.endswith("+")))
+
+
+
 def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | None = None,
                        allow_dfs: bool = False, uplink_ports: set[str] | None = None) -> dict:
     """Validate one typed operation. Raises PolicyViolation before any adapter is involved."""
@@ -59,6 +96,25 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
     if family == "access_point":
         if kind not in AP_OPERATIONS:
             raise PolicyViolation(f"Operation {kind!r} is not an AP operation.")
+        if kind == "ap.radio.allowed_channels":
+            channels = normalize_channel_list(op.get("value"), excluded_channels=excluded_channels, allow_dfs=allow_dfs)
+            # The approval binds the validated channel set and explicit DFS permission.
+            return {**op, "value": channels, "allow_dfs": bool(allow_dfs)}
+        if kind in ("ap.ssid.roaming", "ap.ssid.accounting"):
+            import re as _re
+            if not isinstance(op.get("ssid"), str) or not _re.fullmatch(_NAME, op["ssid"]):
+                raise PolicyViolation("An existing SSID profile name is required (1–32 safe characters).")
+            if kind == "ap.ssid.roaming":
+                if any(op.get(k) not in ("enabled", "disabled") for k in ("dot11k", "dot11v", "dot11r")):
+                    raise PolicyViolation("Specify enabled or disabled for each of 802.11k, 802.11v and 802.11r.")
+            else:
+                if op.get("value") not in ("enabled", "disabled"):
+                    raise PolicyViolation("RADIUS accounting must be enabled or disabled.")
+                interval = op.get("interval_minutes")
+                if op["value"] == "enabled" and (type(interval) is not int or not 0 <= interval <= 60):
+                    raise PolicyViolation("Enabled accounting requires an interim interval of 0–60 minutes.")
+                if op["value"] == "disabled" and interval is not None:
+                    raise PolicyViolation("Do not specify an interim interval when disabling accounting.")
         if kind == "ap.radio.width":
             if op.get("value") not in ALLOWED_WIDTHS_MHZ:
                 raise PolicyViolation("Channel width must be 20 or 40 MHz; 80/160 MHz are refused.")
