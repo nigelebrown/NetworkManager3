@@ -29,7 +29,7 @@ CX_TYPED_OPS = ("switch.vlan.define", "switch.port.access_vlan", "switch.port.tr
                 "switch.system.syslog", "config.restore")
 INSTANT_TYPED_OPS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
                      "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness",
-                     "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels")
+                     "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth")
 
 
 @dataclass(frozen=True)
