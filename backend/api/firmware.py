@@ -100,6 +100,38 @@ def plan_upgrade(site_id: int, body: UpgradeBody, request: Request, db: Session 
                                                                allow_downgrade=body.allow_downgrade, request=request)))
 
 
+# ---- firmware follow-through --------------------------------------------------------------------------------------
+@router.get("/sites/{site_id}/upgrade/history")
+def upgrade_history(site_id: int, db: Session = Depends(get_db), admin: User = Depends(require_role("admin"))):
+    _site(db, site_id)
+    return [change_out(c) for c in db.scalars(select(ConfigChange).where(
+        ConfigChange.site_id == site_id, ConfigChange.kind == "firmware_stage")
+        .order_by(ConfigChange.id.desc()).limit(50))]
+
+
+def _upgrade_change(db, change_id):
+    change = db.get(ConfigChange, change_id)
+    if not change or change.kind != "firmware_stage":
+        raise HTTPException(404, "Firmware change not found.")
+    return change
+
+
+@router.post("/upgrades/{change_id}/verify")
+def verify_upgrade(change_id: int, request: Request, db: Session = Depends(get_db),
+                   admin: User = Depends(require_role("admin"))):
+    change = _upgrade_change(db, change_id)
+    return _plan_guard(lambda: upgrade.verify_members(db, change, _site(db, change.site_id),
+                                                     admin.username, request=request))
+
+
+@router.post("/upgrades/{change_id}/recovery-plan", status_code=201)
+def recovery_plan(change_id: int, body: UpgradeBody, request: Request, db: Session = Depends(get_db),
+                  admin: User = Depends(require_role("admin"))):
+    change = _upgrade_change(db, change_id)
+    return change_out(_plan_guard(lambda: upgrade.plan_recovery(db, change, _site(db, change.site_id),
+                                                               admin.username, body.image_ids, request=request)))
+
+
 # ---- certificate --------------------------------------------------------------------------------------------------
 @router.post("/sites/{site_id}/certificate/plan", status_code=201)
 def plan_certificate(site_id: int, request: Request, file: UploadFile = File(...), passphrase: str = Form(...),
