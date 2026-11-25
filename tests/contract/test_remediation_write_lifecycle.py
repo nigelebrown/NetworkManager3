@@ -341,7 +341,8 @@ def test_certification_stops_when_rollback_does_not_restore_baseline(env):
     assert [r["operation"] for r in result["results"]] == [
         "read.backup_full_config", "switch.vlan.define", "config.restore"]
     assert result["results"][1]["evidence"]["rollback_restored"] is False
-    assert result["results"][-1]["passed"] is True
+    assert result["results"][-1]["passed"] is False
+    assert "Restore drill skipped" in result["results"][-1]["evidence"]["error"]
 
 
 def test_instant_backup_uses_stable_full_fidelity_read_without_redaction():
