@@ -309,6 +309,31 @@ def ports(device_id: str, db: Session = Depends(get_db), user: User = Depends(re
             "ports": s.ports, "hardware": s.hardware}
 
 
+@router.get("/devices/{device_id}/firmware-status")
+def switch_firmware_status(device_id: str, request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(require_any_role("admin", "operator", "auditor"))):
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    if d.family != "switch" or d.vendor.casefold() != "aruba":
+        raise HTTPException(422, "This resource is supported for Aruba CX switches only.")
+    try:
+        w, env = X.reader_for(db, d)
+        try:
+            w.open()
+            if env == "HARDWARE":
+                identity = w.identity()
+                if not identity.get("serial_number") or identity["serial_number"].casefold() != d.serial_number.casefold():
+                    raise WriterError("IDENTITY_UNVERIFIED", "Switch serial does not match registered inventory.")
+            result = w.firmware_status()
+        finally:
+            w.close()
+    except WriterError as exc:
+        raise HTTPException(409, exc.category) from None
+    audit(db, "firmware_status_read", username=user.username, target=d.id,
+          detail=f"state={result['state']} environment={env}", request=request)
+    return {"device_id": d.id, "environment": env, "device_writes": 0, **result}
+
+
 @router.get("/devices/{device_id}/authority")
 def authority(device_id: str, request: Request, db: Session = Depends(get_db),
               user: User = Depends(require_role("operator"))):
