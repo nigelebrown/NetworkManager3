@@ -274,13 +274,37 @@ class CxEmulator:
             if vid in self.state["vlans"]:
                 return httpx.Response(400, text="VLAN exists")
             if not self.lie:
-                self.state["vlans"][vid] = {"id": body["id"], "name": body.get("name")}
+                self.state["vlans"][vid] = {"id": body["id"], "name": body.get("name"), "type": "static", "voice": False}
             return httpx.Response(201)
-        if p.startswith("/system/vlans/") and m == "GET":
+        if p.startswith("/system/vlans/") and m in ("GET", "PUT"):
             v = self.state["vlans"].get(p.rsplit("/", 1)[-1])
-            return httpx.Response(200, json=v) if v else httpx.Response(404)
+            if v is None:
+                return httpx.Response(404)
+            if m == "GET":
+                return httpx.Response(200, json=v)
+            if set(body) - {"id", "name", "type", "voice"} or body.get("id") != v["id"] or type(body.get("voice")) is not bool:
+                return httpx.Response(400, text="Invalid writable VLAN configuration")
+            self.writes += 1
+            if not self.lie:
+                v.update(copy.deepcopy(body))
+            return httpx.Response(204)
         if p.startswith("/system/interfaces/"):
             rest = p[len("/system/interfaces/"):]
+            if "/port_access_auth_configurations/" in rest:
+                name, method = rest.split("/port_access_auth_configurations/", 1)
+                item = self.state["interfaces"].get(name, {}).get("auth_methods", {}).get(method)
+                if item is None:
+                    return httpx.Response(404)
+                if m == "GET":
+                    return httpx.Response(200, json=item)
+                if m == "PATCH":
+                    if set(body) != {"auth_enable", "cached_reauth_enable", "canned_eap_success_enable"} or any(type(v) is not bool for v in body.values()):
+                        return httpx.Response(400, text="Invalid authentication attributes")
+                    self.writes += 1
+                    if not self.lie:
+                        item.update(body)
+                    return httpx.Response(204)
+                return httpx.Response(405)
             if rest.endswith("/lldp_neighbors"):
                 it = self.state["interfaces"].get(rest[: -len("/lldp_neighbors")])
                 if it is None:
