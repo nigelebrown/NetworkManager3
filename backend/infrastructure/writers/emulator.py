@@ -56,8 +56,9 @@ class CxEmulator:
                            for i in range(1, ports + 1)},
         }
         # Explicit synthetic AAA baseline on the designated certification port.
-        if "1/1/24" in self.state["interfaces"]:
-            self.state["interfaces"]["1/1/24"].update({
+        lab_port = f"1/1/{min(ports, 24)}"
+        if lab_port in self.state["interfaces"]:
+            self.state["interfaces"][lab_port].update({
                 "port_access_auth_mode": "client-mode",
                 "auth_methods": {method: {"authentication_method": method,
                     "radius_server_group": "LAB-RADIUS", "auth_enable": False,
