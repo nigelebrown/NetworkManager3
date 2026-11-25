@@ -611,7 +611,13 @@ TEST_OPS = {
         {"op": "ap.ssid.enterprise", "ssid": "INM-CERT-1X", "vlan": t.get("test_vlan", 100), "radius_name": "inm-cert",
          "radius_ip": t.get("test_radius", "192.0.2.80"), "security": "wpa2-enterprise",
          "_secret": "cert-" + __import__("secrets").token_hex(8)},
-    ] + ([{"op": "ap.ssid.vlan", "ssid": t["test_ssid"], "value": t.get("test_vlan", 100)}] if t.get("test_ssid") else []),
+    ] + ([{"op": "ap.ssid.vlan", "ssid": t["test_ssid"], "value": t.get("test_vlan", 100)},
+          {"op": "ap.ssid.roaming", "ssid": t["test_ssid"], "dot11k": "enabled", "dot11v": "enabled", "dot11r": "enabled"}]
+         if t.get("test_ssid") else [])
+      + ([{"op": "ap.ssid.accounting", "ssid": t["test_enterprise_ssid"], "value": "enabled", "interval_minutes": 10}]
+         if t.get("test_enterprise_ssid") else [])
+      + ([{"op": "ap.radio.allowed_channels", "value": t["test_allowed_channels"]}]
+         if t.get("test_allowed_channels") else []),
 }
 
 
@@ -624,6 +630,19 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
         raise WriterError("WRITES_DISABLED", "Certification writes to a lab device; enable device writes first.")
     if control(db).emergency_stop:
         raise WriterError("EMERGENCY_STOP", "Emergency stop is active.")
+    test = dict(test)
+    if env == "EMULATED" and device.family == "access_point":
+        test["test_ssid"] = test.get("test_ssid") or "Corp-WiFi"
+        test["test_enterprise_ssid"] = test.get("test_enterprise_ssid") or "INM-LAB-1X"
+        test["test_allowed_channels"] = test.get("test_allowed_channels") or ["36", "40", "44", "48"]
+    test_ops = TEST_OPS[device.family](test)
+    try:
+        validate_site_rf_policy(db, device, test_ops)
+        for op in test_ops:
+            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
+                CC.validate_operation(op, family="access_point")
+    except CC.PolicyViolation as exc:
+        raise WriterError("INVALID", str(exc)) from None
     if writer is None:
         writer, env = writer_for(db, device)
     spec = resolve(device.vendor, device.family, device.model)
@@ -640,7 +659,7 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
             base = writer.backup()
             seal_artifact(db, device, base, trigger="MANUAL", actor=actor, source="CERTIFICATION_BASELINE")
             results.append({"operation": "read.backup_full_config", "passed": bool(base), "evidence": {"bytes": len(base)}})
-            for op in TEST_OPS[device.family](test):
+            for op in test_ops:
                 public_op = {k: v for k, v in op.items() if k != "_secret"}
                 ev = {"op": public_op}
                 cp = None
