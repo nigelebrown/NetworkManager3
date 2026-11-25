@@ -103,6 +103,36 @@ def ssid_settings(lines: list[str] | None) -> dict:
     return result
 
 
+def regulatory_channels(text: str) -> tuple[str, set[str]]:
+    """Read documented 5 GHz 20/40 MHz regulatory rows; use the indoor/outdoor intersection."""
+    country = re.search(r"(?im)^Allowed Channels for AP Type\s+\S+\s+Country Code\s+([A-Z]{2})\s*$", text)
+    if not country:
+        raise WriterError("PRECONDITION", "Regulatory domain is unavailable.")
+    rows = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*(?:5\s*GHz|802\.11a)(?:\s+(40)\s*MHz)?\s*\((indoor|outdoor)\)\s+(.+?)\s*", line, re.I)
+        if not match:
+            continue
+        width, placement, raw = match.groups()
+        key = (int(width or 20), placement.lower())
+        if key in rows:
+            raise WriterError("PRECONDITION", "Duplicate regulatory channel row.")
+        tokens = set()
+        for value in raw.split():
+            if width and re.fullmatch(r"[0-9]{1,3}-[0-9]{1,3}", value):
+                lo, hi = map(int, value.split("-"))
+                if hi == lo + 4:
+                    tokens.add(str(lo) + "+")
+            elif not width and value.isdecimal():
+                tokens.add(str(int(value)))
+        rows[key] = tokens
+    if (20, "indoor") not in rows or (20, "outdoor") not in rows:
+        raise WriterError("PRECONDITION", "Unrecognized 5 GHz regulatory channel output.")
+    allowed = rows[(20, "indoor")] & rows[(20, "outdoor")]
+    allowed |= rows.get((40, "indoor"), set()) & rows.get((40, "outdoor"), set())
+    return country.group(1).upper(), allowed
+
+
 def _ssid_header(op):
     if not NAME_RE.fullmatch(str(op.get("ssid", ""))):
         raise WriterError("INVALID", "Invalid SSID profile.")
@@ -465,6 +495,32 @@ class ArubaInstantWriter:
         return [{"transport": "SSH-CONFIG", "host": self.creds.host,
                  "lines": ["configure terminal", *lines, "end", "commit apply"]}]
 
+    def _check_cluster_channels(self, tokens: list[str]) -> None:
+        """Check each represented supported model against its reported country/channel table."""
+        from ...aruba import parsers
+        from ...aruba.errors import ArubaError
+        try:
+            members = parsers.normalize_aps(parsers.extract_rows(self.client.show("show aps"), "show aps"))
+            representatives = {}
+            for member in members:
+                model = str(member.get("model") or "").upper()
+                if model not in ("AP-505", "AP-535") or not member.get("ip"):
+                    raise WriterError("PRECONDITION", "Cluster membership or model is outside the verified channel scope.")
+                representatives[model] = member["ip"]
+            if not representatives or not any(m.get("ip") == self.ap_ip for m in members):
+                raise WriterError("PRECONDITION", "The selected AP is not in the returned cluster membership.")
+            countries = set()
+            for target in representatives.values():
+                raw = parsers.output_text(self.client.show("show ap allowed-channels", iap_ip=target)) or ""
+                country, allowed = regulatory_channels(raw)
+                countries.add(country)
+                if not set(tokens) <= allowed:
+                    raise WriterError("PRECONDITION", "Requested channels are not in the reported regulatory intersection.")
+            if len(countries) != 1:
+                raise WriterError("PRECONDITION", "Cluster members report inconsistent regulatory domains.")
+        except ArubaError:
+            raise WriterError("PRECONDITION", "Could not verify cluster regulatory channels.") from None
+
     def apply(self, op: dict) -> list[dict]:
         from ...aruba.errors import ArubaError
         prior = getattr(self, "_cp", None)
@@ -489,6 +545,7 @@ class ArubaInstantWriter:
                         raise WriterError("PRECONDITION", "An explicit, restorable 20/40 MHz channel baseline is required.") from None
                 if arm["wide-bands"] == "none" and any(t.endswith("+") for t in op["value"]):
                     raise WriterError("PRECONDITION", "40-MHz allowed channels need a 40-MHz width policy.")
+                self._check_cluster_channels(op["value"])
             else:
                 header = _ssid_header(op)
                 block = cli_block(text, header)
