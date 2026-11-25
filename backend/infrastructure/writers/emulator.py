@@ -350,6 +350,22 @@ wlan ssid-profile INM-LAB-1X
  opmode wpa2-aes
  auth-server INM-LAB-RADIUS
  vlan 100
+wlan external-captive-portal LAB-PORTAL-A
+ server portal-a.example.test
+wlan external-captive-portal LAB-PORTAL-B
+ server portal-b.example.test
+wlan access-rule LAB-PRE
+ rule any any match any any any deny
+wlan access-rule LAB-MAC
+ rule any any match any any any deny
+wlan ssid-profile INM-LAB-GUEST
+ essid INM-LAB-GUEST
+ type guest
+ vlan 100
+ captive-portal external profile LAB-PORTAL-A
+ mac-authentication
+ set-role-pre-auth LAB-PRE
+ set-role-mac-auth LAB-MAC
 """
 
 
