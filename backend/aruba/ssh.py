@@ -240,6 +240,8 @@ _ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
     r"^radius-interim-accounting-interval (?:[0-9]|[1-5][0-9]|60)(?: (?:[0-9]|[1-5][0-9]))?$",
     r"^no radius-interim-accounting-interval$",
     r"^a-channels [0-9]{1,3}\+?(?:,[0-9]{1,3}\+?){0,47}$",
+    r"^captive-portal external profile [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^mac-authentication$", r"^set-role-(pre-auth|mac-auth) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
 )]
 
 
