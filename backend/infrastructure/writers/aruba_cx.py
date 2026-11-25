@@ -308,6 +308,20 @@ class ArubaCxWriter:
         return {"model": d.get("platform_name"), "firmware": d.get("software_version"), "hostname": d.get("hostname"),
                 "serial_number": d.get("serial_number"), **self.protocol()}
 
+    def firmware_status(self) -> dict:
+        """Documented AOS-CX REST singleton, read-only; never stage or reboot."""
+        data = self._req("GET", "/firmware").json()
+        keys = ("current_version", "primary_version", "secondary_version", "default_image", "booted_image")
+        if not isinstance(data, dict) or not isinstance(data.get("current_version"), str) or not data["current_version"].strip():
+            raise WriterError("PARSE_ERROR", "Firmware status response is incomplete.")
+        result = {key: data[key][:128] if isinstance(data.get(key), str) and data[key].strip() else None for key in keys}
+        for slot in ("default_image", "booted_image"):
+            if result[slot] not in ("primary", "secondary"):
+                result[slot] = None
+        result["state"] = "COLLECTED" if all(result.get(k) for k in ("current_version", "default_image", "booted_image")) else "PARTIAL"
+        result["source"] = "CX_REST_FIRMWARE"
+        return result
+
     def telemetry(self) -> dict:
         """READ-ONLY monitoring: identity, CPU/memory, hardware health, every port (link, speed, VLAN,
         counters), PoE per port and LLDP neighbours. Tolerant of attributes a firmware does not expose."""
