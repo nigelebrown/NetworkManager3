@@ -54,3 +54,23 @@ def test_invalid_device_calendar_timestamp_is_not_accepted(monkeypatch):
     monkeypatch.setattr(cm,"get_settings",lambda:type("Settings",(),{"jwt_secret":"test-key"})())
     parsed=cm.parse(table(f"{MAC} Normal Normal Client associated 0 2026-19-55 09:18:05"),site_id=2,collected=NOW)
     assert parsed["state"]=="PARTIAL" and not parsed["records"]
+
+
+def test_device_local_actions_are_not_inserted_in_a_utc_journey(client,admin,monkeypatch):
+    from backend.database.models import Site,ClientRecord
+    from backend.database.models_inm import InmDevice
+    from backend.database.session import session_scope
+    now=datetime.now(timezone.utc)
+    with session_scope() as db:
+        site=Site(name="Native actions",simulated=False);db.add(site);db.flush()
+        device=InmDevice(source_type="REAL",environment="production",vendor="Aruba",family="access_point",
+            model="AP-505",firmware="8.10.0.21",serial_number="NATIVE-LOCAL-1",hostname="AP",adapter="aruba_instant",
+            mgmt_addresses=["10.9.8.10"],legacy_site_id=site.id)
+        db.add(device);db.flush()
+        c=ClientRecord(site_id=site.id,mac=MAC,simulated=False,is_connected=True);db.add(c);db.flush()
+        parsed=cm.parse(table(f"{MAC} Normal Normal Client associated 0 2026-11-25 09:18:05"),site_id=site.id,collected=now)
+        cm.save(db,device,parsed,collected=now)
+        journey=cm.journey(db,c,since=now-timedelta(hours=1),now=now)
+        assert journey["records"]==[] and len(journey["unmapped_records"])==1
+        assert journey["unmapped_records"][0]["estimated_at"] is None
+        assert MAC not in str(journey)
