@@ -112,7 +112,7 @@ def aruba_read_collector(device: InmDevice, plan: CollectionPlan, db: Session) -
                                      "CONNECTION_LOST": "CONNECTION_LOST", "PARSE_ERROR": "PARSE_ERROR",
                                      "DEVICE_REJECTED": "PARSE_ERROR"}
                                     .get(exc.category, "UNREACHABLE"), str(exc)) from None
-        if (t["identity"].get("serial_number") or device.serial_number).casefold() != device.serial_number.casefold():
+        if not t["identity"].get("serial_number") or not device.serial_number or t["identity"]["serial_number"].casefold() != device.serial_number.casefold():
             raise CollectionFailure("PARSE_ERROR", "Switch answered with a different serial; refusing to record.")
         return {"metrics": t["metrics"], "firmware": t["identity"].get("firmware"), "ports": t["ports"],
                 "hardware": t["hardware"]}
@@ -193,10 +193,9 @@ def _port_snapshot(db: Session, device: InmDevice, result: dict, now: datetime, 
             q = prev_by.get(p["name"])
             if q is None:
                 continue
-            cur_e = (p.get("rx_errors") or 0) + (p.get("tx_errors") or 0)
-            old_e = (q.get("rx_errors") or 0) + (q.get("tx_errors") or 0)
-            if cur_e >= old_e:                        # a counter reset yields no delta, never a negative one
-                port_points.append(("port_errors_delta", float(cur_e - old_e), p["name"]))
+            counters = [(q.get(k), p.get(k)) for k in ("rx_errors", "tx_errors")]
+            if all(type(a) in (int, float) and type(b) in (int, float) and 0 <= a <= b for a, b in counters):
+                port_points.append(("port_errors_delta", float(sum(b - a for a, b in counters)), p["name"]))
             if isinstance(p.get("link_resets"), (int, float)) and isinstance(q.get("link_resets"), (int, float)) \
                     and p["link_resets"] >= q["link_resets"]:
                 port_points.append(("port_link_resets_delta", float(p["link_resets"] - q["link_resets"]), p["name"]))
