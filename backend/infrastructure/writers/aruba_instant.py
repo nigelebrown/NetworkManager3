@@ -503,8 +503,10 @@ class ArubaInstantWriter:
             members = parsers.normalize_aps(parsers.extract_rows(self.client.show("show aps"), "show aps"))
             representatives = {}
             for member in members:
-                model = str(member.get("model") or "").upper()
-                if model not in ("AP-505", "AP-535") or not member.get("ip"):
+                raw_model = str(member.get("model") or "").upper()
+                match = re.search(r"\bAP-?(505|535)\b", raw_model)
+                model = "AP-" + match.group(1) if match else None
+                if model is None or not member.get("ip"):
                     raise WriterError("PRECONDITION", "Cluster membership or model is outside the verified channel scope.")
                 representatives[model] = member["ip"]
             if not representatives or not any(m.get("ip") == self.ap_ip for m in members):
