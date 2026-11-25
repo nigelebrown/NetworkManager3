@@ -617,7 +617,10 @@ TEST_OPS = {
       + ([{"op": "ap.ssid.accounting", "ssid": t["test_enterprise_ssid"], "value": "enabled", "interval_minutes": 10}]
          if t.get("test_enterprise_ssid") else [])
       + ([{"op": "ap.radio.allowed_channels", "value": t["test_allowed_channels"]}]
-         if t.get("test_allowed_channels") else []),
+         if t.get("test_allowed_channels") else [])
+      + ([{"op": "ap.ssid.guest_auth", "ssid": t["test_guest_ssid"], "portal_profile": t["test_guest_portal"],
+           "pre_auth_role": t["test_guest_pre_auth_role"], "mac_role": t["test_guest_mac_role"],
+           "acknowledge_guest_auth_change": True}] if all(t.get(k) for k in ("test_guest_ssid", "test_guest_portal", "test_guest_pre_auth_role", "test_guest_mac_role")) else []),
 }
 
 
@@ -635,11 +638,14 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
         test["test_ssid"] = test.get("test_ssid") or "Corp-WiFi"
         test["test_enterprise_ssid"] = test.get("test_enterprise_ssid") or "INM-LAB-1X"
         test["test_allowed_channels"] = test.get("test_allowed_channels") or ["36", "40", "44", "48"]
+        for key, value in (("test_guest_ssid", "INM-LAB-GUEST"), ("test_guest_portal", "LAB-PORTAL-B"),
+                           ("test_guest_pre_auth_role", "LAB-PRE"), ("test_guest_mac_role", "LAB-MAC")):
+            test[key] = test.get(key) or value
     test_ops = TEST_OPS[device.family](test)
     try:
         validate_site_rf_policy(db, device, test_ops)
         for op in test_ops:
-            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
+            if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth"):
                 CC.validate_operation(op, family="access_point")
     except CC.PolicyViolation as exc:
         raise WriterError("INVALID", str(exc)) from None
