@@ -467,7 +467,7 @@ class InstantEmulator:
             ln = raw.strip()
             if ln in ("configure terminal", "end", "commit apply", ""):
                 continue
-            if ln.startswith(("a-channel", "g-channel")):
+            if ln.startswith(("a-channel ", "g-channel ")):
                 _, ch, pw_ = ln.split()
                 r = next(x for x in self.radios if x["band"] == ("5" if ln[0] == "a" else "2.4"))
                 r["channel"], r["tx_power_dbm"] = ch, float(pw_)
