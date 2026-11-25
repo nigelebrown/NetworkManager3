@@ -75,7 +75,7 @@ def parse(text: str, *, site_id: int, collected: datetime) -> dict:
     if declared and not recognized:
         raise ValueError("No recognizable ClientMatch action rows")
     rows.sort(key=lambda row: row["estimated_at"], reverse=True)
-    return {"state": "COLLECTED" if declared == recognized and len(rows) <= MAX_ROWS else "PARTIAL",
+    return {"state": "COLLECTED" if declared == recognized == len(rows) and len(rows) <= MAX_ROWS else "PARTIAL",
             "declared_records": declared, "recognized_records": recognized,
             "truncated": len(rows) > MAX_ROWS or declared > recognized,
             "records": rows[:MAX_ROWS]}
@@ -143,7 +143,12 @@ def journey(db, client, *, since: datetime, now: datetime) -> dict:
         InmDevice.source_type == "REAL", InmDevice.lifecycle.not_in(("merged", "retired", "decommissioned")))))
     keys = {PREFIX + device.id: device for device in devices}
     settings = db.scalars(select(AppSetting).where(AppSetting.key.in_(keys))) if keys else []
-    fingerprint = token(client.mac, client.site_id)
+    try:
+        fingerprint = token(client.mac, client.site_id)
+    except ValueError:
+        return {"records": [], "source": "DEVICE_REPORTED_CLIENTMATCH",
+                "coverage": {"state": "INVALID_CLIENT_ID", "eligible_aps": len(devices), "fresh_aps": 0},
+                "note": "Client identifier cannot be matched safely."}
     records, fresh, seen = [], 0, 0
     for setting in settings:
         value = setting.value or {}
@@ -151,10 +156,10 @@ def journey(db, client, *, since: datetime, now: datetime) -> dict:
             continue
         seen += 1
         last = value.get("last_success_at")
-        if last and value.get("state") in ("COLLECTED", "PARTIAL") and now - _utc(last) <= timedelta(minutes=20):
+        if last and value.get("state") == "COLLECTED" and now - _utc(last) <= timedelta(minutes=20):
             fresh += 1
         for row in value.get("records", []):
-            if row.get("client_token") != fingerprint or _utc(row["estimated_at"]) < since:
+            if row.get("client_token") != fingerprint or not max(since, now - RETENTION) <= _utc(row["estimated_at"]) <= now:
                 continue
             records.append({**{k: v for k, v in row.items() if k != "client_token"},
                             "ap": keys[setting.key].hostname or keys[setting.key].serial_number})
