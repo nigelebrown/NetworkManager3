@@ -600,7 +600,7 @@ TEST_OPS = {
         {"op": "switch.system.dns", "value": [t.get("test_dns", "192.0.2.53")]},
         {"op": "switch.system.syslog", "value": t.get("test_syslog", "192.0.2.14"), "severity": "warning"},
     ] + [{"op": "switch.vlan.voice", "vlan": t.get("test_vlan", 4090), "value": "enabled", "acknowledge_voice_change": True}]
-      + ([{"op": "switch.port.auth_enable", "port": t["test_auth_port"], "method": method, "value": "enabled", "acknowledge_auth_change": True}
+      + ([{"op": "switch.port.auth_dot1x" if method == "dot1x" else "switch.port.auth_mab", "port": t["test_auth_port"], "method": method, "value": "enabled", "acknowledge_auth_change": True}
           for method in ("dot1x", "mac-auth")] if t.get("test_auth_port") else [])
       + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
     "access_point": lambda t: [
@@ -656,7 +656,7 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
         validate_site_rf_policy(db, device, test_ops)
         for op in test_ops:
             if op["op"] in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
-                            "switch.vlan.voice", "switch.port.auth_enable"):
+                            "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab"):
                 CC.validate_operation(op, family=device.family)
     except CC.PolicyViolation as exc:
         raise WriterError("INVALID", str(exc)) from None
@@ -694,7 +694,7 @@ def run_certification(db: Session, device: InmDevice, *, actor: str, test: dict,
                         # prerequisite inside the same checkpoint: the VLAN must exist on the switch
                         _renew_lease(db, device.id, holder)
                         writer.apply({"op": "switch.vlan.define", "value": test.get("test_vlan", 4090)})
-                    if env == "EMULATED" and op["op"] == "switch.port.auth_enable":
+                    if env == "EMULATED" and op["op"] in ("switch.port.auth_dot1x", "switch.port.auth_mab"):
                         _renew_lease(db, device.id, holder)
                         writer.apply({"op": "switch.port.admin_state", "port": op["port"], "value": "down"})
                     _renew_lease(db, device.id, holder)
