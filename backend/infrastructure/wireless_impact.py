@@ -73,7 +73,7 @@ def groups(db, allowed_sites):
         missing={k:{"current":cfg.get(k),"target":ref[k]} for k in
                  ("Scanning","Client Aware","Channel Quality Aware","160Mhz Support",
                   "Channel Quality Threshold","Channel Quality Wait Time","Error Rate Threshold","Error Rate Wait Time")
-                 if chosen and cfg.get(k)!=ref[k]}
+                 if chosen and k in ref and cfg.get(k)!=ref[k]}
         ids=sorted({m[2].id for m in members})
         aps=[]
         for d,arm,site in members:
