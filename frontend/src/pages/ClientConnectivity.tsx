@@ -64,7 +64,7 @@ export default function ClientConnectivity() {
         {d && !d.clients.length && <div className="inm-empty">No clients match. Clients appear once their AP's cluster is polled.</div>}</div></section>
       <section className="inm-card" id="journey"><div className="inm-cardhead"><h2>Journey {sel ? `· ${sel.mac}` : ""}</h2></div><div className="inm-cardbody text-sm">
         {!sel && <p className="text-slate-500">Select a client to see its connection timeline.</p>}
-        {journey.data && <>
+        {journey.data && journey.data.id === sel?.id && <>
           <p><b>Now:</b> {journey.data.current.connected ? "connected" : "not connected"} to {String(journey.data.current.ap ?? "—")} on {String(journey.data.current.ssid ?? "—")} ({String(journey.data.current.band ?? "?")}, SNR {String(journey.data.current.snr_db ?? "—")})</p>
           <p><b>Score:</b> {journey.data.score.score ?? "unavailable"} ({journey.data.score.band})</p>
           {!!journey.data.aps_visited.length && <p><b>APs used:</b> {journey.data.aps_visited.map(a => `${a.ap} ×${a.times}`).join(", ")}</p>}
@@ -72,6 +72,11 @@ export default function ClientConnectivity() {
             <span className="text-xs text-slate-500">{fmtTime(e.ts)}</span> <Pill value={e.kind} tone={e.kind === "disconnect" ? "poor" : e.kind === "roam" ? "fair" : "good"} />
             <div className="text-xs">{e.kind === "roam" ? `${e.ap_from} → ${e.ap_to}` : e.ap_to ?? e.ap_from} {e.ssid ? `· ${e.ssid}` : ""}</div></li>)}</ol>
           {!journey.data.events.length && <p className="text-slate-500">No connect/roam/disconnect in this window.</p>}
+          {journey.data.native_client_match && <section className="mt-4 border-t border-slate-200 pt-3"><h3 className="font-semibold">Device-reported ClientMatch actions</h3>
+            <p className="text-xs text-slate-500">Coverage: {journey.data.native_client_match.coverage.state} · {journey.data.native_client_match.coverage.fresh_aps}/{journey.data.native_client_match.coverage.eligible_aps} APs fresh</p>
+            <p className="text-xs text-slate-500">{journey.data.native_client_match.note}</p>
+            <ul className="mt-2 max-h-64 overflow-auto">{journey.data.native_client_match.records.map((e, i) => <li key={i} className="mb-2 border-l-2 border-slate-200 pl-2"><div className="text-xs text-slate-500">Estimated {fmtTime(e.estimated_at)} · {e.ap} · radio {e.radio}</div><div>{e.old_state} → {e.new_state}</div><div className="text-xs">{e.reason}</div></li>)}</ul>
+            {!journey.data.native_client_match.records.length && <p className="text-xs text-slate-500">No matching native actions collected in this window.</p>}</section>}
           <button className="inm-btn-primary mt-2" onClick={() => setDiag(sel)}>Why is this client poor?</button></>}
         {d && <p className="mt-3 text-[11px] text-slate-500">{d.evidence_note}</p>}
       </div></section>
