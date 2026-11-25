@@ -54,8 +54,9 @@ def impact(client,admin,arm_device):
         s=Site(name="Impact real cluster",vc_host="10.9.8.10",simulated=False,enabled=True)
         db.add(s);db.flush();sid=s.id
         db.get(InmDevice,did).legacy_site_id=sid
-        AD._put(db,"arm-reference:5g",{"config":m["config"],"source_name":"Initial reference"},"test")
-        snap=deepcopy(m)
+        reference=deepcopy(m["config"]);reference["80Mhz Support"]="disable";reference["Client Match"]="enable"
+        AD._put(db,"arm-reference:5g",{"config":reference,"source_name":"Initial reference"},"test")
+        snap=deepcopy(m);snap["config"]=deepcopy(reference);snap["config"]["Client Match"]="disable"
         snap["recent"]=[{"observed_at":(now-timedelta(minutes=n)).isoformat(),"channels":m["channels"],"assignments":m["assignments"]} for n in (25,15,5)]
         AD._put(db,"arm-rf:"+did,snap,"test")
         for n in (25,15,5):
@@ -184,3 +185,13 @@ def test_completed_evidence_is_frozen_before_short_arm_history_expires(client,ad
     monkeypatch.setattr(API,"_now",lambda:future+timedelta(days=1))
     row=client.get("/api/v1/intelligence/wireless-impact/reviews/"+r["id"],headers=admin).json()["clusters"][0]
     assert row["state"]=="OBSERVED_LINK_IMPROVEMENT" and row["after"]["link_score"]==80
+
+
+def test_width_changes_do_not_turn_phy_score_movement_into_a_service_verdict():
+    before=window();after=window(40,40)
+    c=W.compare(before,after)
+    assert c["state"]=="OBSERVED_LINK_DEGRADATION"
+    review=W.rate_sensitive_review(c,[{"op":"ap.radio.width","value":40}],before,after,ExperienceConfig())
+    assert review["state"]=="RATE_SENSITIVE_SCORE_CHANGE_REVIEW_REQUIRED"
+    after["snr_db"]=10;before["snr_db"]=25
+    assert W.rate_sensitive_review(c,[{"op":"ap.radio.width","value":40}],before,after,ExperienceConfig())["state"]=="OBSERVED_LINK_DEGRADATION"
