@@ -10,6 +10,7 @@ export default function Certification() {
   const certs = useLoad(rw.certs, [], 30000);
   const [device, setDevice] = useState<Device | undefined>();
   const [port, setPort] = useState("");
+  const [authPort, setAuthPort] = useState("");
   const [lag, setLag] = useState("");
   const [ssid, setSsid] = useState("");
   const [enterpriseSsid, setEnterpriseSsid] = useState("");
@@ -33,6 +34,7 @@ export default function Certification() {
         <DevicePicker value={device?.id ?? ""} onChange={(_, d) => { setDevice(d); setRun(null); }} />
         {device?.family === "switch" ? <>
           <label className="text-sm">Unused test port<input className={inputCls} value={port} onChange={e => setPort(e.target.value)} placeholder="e.g. 1/1/24" /></label>
+          <label className="text-sm">Existing disabled lab NAC port (802.1X and MAB)<input className={inputCls} value={authPort} onChange={e => setAuthPort(e.target.value)} placeholder="e.g. 1/1/24" /></label>
           <label className="text-sm">LAG test ports (optional, 2)<input className={inputCls} value={lag} onChange={e => setLag(e.target.value)} placeholder="e.g. 1/1/23, 1/1/24" /></label>
         </> : <>
           <label className="text-sm">Existing lab SSID (VLAN and roaming)<input className={inputCls} value={ssid} onChange={e => setSsid(e.target.value)} /></label>
@@ -48,7 +50,7 @@ export default function Certification() {
       <label className="mt-3 flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />
         I confirm this is an authorised LAB device. Certification writes test configuration and rolls it back.</label>
       <button className={`${btn} mt-3`} disabled={!device || !ack || act.busy} onClick={() => act.run(async () => {
-        const r = await rw.certify({ device_id: device!.id, lab_device_acknowledged: true, test_port: port || null, test_vlan: vlan,
+        const r = await rw.certify({ device_id: device!.id, lab_device_acknowledged: true, test_port: port || null, test_auth_port: authPort || null, test_vlan: vlan,
           lag_ports: lag ? lag.split(/[\s,]+/).filter(Boolean) : null, test_ssid: ssid || null, test_enterprise_ssid: enterpriseSsid || null,
           test_allowed_channels: testChannels.trim() ? testChannels.split(/[\s,]+/).filter(Boolean) : null,
           test_guest_ssid: guestSsid || null, test_guest_portal: guestPortal || null, test_guest_pre_auth_role: guestPre || null, test_guest_mac_role: guestMac || null });
