@@ -177,7 +177,7 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
         if previous is None and cur:
             previous=max((_aware(c.last_seen) for c in cur.values() if c.last_seen),default=None)
         continuous=previous is not None and 0<=(_aware(now)-previous).total_seconds()<=900
-        first_poll=not cur or not continuous
+        first_poll=not continuous or (not cur and marker is None)
         continuous_since=_aware(now)
         if marker and continuous:
             try:continuous_since=_aware(datetime.fromisoformat(marker.value["continuous_since"]))
@@ -193,9 +193,9 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
                 cur[mac] = rec
                 if not first_poll:
                     _event(db, site, mac, "connect", None, d.get("ap_name"), d.get("ssid"), now)
-            elif not rec.is_connected:
+            elif not first_poll and not rec.is_connected:
                 _event(db, site, mac, "connect", None, d.get("ap_name"), d.get("ssid"), now)
-            elif rec.ap_name and d.get("ap_name") and rec.ap_name != d.get("ap_name"):
+            elif not first_poll and rec.ap_name and d.get("ap_name") and rec.ap_name != d.get("ap_name"):
                 _event(db, site, mac, "roam", rec.ap_name, d.get("ap_name"), d.get("ssid"), now)
             for f in ("hostname", "ip", "ssid", "ap_name", "channel", "band", "snr_db", "rssi_dbm",
                       "speed_mbps", "quality", "auth_state", "vlan"):
@@ -219,6 +219,8 @@ def apply_snapshot(db: Session, site: Site, snap: SiteSnapshot) -> None:
     # Experience scoring (AP-reported inputs + inferred stability), then alert rules.
     cfg = load_config(db)
     window = now - timedelta(hours=cfg.client.stability.window_hours)
+    if snap.clients_ok:
+        window=max(_aware(window),continuous_since)
     disc = {m: n for m, n in db.execute(
         select(ClientEvent.mac, func.count()).where(
             ClientEvent.site_id == site.id, ClientEvent.kind == "disconnect", ClientEvent.ts >= window,
