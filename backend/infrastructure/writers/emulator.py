@@ -335,9 +335,20 @@ arm
  air-time-fairness-mode default-access
  client-match
  no 80mhz-support
+ a-channels 36,40,44,48,149,153,157,161,36+,44+,149+,157+
 wlan ssid-profile Corp-WiFi
  essid Corp-WiFi
  opmode wpa2-psk-aes
+ vlan 100
+wlan auth-server INM-LAB-RADIUS
+ ip 192.0.2.80
+ port 1812
+ acctport 1813
+ key emulated-only
+wlan ssid-profile INM-LAB-1X
+ essid INM-LAB-1X
+ opmode wpa2-aes
+ auth-server INM-LAB-RADIUS
  vlan 100
 """
 
