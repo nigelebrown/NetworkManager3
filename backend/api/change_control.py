@@ -63,6 +63,8 @@ def create_plan(body: PlanInput, request: Request, db: Session = Depends(get_db)
         ops = [CC.validate_operation(o, family=d.family, excluded_channels=set(body.excluded_channels),
                                      allow_dfs=body.allow_dfs, uplink_ports=set(body.protected_uplinks))
                for o in body.operations]
+        from ..infrastructure.change_executor import validate_site_rf_policy
+        validate_site_rf_policy(db, d, ops)
     except CC.PolicyViolation as exc:
         audit(db, "change_plan_policy_rejected", username=user.username, target=d.id,
               detail=f"{exc}; rejected before any adapter call", request=request, success=False)
