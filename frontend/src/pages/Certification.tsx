@@ -12,6 +12,8 @@ export default function Certification() {
   const [port, setPort] = useState("");
   const [lag, setLag] = useState("");
   const [ssid, setSsid] = useState("");
+  const [enterpriseSsid, setEnterpriseSsid] = useState("");
+  const [testChannels, setTestChannels] = useState("");
   const [vlan, setVlan] = useState(4090);
   const [ack, setAck] = useState(false);
   const [run, setRun] = useState<Awaited<ReturnType<typeof rw.certify>> | null>(null);
@@ -28,14 +30,19 @@ export default function Certification() {
         {device?.family === "switch" ? <>
           <label className="text-sm">Unused test port<input className={inputCls} value={port} onChange={e => setPort(e.target.value)} placeholder="e.g. 1/1/24" /></label>
           <label className="text-sm">LAG test ports (optional, 2)<input className={inputCls} value={lag} onChange={e => setLag(e.target.value)} placeholder="e.g. 1/1/23, 1/1/24" /></label>
-        </> : <label className="text-sm">Test SSID profile (optional)<input className={inputCls} value={ssid} onChange={e => setSsid(e.target.value)} /></label>}
+        </> : <>
+          <label className="text-sm">Existing lab SSID (VLAN and roaming)<input className={inputCls} value={ssid} onChange={e => setSsid(e.target.value)} /></label>
+          <label className="text-sm">Existing lab enterprise SSID (RADIUS accounting)<input className={inputCls} value={enterpriseSsid} onChange={e => setEnterpriseSsid(e.target.value)} /></label>
+          <label className="text-sm">Lab non-DFS allowed channels (20/40 MHz)<input className={inputCls} value={testChannels} onChange={e => setTestChannels(e.target.value)} placeholder="36,40,44,48" /></label>
+        </>}
         <label className="text-sm">Test VLAN<input type="number" className={inputCls} value={vlan} onChange={e => setVlan(Number(e.target.value))} /></label>
       </div>
       <label className="mt-3 flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />
         I confirm this is an authorised LAB device. Certification writes test configuration and rolls it back.</label>
       <button className={`${btn} mt-3`} disabled={!device || !ack || act.busy} onClick={() => act.run(async () => {
         const r = await rw.certify({ device_id: device!.id, lab_device_acknowledged: true, test_port: port || null, test_vlan: vlan,
-          lag_ports: lag ? lag.split(/[\s,]+/).filter(Boolean) : null, test_ssid: ssid || null });
+          lag_ports: lag ? lag.split(/[\s,]+/).filter(Boolean) : null, test_ssid: ssid || null, test_enterprise_ssid: enterpriseSsid || null,
+          test_allowed_channels: testChannels.trim() ? testChannels.split(/[\s,]+/).filter(Boolean) : null });
         setRun(r); certs.reload();
         const uns = r.results.filter(x => (x as { unsupported?: boolean }).unsupported).length;
         return `Certification run complete: ${r.results.filter(x => x.passed).length}/${r.results.length - uns} operations passed${uns ? ` (${uns} not supported by this adapter)` : ""} on ${r.model_family} firmware ${r.firmware_train} (${r.environment}). An independent approver must now approve each passed operation.`;
