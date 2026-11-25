@@ -216,3 +216,9 @@ def test_multi_device_deployment_with_progress_and_stop_on_failure(demo):
     assert r["stopped_at"] == st["plans"][1]["plan_id"]
     prog = c.get(f"/api/v1/deployments/{batch}", headers=adm).json()["progress"]
     assert prog["applied_verified"] == 1 and prog["failed_rolled_back"] == 1 and prog["approved"] == len(sws) - 2
+    assert c.get(f"/api/v1/deployments/{batch}", headers=adm).json()["wave"]["state"] == "PAUSED"
+    assert c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 26}).status_code == 422
+    assert c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 1}).status_code == 409
+    resumed = c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={"wave_size": 1,
+                     "resume_after_failure": True, "review_note": "Rollback reviewed and confirmed"}).json()
+    assert len(resumed["executed"]) == min(1, len(sws) - 2)
