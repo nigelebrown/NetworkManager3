@@ -84,6 +84,7 @@ export interface ClientView {
 export interface Journey { id: number; mac: string; hostname: string | null; cluster: string;
   current: Record<string, string | number | boolean | null>; score: { score: number | null; band: string; inputs: Record<string, unknown>[] };
   events: { ts: string; kind: string; ap_from: string | null; ap_to: string | null; ssid: string | null }[];
+  native_client_match?: { source: string; note: string; coverage: { state: string; eligible_aps: number; fresh_aps: number }; records: { ap: string; estimated_at: string; collected_at: string; old_state: string; new_state: string; reason: string; radio: number }[] };
   aps_visited: { ap: string; times: number }[]; window_hours: number }
 export interface Incident {
   id: string; device_id: string; device: string | null; family: string | null; site: string | null; rule_id: string;
