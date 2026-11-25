@@ -36,7 +36,7 @@ export type Journal = { id: string; execution_id: string; plan_id: string; devic
   state: string; strategy: string; last_step: string | null; owner: string | null; heartbeat_at: string | null;
   created_at: string | null; resolved_by: string | null; notes: string | null };
 export type Group = { id: string; name: string; family: string; description: string | null; members: string[] };
-export type Batch = { batch_id: string; plans: WfPlan[]; progress: Record<string, number> };
+export type Batch = { batch_id: string; plans: WfPlan[]; progress: Record<string, number>; wave?: { state: string; stopped_at?: string | null; selected_plans?: string[] } };
 export type SeriesPoint = { t: string; v: number | null; q: string; src: string };
 
 export const wf = {
@@ -93,9 +93,9 @@ export const rem = {
   deploy: (b: { group_id?: string; device_ids?: string[] }) =>
     post<{ batch_id: string; devices: { device_id: string; plan_id: string | null; in_compliance?: boolean; error?: string }[] }>("/v1/deployments", b),
   batch: (id: string) => request<Batch>(`/v1/deployments/${enc(id)}`),
-  executeBatch: (id: string, stop_on_failure = true) =>
+  executeBatch: (id: string, stop_on_failure = true, wave_size = 10, one_site = true, resume_after_failure = false, review_note = "") =>
     post<{ executed: { plan_id: string; outcome: string | null; decision: string; denial_reason: string | null }[];
-      stopped_at: string | null; progress: Record<string, number> }>(`/v1/deployments/${enc(id)}/execute`, { stop_on_failure }),
+      stopped_at: string | null; progress: Record<string, number> }>(`/v1/deployments/${enc(id)}/execute`, { stop_on_failure, wave_size, one_site, resume_after_failure, review_note }),
   topology: () => request<{ nodes: { id: string; label: string; family: string; model: string | null; source_type: string | null; inventory: boolean }[];
     edges: { from: string; to: string; local_port: string; remote_port: string | null; link: string; poe_w: number | null }[]; note: string }>("/v1/topology"),
   relatedChanges: (alertId: string) => request<{ candidates: { plan_id: string; title: string | null; same_device: boolean; outcome: string;
