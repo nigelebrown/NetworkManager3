@@ -18,7 +18,8 @@ REBOOT_UPTIME_DROP_SECONDS = 60  # uptime must go DOWN by more than this to coun
 
 
 def evaluate(db: Session, site: Site, *, aps: list[AccessPoint], prev_uptime: dict[int, int | None],
-             clients: list[ClientRecord], disconnects: dict[str, int], cfg: ExperienceConfig, now: datetime) -> None:
+             clients: list[ClientRecord], disconnects: dict[str, int], cfg: ExperienceConfig, now: datetime,
+             inventory_complete: bool = True, firmware_observed: bool = True) -> None:
     sim, a = site.simulated, cfg.alerts
 
     for ap in aps:
@@ -44,16 +45,16 @@ def evaluate(db: Session, site: Site, *, aps: list[AccessPoint], prev_uptime: di
     if len(versions) > 1:
         raise_alert(db, site_id=site.id, ap_id=None, kind="firmware_mismatch", severity="warning", simulated=sim,
                     message=f"Site {site.name}: APs run different firmware versions ({', '.join(versions)})")
-    else:
+    elif inventory_complete and firmware_observed:
         resolve_alerts(db, site_id=site.id, ap_id=None, kind="firmware_mismatch")
 
     # Firmware compliance against the admin's target (only when a target is set and the version is known).
     report = fw.site_report(db, site)
-    if report["status"] in ("outdated", "newer"):
+    if firmware_observed and report["status"] in ("outdated", "newer"):
         raise_alert(db, site_id=site.id, ap_id=None, kind="firmware_noncompliant", severity="warning", simulated=sim,
                     message=f"Site {site.name} runs {report['running_parsed']} but the target is {report['target']} "
                             f"({'upgrade needed' if report['status'] == 'outdated' else 'newer than the exact target'})")
-    else:
+    elif firmware_observed and report["status"] == "compliant":
         resolve_alerts(db, site_id=site.id, ap_id=None, kind="firmware_noncompliant")
 
     for c in clients:
