@@ -211,6 +211,13 @@ export default function Device360() {
         <button className={`${btn2} mt-2`} disabled={act.busy} onClick={() => act.run(async () => {
           const a = await rw.authority(id); return `${a.authority}: ${a.detail} (${a.environment})`; })}>Check management authority</button>
       </Card>
+      {d?.family === "switch" && mayReadHardware && <Card title="Switch firmware and boot images">
+        <p className="text-xs text-slate-500">Read-only verification; no image upload, staging or reboot.</p>
+        <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => {
+          const f = await rw.switchFirmwareStatus(id);
+          return `${f.environment} / ${f.state}: running ${f.current_version ?? "unknown"}; primary ${f.primary_version ?? "unknown"}; secondary ${f.secondary_version ?? "unknown"}; booted ${f.booted_image ?? "unknown"}; default ${f.default_image ?? "unknown"}.`;
+        })}>Check running and alternate firmware</button>
+      </Card>}
       <Card title="Configuration backup">
         <div className="flex flex-wrap gap-2">
           <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => {
