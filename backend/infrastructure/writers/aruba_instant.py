@@ -83,6 +83,25 @@ ENTERPRISE_OPMODES = {"wpa2-enterprise": "wpa2-aes", "wpa3-enterprise": "wpa3-ae
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 SSID_FLAGS = ("dot11k", "dot11v", "dot11r", "radius-accounting")
 ACCOUNTING_INTERVAL = "radius-interim-accounting-interval"
+GUEST_KEYS = ("captive-portal", "mac-authentication", "set-role-pre-auth", "set-role-mac-auth")
+
+
+def guest_auth_settings(lines):
+    if lines is None or "type guest" not in lines:
+        raise WriterError("PRECONDITION", "An existing guest SSID is required.")
+    result = {}
+    for key in GUEST_KEYS:
+        matches = [line for line in lines if line == key or line.startswith(key + " ") or line == "no " + key]
+        if len(matches) != 1:
+            raise WriterError("PRECONDITION", "An explicit, unambiguous guest authentication baseline is required.")
+        value = matches[0]
+        valid = (re.fullmatch(r"captive-portal external profile [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", value) if key == "captive-portal" else
+                 value == "mac-authentication" if key == "mac-authentication" else
+                 re.fullmatch(key + r" [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", value))
+        if not valid:
+            raise WriterError("PRECONDITION", "Existing guest authentication setting cannot be safely restored.")
+        result[key] = value
+    return result
 
 
 def ssid_settings(lines: list[str] | None) -> dict:
@@ -153,7 +172,7 @@ class ArubaInstantWriter:
     # Every typed operation implemented below (asserted equal to domain.adapters.INSTANT_TYPED_OPS).
     OPERATIONS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
                   "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness",
-                  "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels")
+                  "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, client=None, ssh_runner=None,
                  snapshot=None, diagnostic_target=None):
@@ -395,6 +414,16 @@ class ArubaInstantWriter:
                             raise WriterError("ROLLBACK_FAILED", "Unsupported prior SSID profile name.")
                         old_value = ssid_settings(prior_block)[key]
                         changed.append(old_value or "no " + key)
+                if "type guest" in prior_block:
+                    guest_changed = []
+                    for key in GUEST_KEYS:
+                        a = [x for x in prior_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                        b = [x for x in current_block if x == key or x == "no " + key or x.startswith(key + " ")]
+                        if a != b:
+                            if not NAME_RE.fullmatch(prof):
+                                raise WriterError("ROLLBACK_FAILED", "Unsupported prior guest SSID name.")
+                            guest_changed.append(guest_auth_settings(prior_block)[key])
+                    changed.extend(guest_changed)
                 if changed:
                     self._ssh_lines([header, *changed, "exit"])
             if old.get("vlan") is None and now.get(prof, {}).get("vlan") is not None:
@@ -432,6 +461,11 @@ class ArubaInstantWriter:
     # ---- typed operations ------------------------------------------------------------------
     def render(self, op: dict) -> list[dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "ap.ssid.guest_auth":
+            op = _validated(op)
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host, "lines": ["configure terminal", _ssid_header(op),
+                    "captive-portal external profile " + op["portal_profile"], "mac-authentication",
+                    "set-role-pre-auth " + op["pre_auth_role"], "set-role-mac-auth " + op["mac_role"], "exit", "end", "commit apply"]}]
         if k in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
             op = _validated(op)
             if k == "ap.radio.allowed_channels":
@@ -528,6 +562,20 @@ class ArubaInstantWriter:
         prior = getattr(self, "_cp", None)
         if op.get("op") == "ap.radio.channel" and (not prior or prior.get("radio_overrides") is None):
             raise WriterError("PRECONDITION", "Capture configured radio overrides before changing a channel.")
+        if op.get("op") == "ap.ssid.guest_auth":
+            op = _validated(op)
+            if not prior or not prior.get("running"):
+                raise WriterError("PRECONDITION", "Capture a guest configuration checkpoint first.")
+            text = self._running()
+            header = _ssid_header(op)
+            guest_auth_settings(cli_block(prior["running"], header))
+            guest_auth_settings(cli_block(text, header))
+            portal = cli_block(text, "wlan external-captive-portal " + op["portal_profile"])
+            if not portal or any("fail-through" in line.lower() for line in portal):
+                raise WriterError("PRECONDITION", "Select an existing external portal without fail-through.")
+            for role in (op["pre_auth_role"], op["mac_role"]):
+                if not cli_block(text, "wlan access-rule " + role):
+                    raise WriterError("PRECONDITION", "Selected role must already exist with configured access rules.")
         if op.get("op") in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
             op = _validated(op)
             if not prior or not prior.get("running"):
@@ -584,6 +632,13 @@ class ArubaInstantWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k == "ap.ssid.guest_auth":
+            op = _validated(op)
+            state = guest_auth_settings(cli_block(self._running(), _ssid_header(op)))
+            wanted = {"captive-portal": "captive-portal external profile " + op["portal_profile"],
+                      "mac-authentication": "mac-authentication", "set-role-pre-auth": "set-role-pre-auth " + op["pre_auth_role"],
+                      "set-role-mac-auth": "set-role-mac-auth " + op["mac_role"]}
+            return state == wanted, state
         if k in ("ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels"):
             op = _validated(op)
             if k == "ap.radio.allowed_channels":
