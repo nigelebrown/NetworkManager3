@@ -87,11 +87,13 @@ def client_score_result(db: Session, c: ClientRecord) -> dict:
     """Re-derive a client's score (with its full input breakdown) using the current configuration."""
     cfg = load_config(db)
     now = utcnow()
+    observed=client_observation_minutes(db,c,now)
+    start=max(now-timedelta(hours=cfg.client.stability.window_hours),now-timedelta(minutes=observed)) if observed is not None else now
     n = db.scalar(select(func.count()).select_from(ClientEvent).where(
         ClientEvent.mac == c.mac, ClientEvent.site_id == c.site_id, ClientEvent.kind == "disconnect",
-        ClientEvent.ts >= now - timedelta(hours=cfg.client.stability.window_hours))) or 0
+        ClientEvent.ts >= start)) or 0
     return score_client(ClientMetrics(snr_db=c.snr_db, rssi_dbm=c.rssi_dbm, speed_mbps=c.speed_mbps, disconnects=n,
-                                      observed_minutes=client_observation_minutes(db,c,now)), cfg)
+                                      observed_minutes=observed), cfg)
 
 
 @router.get("/clients/{client_id}")
