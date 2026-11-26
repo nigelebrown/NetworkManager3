@@ -8,7 +8,8 @@ Principles
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .config import ExperienceConfig, Range
@@ -62,6 +63,11 @@ class ClientMetrics:
 
 
 def score_client(m: ClientMetrics, cfg: ExperienceConfig) -> dict[str, Any]:
+    def valid(value,lo,hi):
+        return value if not isinstance(value,bool) and isinstance(value,(int,float)) and math.isfinite(value) and lo<=value<=hi else None
+    m=replace(m,snr_db=valid(m.snr_db,-30,100),rssi_dbm=valid(m.rssi_dbm,-130,-1),
+              speed_mbps=valid(m.speed_mbps,0,1000000),retries_pct=valid(m.retries_pct,0,100),
+              disconnects=valid(m.disconnects,0,100000000),observed_minutes=valid(m.observed_minutes,0,100000000))
     c, w = cfg.client, cfg.client.weights
     nominal = {"signal": w.signal, "rate": w.rate, "stability": w.stability, "retries": w.retries}
     ins: list[_In] = []
@@ -88,13 +94,22 @@ def score_client(m: ClientMetrics, cfg: ExperienceConfig) -> dict[str, Any]:
         else:
             sub = lerp(m.disconnects, Range(worst=c.stability.worst_disconnects, best=0))
             ins.append(_In("stability", sub, w.stability,
-                           f"{m.disconnects} disconnect(s) in {c.stability.window_hours} h", "inferred from polls"))
+                           f"{m.disconnects} inferred disconnect(s); configured lookback {c.stability.window_hours} h; client seen {m.observed_minutes:g} min (continuous coverage unknown)", "inferred from polls"))
     if w.retries > 0:
         if m.retries_pct is not None:
             ins.append(_In("retries", lerp(m.retries_pct, c.retries_pct), w.retries, f"{m.retries_pct:g}% retries", "AP-reported"))
         else:
             missing["retries"] = "retransmission rate is not collected yet"
-    return _combine(ins, missing, nominal, cfg)
+    result=_combine(ins, missing, nominal, cfg)
+    if "rate" in result["inputs"]:
+        result["inputs"]["rate"]["meaning"]="Negotiated PHY/link rate; not measured throughput"
+    result.update(score_kind="PARTIAL_WIRELESS_LINK",model="wireless-link-assessment-v1",
+        end_to_end_score=None,
+        service_assurance={"state":"UNMEASURED","missing":["association/authentication attempt success and timing",
+          "DHCP/DNS attempt success and timing","packet loss and RTT/jitter","measured application throughput"]},
+        assessment_confidence="LIMITED" if result["partial"] else "LINK_INPUTS_AVAILABLE",
+        method="Configurable application-weighted link assessment; not a vendor proprietary client-experience score")
+    return result
 
 
 # ---- access points ------------------------------------------------------------------------------------

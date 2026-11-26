@@ -269,3 +269,27 @@ def test_partial_poll_does_not_invent_outages_counts_or_poor_streak(site):
     assert _events(site) == []
     _run(site, _snap([]))
     assert _events(site) == [("disconnect", "ap1", None)]
+
+
+def test_recovery_after_observation_gap_does_not_invent_transitions(site):
+    from datetime import timedelta,timezone
+    from backend.monitoring.collector import client_observation_minutes
+    first,old,new="11:11:11:00:01:01","11:11:11:00:01:02","11:11:11:00:01:03"
+    _run(site,_snap([_c(first),_c(old)]))
+    past=utcnow()-timedelta(hours=2)
+    with session_scope() as db:
+        marker=db.get(AppSetting,"client-observe:"+str(site))
+        marker.value={"last_complete_at":past.isoformat(),"continuous_since":past.isoformat()}
+        for c in db.scalars(select(ClientRecord).where(ClientRecord.site_id==site)):
+            c.first_seen=past;c.last_seen=past
+    _run(site,_snap([_c(first,ap="different-ap"),_c(new)]))
+    assert _events(site)==[]
+    with session_scope() as db:
+        c=db.scalar(select(ClientRecord).where(ClientRecord.mac==first))
+        assert client_observation_minutes(db,c,utcnow())<1
+        assert db.scalar(select(ClientRecord).where(ClientRecord.mac==old)).is_connected is False
+
+def test_complete_empty_inventory_provides_a_real_previous_observation(site):
+    _run(site,_snap([]))
+    _run(site,_snap([_c("11:11:11:00:01:04")]))
+    assert [e[0] for e in _events(site)]==["connect"]

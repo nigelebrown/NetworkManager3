@@ -452,6 +452,15 @@ class Worker:
                 log.warning("device log collection cycle failed: %s", type(exc).__name__)
             await self._sleep(10)
 
+    async def wireless_impact_loop(self) -> None:
+        from backend.infrastructure import wireless_impact as WI
+        while not self.stop.is_set():
+            try:
+                self.stats["wireless_impact"] = await asyncio.to_thread(WI.tick, session_scope, self.instance)
+            except Exception as exc:
+                log.warning("Wireless impact evidence update failed: %s", type(exc).__name__)
+            await self._sleep(60)
+
     async def automatic_onboarding_loop(self) -> None:
         from backend.infrastructure import automatic_onboarding as AO
         from backend.database.session import session_scope
@@ -562,7 +571,7 @@ class Worker:
                  asyncio.create_task(self.outbox_loop()), asyncio.create_task(self.discovery_loop()),
                  asyncio.create_task(self.notifications_loop()), asyncio.create_task(self.printer_loop()),
                  asyncio.create_task(self.automatic_onboarding_loop()), asyncio.create_task(self.arm_measurements_loop()),
-                 asyncio.create_task(self.device_log_collection_loop())]
+                 asyncio.create_task(self.device_log_collection_loop()), asyncio.create_task(self.wireless_impact_loop())]
         await self.stop.wait()
         log.info("shutting down")
         # Threads running blocking DB calls cannot be cancelled; never let shutdown hang past the grace period.
