@@ -139,7 +139,9 @@ def predictive() -> dict | None:
     if telemetry_store() is None:
         return None
     from ..api.intelligence import run_predictions, score_predictions
+    from .clock import now as clock_now
+    at = clock_now()                     # one instant: windows that ended by `at` are scored, new ones start at `at`
     with session_scope() as db:
-        scored = score_predictions(db)
-        run = run_predictions(db, actor="predictive-scheduler")
+        scored = score_predictions(db, now=at)
+        run = run_predictions(db, actor="predictive-scheduler", now=at)
         return {"scored": scored["scored"], "run": run.id, "validation": run.validation_state}
