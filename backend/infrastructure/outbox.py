@@ -105,9 +105,10 @@ def deliver_row(db: Session, row: EventOutbox, *, now: datetime | None = None,
                 publish: Callable[[EventEnvelope], None] | None = None) -> bool:
     """Deliver one outbox row. publish=None -> in-process ingest. Returns True when delivered."""
     now = now or datetime.now(timezone.utc)
-    e = parse_event(row.envelope.encode())
     row.attempts += 1
     try:
+        # Malformed envelopes follow retry and dead-letter handling instead of aborting the relay.
+        e = parse_event(row.envelope.encode())
         if publish is None:
             result = _ingest_inprocess(db, e)
             _queue_postcommit_notice(db, result.topics, e.correlation_id, e.event_id)

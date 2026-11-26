@@ -36,7 +36,8 @@ reviewer = Depends(require_any_role("approver", "admin"))
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    from ..infrastructure.clock import now
+    return now()
 
 
 def _utc(t):
