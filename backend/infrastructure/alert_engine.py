@@ -54,14 +54,14 @@ def apply(db: Session, device: InmDevice, values: dict, *, now: datetime | None 
             a.value, a.last_seen_at, a.severity = f["value"], now, f["severity"]
             a.correlation_id, a.event_id = correlation_id or a.correlation_id, event_id or a.event_id
     # Only resolve rules whose metric was actually measured this cycle (missing data never clears an alert).
-    measured = {r.id for r in R.CATALOGUE if isinstance(values.get(r.metric), (int, float))}
+    measured = {r.id for r in R.CATALOGUE if R.measured_number(values.get(r.metric))}
     for rid, a in open_rows.items():
         if rid not in fired and rid in measured:
             rule = R.rule_by_id(rid)
             o = overrides.get(rid, {})
             v = float(values[rule.metric])
-            if not R.cleared(rule, v, float(o.get("threshold", rule.threshold)), o):
-                a.value = v          # inside the hysteresis band: keep open, no resolve/notify churn
+            if o.get("enabled") is not False and not R.cleared(rule, v, float(o.get("threshold", rule.threshold)), o):
+                a.value, a.last_seen_at = v, now
                 continue
             a.state, a.resolved_at = "RESOLVED", now
             a.correlation_id, a.event_id = correlation_id or a.correlation_id, event_id or a.event_id
@@ -87,7 +87,7 @@ def apply_entities(db: Session, device: InmDevice, per_entity: dict[str, dict], 
             if o.get("enabled") is False:
                 continue
             v = values.get(r.metric)
-            if not isinstance(v, (int, float)):
+            if not R.measured_number(v):
                 continue
             thr = float(o.get("threshold", r.threshold))
             hit = v >= thr if r.op == "ge" else v > thr
@@ -103,7 +103,7 @@ def apply_entities(db: Session, device: InmDevice, per_entity: dict[str, dict], 
             elif hit:
                 a.value, a.last_seen_at = float(v), now
             elif a is not None and not R.cleared(r, float(v), thr, o):
-                a.value = float(v)   # inside the hysteresis band
+                a.value, a.last_seen_at = float(v), now
             elif a is not None:
                 a.state, a.resolved_at, a.correlation_id = "RESOLVED", now, correlation_id or a.correlation_id
                 resolved += 1

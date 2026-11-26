@@ -5,6 +5,7 @@ Each rule evaluates MEASURED values only; a missing metric never raises or clear
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -21,8 +22,6 @@ class AlertRule:
 CATALOGUE: tuple[AlertRule, ...] = (
     AlertRule("DEVICE_UNREACHABLE", "any", "consecutive_failures", "ge", 3, "critical", "Device not answering polls"),
     AlertRule("TELEMETRY_STALE", "any", "stale_minutes", "ge", 30, "minor", "Telemetry stale"),
-    AlertRule("PROBE_UNREACHABLE", "any", "probe_failures", "ge", 3, "critical", "Management service not answering active probe"),
-    AlertRule("CLOCK_DRIFT", "any", "clock_offset_abs_s", "gt", 120, "minor", "Device clock differs from server time"),
     AlertRule("CPU_HIGH", "any", "cpu_percent", "ge", 90, "major", "CPU high"),
     AlertRule("MEMORY_HIGH", "any", "memory_percent", "ge", 92, "major", "Memory high"),
     AlertRule("AP_5G_UTIL_HIGH", "access_point", "util_5g_percent", "ge", 85, "major", "5 GHz channel congested"),
@@ -49,8 +48,7 @@ PORT_CATALOGUE: tuple[AlertRule, ...] = (
 )
 
 
-# Hysteresis: an open alert clears only when the measured value is back past a clear level, so a value hovering
-# at the threshold (e.g. 84/86 % utilisation) does not open/resolve/notify on every poll. Units follow the metric.
+# Hysteresis avoids opening and resolving alerts on successive polls near a threshold.
 _ABSOLUTE_BAND = {"cpu_percent": 5, "memory_percent": 5, "util_5g_percent": 5, "util_2g_percent": 5,
                   "retry_percent": 5, "poe_budget_percent": 5, "max_port_util_percent": 5, "port_util_percent": 5,
                   "noise_floor_dbm": 3, "temp_max_c": 3}
@@ -58,18 +56,16 @@ _RELATIVE_BAND = {"port_errors_delta": 0.5, "link_resets_delta": 0.5, "port_link
 
 
 def clear_threshold(rule: AlertRule, threshold: float, override: dict | None = None) -> float:
-    """Level the measured value must reach (strictly below, for ge/gt rules) before an open alert resolves."""
     if override and isinstance(override.get("clear_threshold"), (int, float)):
         return min(float(override["clear_threshold"]), threshold)
     if rule.metric in _ABSOLUTE_BAND:
         return threshold - _ABSOLUTE_BAND[rule.metric]
     if rule.metric in _RELATIVE_BAND:
         return threshold - abs(threshold) * _RELATIVE_BAND[rule.metric]
-    return threshold      # discrete states/counts (failures, drift, staleness): clear as soon as below threshold
+    return threshold
 
 
 def cleared(rule: AlertRule, value: float, threshold: float, override: dict | None = None) -> bool:
-    """True only when a MEASURED value has left the alert condition by the hysteresis band."""
     if rule.op == "eq":
         return value != threshold
     clear = clear_threshold(rule, threshold, override)
@@ -91,7 +87,7 @@ def evaluate(family: str, values: dict, overrides: dict[str, dict] | None = None
         if o.get("enabled") is False:
             continue
         v = values.get(r.metric)
-        if not isinstance(v, (int, float)):
+        if not measured_number(v):
             continue
         thr = float(o.get("threshold", r.threshold))
         hit = v > thr if r.op == "gt" else v >= thr if r.op == "ge" else v == thr
@@ -101,28 +97,19 @@ def evaluate(family: str, values: dict, overrides: dict[str, dict] | None = None
     return fired
 
 
-MIN_RATE_INTERVAL_S = 5.0   # shorter intervals (retries, clock steps) amplify jitter into implausible rates
+MIN_RATE_INTERVAL_S = 5.0
 
 
-def _num(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+def measured_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def port_rates(prev: list[dict] | None, cur: list[dict], seconds: float) -> dict:
-    """Per-port bps and utilisation from two counter snapshots.
-
-    Never fabricates a measurement:
-    * a counter that decreased (device reboot, counter clear or wrap) yields None for that interval — the
-      next interval restarts from the new baseline; it is never reported as zero or as a negative rate;
-    * a counter missing in either snapshot yields None (missing is not zero);
-    * a non-positive or very short interval (clock skew, duplicate poll) yields no rates at all;
-    * utilisation is withheld when the negotiated speed changed during the interval or the computed value
-      exceeds 100 % (inconsistent counters/speed), and the reason is recorded per port.
-    """
+    """Derive rates without inventing zero counters or implausible utilization."""
     prev_by = {p["name"]: p for p in (prev or [])}
     out, err_delta, resets = {}, 0.0, 0.0
     err_seen = reset_seen = False
-    if seconds is None or seconds < MIN_RATE_INTERVAL_S:
+    if not measured_number(seconds) or seconds < MIN_RATE_INTERVAL_S:
         return {"ports": {}, "port_errors_delta": None, "link_resets_delta": None,
                 "max_port_util_percent": None, "skipped": "INTERVAL_TOO_SHORT_OR_CLOCK_SKEW"}
     for p in cur:
@@ -134,30 +121,30 @@ def port_rates(prev: list[dict] | None, cur: list[dict], seconds: float) -> dict
         for k in ("rx_bytes", "tx_bytes"):
             a, b = q.get(k), p.get(k)
             key = k.replace("_bytes", "_bps")
-            if _num(a) and _num(b) and b >= a:
+            if measured_number(a) and measured_number(b) and 0 <= a <= b:
                 rate[key] = (b - a) * 8 / seconds
             else:
                 rate[key] = None
-                if _num(a) and _num(b):
+                if measured_number(a) and measured_number(b):
                     notes.append("COUNTER_RESET")
         errors = [(q.get(k), p.get(k)) for k in ("rx_errors", "tx_errors")]
-        if all(_num(a) and _num(b) and b >= a for a, b in errors):
+        if all(measured_number(a) and measured_number(b) and 0 <= a <= b for a, b in errors):
             err_delta += sum(b - a for a, b in errors)
             err_seen = True
-        if _num(p.get("link_resets")) and _num(q.get("link_resets")) and p["link_resets"] >= q["link_resets"]:
-            resets += p["link_resets"] - q["link_resets"]
+        a, b = q.get("link_resets"), p.get("link_resets")
+        if measured_number(a) and measured_number(b) and 0 <= a <= b:
+            resets += b - a
             reset_seen = True
         speed, old_speed = p.get("speed_bps"), q.get("speed_bps")
         peak = max((x for x in (rate.get("rx_bps"), rate.get("tx_bps")) if x is not None), default=None)
         util = None
-        if peak is not None and _num(speed) and speed > 0:
-            if _num(old_speed) and old_speed != speed:
+        if peak is not None and measured_number(speed) and speed > 0:
+            if measured_number(old_speed) and old_speed != speed:
                 notes.append("SPEED_CHANGED")
+            elif peak > speed:
+                notes.append("UTILISATION_INCONSISTENT")
             else:
                 util = round(100 * peak / speed, 1)
-                if util > 100.0:
-                    util = None
-                    notes.append("UTILISATION_INCONSISTENT")
         rate["util_percent"] = util
         if notes:
             rate["notes"] = notes
