@@ -56,7 +56,29 @@ export const intel = {
   inventory: () => request<{ complete: boolean; workspaces: Record<string, { complete: boolean; items: { kind: string; method?: string; target: string; registered: boolean }[] }> }>(`${B}/inventory`),
   modelsCompare: () => request<{ models: any[]; active: string | null; baseline: string }>("/v1/ai/models/compare"),  // eslint-disable-line @typescript-eslint/no-explicit-any
   rollback: (id: string) => post<{ rolled_back: string; active: string | null; mode: string }>(`/v1/ai/models/${id}/rollback`),
+  mlStatus: () => request<{ targets: MlTarget[]; settings: MlSettings; statement: string }>("/v1/ai/ml/status"),
+  mlSettings: (b: Partial<MlSettings>) => request<MlSettings>("/v1/ai/ml/settings", { method: "PUT", body: JSON.stringify(b) }),
+  mlTrain: (target: string, synthetic: boolean) => post<{ run: MlRun; model: MlModelRow | null }>("/v1/ai/ml/train", { target, synthetic }),
+  mlRuns: () => request<MlRun[]>("/v1/ai/ml/runs"),
+  mlModels: () => request<MlModelRow[]>("/v1/ai/models"),
+  mlDecide: (id: string, a: "promote" | "reject") => post<MlModelRow>(`/v1/ai/models/${id}/${a}`),
+  mlDrift: (id: string) => post<{ state: string; max_psi: number | null; samples: number; health: string }>(`/v1/ai/ml/models/${id}/drift`),
+  mlCompare: (target: string) => request<{ target: string; windows: number; positives?: number; best_version: string | null;
+    statistical_brier: number | null; climatology_brier?: number; reason?: string;
+    versions: { model: string; version: number; status: string; comparable: boolean; brier?: number; auc?: number | null; brier_skill?: number | null; reason?: string }[] }>(`/v1/ai/ml/compare?target=${encodeURIComponent(target)}`),
+  mlPerformance: (id: string) => request<{ scored: number; state: string; live?: Record<string, unknown> }>(`/v1/ai/ml/models/${id}/performance`),
 };
+
+export type MlSettings = { inference_enabled: boolean; retrain_interval_days: number; history_days: number; retrain_on_drift: boolean };
+export type MlTarget = { target: string; mode: string; reason: string;
+  model: null | { id: string; name: string; version: number; dataset_source: string; production_validated: boolean; validation_note: string; health: string; holdout?: Record<string, number | null> };
+  last_training: null | { id: string; status: string; trigger: string; dataset_source: string; at: string };
+  last_drift: null | { state: string; max_psi: number | null; at: string } };
+export type MlRun = { id: string; target: string; trigger: string; dataset_source: string; status: string; summary: Record<string, unknown>;
+  model_id: string | null; requested_by: string; started_at: string; finished_at: string | null };
+export type MlModelRow = { id: string; name: string; status: string; target: string | null; version: number | null; dataset_source: string | null;
+  production_validated: boolean; validation_note: string | null; health: string | null; trained_by: string; trained_at: string;
+  split: Record<string, number>; metrics: { holdout?: Record<string, number | null>; holdout_baseline_brier?: number; statistical_holdout_brier?: number | null } };
 
 export async function exportAnalytics(f: Record<string, string | undefined>, format: string) {
   const s = getSession();

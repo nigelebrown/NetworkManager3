@@ -96,3 +96,20 @@ def test_assign_imported_device_to_new_or_existing_site(client, admin):
         assert client.get(f"/api/v1/devices/{device}", headers=admin).json()["site_id"] == site_id
         site_ids.append(site_id)
     assert site_ids[0] == site_ids[1]
+
+
+def test_partial_mode_imports_valid_rows_and_reports_each_rejection(client, admin):
+    assert client.post("/api/v1/quick-devices/bulk", headers=admin,
+                       json={"devices": [_device("switch", "SW-PART-01")]}).status_code == 201
+    batch = [_device("access_point", "AP-PART-01"), _device("access_point", "ap-part-01"),
+             _device("access_point", "SW-PART-01"), _device("switch", "SW-PART-02")]
+    atomic = client.post("/api/v1/quick-devices/bulk", headers=admin, json={"devices": batch})
+    assert atomic.status_code == 422                       # default behaviour unchanged: nothing written
+    r = client.post("/api/v1/quick-devices/bulk", headers=admin, json={"devices": batch, "mode": "partial"})
+    assert r.status_code == 201, r.text
+    out = r.json()
+    assert out["added"] == 2 and out["mode"] == "partial"
+    assert [(x["index"], x["reason"]) for x in out["rejected"]] == [
+        (1, "Duplicate serial number in this file"), (2, "Serial already exists in inventory as switch")]
+    serials = {d["serial_number"] for d in client.get("/api/v1/devices", headers=admin).json() if d["source_type"] == "REAL"}
+    assert serials == {"SW-PART-01", "AP-PART-01", "SW-PART-02"}

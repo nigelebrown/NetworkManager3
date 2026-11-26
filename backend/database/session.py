@@ -17,6 +17,8 @@ from . import models_templates  # Phase 3 scoped draft templates; no device writ
 from . import models_onboarding  # encrypted reusable profiles and staged device onboarding
 from . import models_phases  # phases 5-11 (WP-02..WP-12) expand-only tables; writes stay LOCKED
 from . import models_remediation  # 0010 outbox, workflows, recovery journal, device groups
+from . import models_rc17  # noqa: F401  0015 purchasing, print jobs
+from . import models_rc18  # noqa: F401  0016 ML lifecycle, API tokens, channel credentials
 
 log = logging.getLogger("sims.db")
 
@@ -41,6 +43,10 @@ def init_engine(url: str | None = None):
     elif url.startswith("postgresql") and get_settings().role == "worker":
         # Controller polls and scheduled device plans each hold a connection during I/O.
         kwargs.update(pool_size=8, max_overflow=102)
+    if url.startswith("postgresql"):
+        # rc18: timestamps are UTC end to end, whatever TimeZone the PostgreSQL server or role defaults to
+        # (a non-UTC server returned audit times as -05:00; found by running the contract suite on PostgreSQL).
+        kwargs["connect_args"] = {"options": "-c timezone=UTC"}
     _engine = create_engine(url, pool_pre_ping=True, **kwargs)
     if url.startswith("sqlite"):
         @event.listens_for(_engine, "connect")
@@ -104,9 +110,35 @@ def assert_schema_current() -> None:
         accepted = {head}
     with get_engine().connect() as conn:
         current = MigrationContext.configure(conn).get_current_revision()
+        marker = schema_compat_marker(conn) if current not in accepted else None
+    if current not in accepted and marker and marker.get("head") == current \
+            and head in (marker.get("compatible_readers") or []) and marker.get("phase") == "expand":
+        # Expand/migrate/contract (P11-DEP-03): a newer release migrated the database with an expand-only step
+        # and declared this release's schema a compatible reader, so both versions run during the window.
+        log.warning("Running against newer expand-only schema %s inside its migration window (this release: %s).",
+                    current, head)
+        return
     if current not in accepted:
         raise RuntimeError(f"Management schema is at {current!r} but this release accepts {sorted(accepted)} (head {head!r}). "
                            "Run the installer/update (which backs up and migrates) instead of starting the API directly.")
+
+
+def schema_compat_marker(conn) -> dict | None:
+    """The migration-window marker written by expand migrations (app_settings key `schema:compat`)."""
+    from sqlalchemy import inspect, text
+    import json
+    if "app_settings" not in set(inspect(conn).get_table_names()):
+        return None
+    row = conn.execute(text("SELECT value FROM app_settings WHERE key = 'schema:compat'")).first()
+    if row is None:
+        return None
+    value = row[0]
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, dict) else None
 
 
 @contextmanager

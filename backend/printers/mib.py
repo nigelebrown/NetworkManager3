@@ -301,7 +301,8 @@ GENERIC_METRICS = [
 ]
 
 # Vendor additions. VENDOR_UNVERIFIED: values are collected and shown, but the capability stays UNVERIFIED
-# until the hardware acceptance run (TODO: Kyocera/Xerox/HP/Epson list) confirms the mapping per model.
+# until the hardware acceptance run (HW-PR rows: Kyocera fleet first, then any Xerox/HP/Epson models) confirms the
+# mapping per model.
 VENDOR_METRICS = {
     "hp": [
         _d("impressions_total", "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.5.0", verification="VENDOR_UNVERIFIED",

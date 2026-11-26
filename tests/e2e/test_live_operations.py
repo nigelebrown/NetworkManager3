@@ -6,6 +6,10 @@ Run against a running server:
 
 Walks every navigation entry, the demo load/remove switch and the engineering workflows, failing on
 any rendered error, uncaught page exception or 5xx API response. Screenshots go to evidence/e2e-live/.
+
+Since rc17 live mode refuses demo data unless the server runs with INM_ALLOW_DEMO_DATA_IN_LIVE=true (an explicit,
+audited opt-in); this suite needs that opt-in (scripts/run_full_test_suite.sh sets it for this suite only). The
+refusal path itself is covered by tests/contract (test_live_mode_refuses_demo_data_without_explicit_opt_in).
 """
 import os
 import re
@@ -68,7 +72,7 @@ def test_live_platform_end_to_end(browser):
     pw = os.environ["INM_E2E_ADMIN_PASSWORD"]
     ctx, page, problems = session(browser, "admin", pw)
     # Live mode: no demo banner, real empty-state guidance
-    page.get_by_text("Network command center").wait_for()
+    page.get_by_role("link", name="Network command center").wait_for()   # rc17 breadcrumbs repeat the label
     assert page.get_by_text("DEMO MODE").count() == 0
     shot(page, "01_noc_live_empty")
 
@@ -82,27 +86,38 @@ def test_live_platform_end_to_end(browser):
     page.get_by_role("button", name="Load demo data").click()
     page.get_by_text(re.compile("Demo data loaded:")).wait_for(timeout=60000)
     page.get_by_text("DEMO DATA LOADED alongside live data").wait_for()
+    assert any(a["action"] == "demo_dataset_loaded" for a in api(page, "GET", "/audit?limit=50"))   # opt-in is audited
     shot(page, "02_demo_loaded")
 
-    # Every page renders without an error
+    # Every page renders without an error. The sweep loads 39 screens back to back; it runs as its own
+    # administrator and paced (~1.5 s per screen) so it stays inside the per-user API rate limit (300/min,
+    # HTTP 429 by design) and the main administrator's later workflow is not throttled by it. A request-limit
+    # notice on any screen fails the sweep (it would mean the screen was never really checked).
+    api(page, "POST", "/v1/users", {"username": "e2e.sweep", "role": "admin", "temporary_password": "Sweep-Temp-2026!x",
+                                    "site_scope": "all"})
+    sctx, spage, sprob = session(browser, "e2e.sweep", "Sweep-Temp-2026!x")
     for path in PAGES:
-        page.goto(URL + path)
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(300)
-        alerts = page.locator("[role=alert]")
+        spage.goto(URL + path)
+        spage.wait_for_load_state("networkidle")
+        spage.wait_for_timeout(1200)
+        alerts = spage.locator("[role=alert]")
         for i in range(alerts.count()):
             text = alerts.nth(i).inner_text()
-            assert not re.search(r"error|failed|exception|not found", text, re.I), f"{path}: {text}"
-        shot(page, "page" + (path.replace("/", "_") or "_root"))
+            assert not re.search(r"error|failed|exception|not found|request limit", text, re.I), f"{path}: {text}"
+        shot(spage, "page" + (path.replace("/", "_") or "_root"))
 
-    # NOC wall shows both live and demo devices; drill into Device 360
+    # Live operational dashboards never mix DEMO devices in (no demo telemetry in production): the command center
+    # lists only the real device, while the inventory still shows the demo devices, each labelled DEMO.
     page.goto(URL + "/")
     page.get_by_text(re.compile("Managed devices")).wait_for()
-    assert page.locator("a[href$='/360']").count() >= 10
+    page.locator(f"a[href='/devices/{real}/360']").first.wait_for()
+    assert page.locator("a[href$='/360']").count() == 1
+    inventory = api(page, "GET", "/v1/devices")
+    assert sum(1 for d in inventory if d["source_type"] == "DEMO") >= 10 and any(d["id"] == real for d in inventory)
     page.locator(f"a[href='/devices/{real}/360']").first.click()
-    page.get_by_text("Experience", exact=True).first.wait_for()
+    page.get_by_role("tablist", name="Device 360 sections").wait_for()
     for tab in ["Ports", "Best practice", "Changes", "Configuration", "Capabilities", "Operations", "Performance"]:
-        page.get_by_role("button", name=tab, exact=True).click()
+        page.get_by_role("tab", name=tab, exact=True).click()                  # Device 360 sections are ARIA tabs
         page.wait_for_timeout(300)
     shot(page, "03_device360_real")
 
@@ -154,11 +169,11 @@ def test_live_platform_end_to_end(browser):
     shot(epage, "07_change_submitted")
     actx, apage, aprob = session(browser, "e2e.approver", "Approver-Temp-2026!")
     apage.goto(URL + "/changes")
-    card = apage.locator("div.rounded-lg", has=apage.get_by_text("Move 1/1/4 to Voice VLAN 200")).first
+    card = apage.locator("div.rounded-lg", has=apage.get_by_text("Move 1/1/4 to Voice VLAN 200")).last   # innermost card (the demo dataset has similar plans)
     card.get_by_role("button", name="Approve").click()
     apage.get_by_text("Approved.").wait_for()
     page.goto(URL + "/changes")
-    card = page.locator("div.rounded-lg", has=page.get_by_text("Move 1/1/4 to Voice VLAN 200")).first
+    card = page.locator("div.rounded-lg", has=page.get_by_text("Move 1/1/4 to Voice VLAN 200")).last   # innermost card (the demo dataset has similar plans)
     card.get_by_role("button", name="Show device requests").click()
     card.get_by_text(re.compile("Exact device requests \\(HARDWARE\\)")).wait_for()
     card.get_by_role("button", name="Apply to device").click()
@@ -189,11 +204,11 @@ def test_live_platform_end_to_end(browser):
     epage.get_by_role("button", name="Validate & submit for approval").click()
     epage.get_by_text(re.compile("submitted for approval")).wait_for()
     apage.goto(URL + "/changes")
-    acard = apage.locator("div.rounded-lg", has=apage.get_by_text("E2E emulated VLAN 310")).first
+    acard = apage.locator("div.rounded-lg", has=apage.get_by_text("E2E emulated VLAN 310")).last   # innermost card (the demo dataset has similar plans)
     acard.get_by_role("button", name="Approve").click()
     apage.get_by_text("Approved.").wait_for()
     page.goto(URL + "/changes")
-    card = page.locator("div.rounded-lg", has=page.get_by_text("E2E emulated VLAN 310")).first
+    card = page.locator("div.rounded-lg", has=page.get_by_text("E2E emulated VLAN 310")).last   # innermost card (the demo dataset has similar plans)
     card.get_by_role("button", name="Apply to device").click()
     page.get_by_text(re.compile("Execution APPLIED_VERIFIED")).wait_for(timeout=60000)
     page.get_by_label("Execution timeline").get_by_text("EMULATED").wait_for()
@@ -232,7 +247,7 @@ def test_live_platform_end_to_end(browser):
     assert page.get_by_text("DEMO DATA LOADED").count() == 0
     shot(page, "10_after_demo_removed")
 
-    all_problems = problems + eprob + aprob
+    all_problems = problems + eprob + aprob + sprob
     assert not all_problems, all_problems
-    for c in (ctx, ectx, actx):
+    for c in (ctx, ectx, actx, sctx):
         c.close()

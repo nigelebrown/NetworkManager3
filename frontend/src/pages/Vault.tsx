@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { DevicePicker, Notice, PageHeader, Pill, btn, btn2, inputCls, statusTone, useAction } from "../components/viz";
+import { request } from "../services/api";
 import { ops, rw } from "../services/ops";
 
 export default function Vault() {
@@ -41,7 +42,11 @@ export default function Vault() {
             <button className={btn2} disabled={!target || act.busy} onClick={() => act.run(async () => {
               const r = await ops.precheck(a.id, target); vers.reload(); return r.result === "PASS" ? "Restore pre-check PASSED (integrity + compatibility). Lab readback is still required." : `Restore pre-check FAILED: ${r.reasons.join("; ")}`; })}>Restore pre-check</button>
             <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { const r = await rw.restorePlan(a.id, target || undefined);
-              return `Restore change plan ${r.plan_id.slice(0, 8)} created — it needs independent approval in Change workflow.`; })}>Create restore plan</button></td></tr>)}
+              return `Restore change plan ${r.plan_id.slice(0, 8)} created — it needs independent approval in Change workflow.`; })}>Create restore plan</button>
+            <button className={btn2} disabled={act.busy} title="Instant clusters: typed settings only" onClick={() => act.run(async () => {
+              const r = await request<{ operations: unknown[]; unrestorable: { setting: string; reason: string }[]; plan: { id: string } | null }>(`/v1/vault/artifacts/${encodeURIComponent(a.id)}/typed-restore-plan`, { method: "POST" });
+              const un = r.unrestorable.length ? ` Not restorable by typed ops: ${r.unrestorable.map(u => `${u.setting} (${u.reason})`).join("; ")}.` : "";
+              return r.plan ? `Typed restore plan ${r.plan.id.slice(0, 8)} with ${r.operations.length} operation(s) awaits approval.${un}` : `No typed differences.${un}`; })}>Typed restore (Instant)</button></td></tr>)}
           {!vers.data.full_fidelity.length && <tr><td colSpan={7} className="py-3 text-center text-slate-500">No vault versions yet.</td></tr>}</tbody></table>
       <div className="mt-3 max-w-md"><DevicePicker label="Restore pre-check target (lab or replacement device)" value={target} onChange={id => setTarget(id)} /></div>
       <p className="mt-2 text-xs text-slate-500">{vers.data.redacted_baselines.length} redacted onboarding baseline(s) exist for this device; they are labelled NOT RESTORABLE and kept separate.</p>

@@ -58,6 +58,7 @@ def test_change_fault_correlation_lists_recent_changes_on_device_and_neighbours(
     from tests.conftest import make_user
     from backend.infrastructure import change_executor as X
     app_env.setenv("SIMS_MODE", "live")
+    app_env.setenv("INM_ALLOW_DEMO_DATA_IN_LIVE", "true")
     app_env.setenv("SIMS_INM_PROFILE", "lab-readonly")
     app_env.setenv("INM_VAULT_DIR", str(tmp_path / "vault"))
     X._EMULATORS.clear()

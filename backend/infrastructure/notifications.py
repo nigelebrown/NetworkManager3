@@ -8,8 +8,15 @@ sweep() is idempotent and safe to run from every scheduler/worker replica:
   3. deliver: PENDING deliveries are sent; failures retry with exponential backoff and become DEAD after
      MAX_ATTEMPTS — visible in the UI, never silently dropped, never reported as sent.
 
-Channels never hold credentials: webhook URLs with userinfo are refused; email uses the operator-configured SMTP
-relay (INM_SMTP_HOST/INM_SMTP_PORT/INM_SMTP_FROM); syslog is RFC 5424 over UDP.
+Channels never hold credentials in their target: webhook URLs with userinfo are refused. rc18 integrations add
+per-channel settings (``config``) and Fernet-encrypted credentials (``secret_enc``, never returned by any API):
+  email     per-channel SMTP relay host/port/STARTTLS/implicit TLS/username (+ encrypted password); falls back to
+            INM_SMTP_HOST/INM_SMTP_PORT/INM_SMTP_FROM when no relay is configured on the channel
+  webhook   optional bearer token or HMAC-SHA256 body signature (X-INM-Signature: sha256=<hex>)
+  teams     Microsoft Teams Workflows incoming webhook, Adaptive Card message envelope
+  syslog    RFC 5424 over UDP (default) or TCP with RFC 6587 octet counting
+  heartbeat external-monitoring push (Healthchecks / Uptime Kuma style): HTTP POST of a health summary every
+            ``interval_minutes``; failures are recorded as DEAD HEARTBEAT deliveries
 """
 from __future__ import annotations
 
@@ -32,7 +39,8 @@ from ..database.models_phases import InmAlert
 from ..database.models_remediation import NotificationChannel, NotificationDelivery
 
 SEVERITY_RANK = {"info": 0, "minor": 1, "major": 2, "critical": 3}
-KINDS = ("webhook", "email", "syslog")
+KINDS = ("webhook", "email", "syslog", "teams", "heartbeat")
+URL_KINDS = ("webhook", "teams", "heartbeat")
 MAX_ATTEMPTS = 6
 TIMEOUT_S = 5.0
 
@@ -53,12 +61,14 @@ def validate_channel(kind: str, target: str, min_severity: str) -> None:
     target = (target or "").strip()
     if not target:
         raise ChannelError("target is required")
-    if kind == "webhook":
+    if kind in URL_KINDS:
         u = urlparse(target)
         if u.scheme not in ("http", "https") or not u.hostname:
-            raise ChannelError("webhook target must be an http(s) URL")
+            raise ChannelError(f"{kind} target must be an http(s) URL")
         if u.username or u.password:
-            raise ChannelError("credentials in the webhook URL are not allowed")
+            raise ChannelError(f"credentials in the {kind} URL are not allowed")
+        if kind == "teams" and u.scheme != "https":
+            raise ChannelError("Microsoft Teams workflow webhooks are HTTPS only")
         _safe_webhook_destination(u)
     elif kind == "email":
         addrs = [a.strip() for a in target.split(",") if a.strip()]
@@ -93,6 +103,77 @@ def _safe_webhook_destination(u) -> None:
         return  # DNS is also checked immediately before sending
     if not addr.is_global:
         raise ChannelError("non-public webhook addresses require an explicit host allowlist")
+
+
+CONFIG_KEYS = {
+    "email": {"smtp_host", "smtp_port", "smtp_security", "smtp_username", "from_address"},
+    "webhook": {"auth"},                      # none | bearer | hmac
+    "teams": set(),
+    "syslog": {"protocol"},                   # udp | tcp
+    "heartbeat": {"interval_minutes"},
+}
+
+
+def validate_config(kind: str, config: dict | None, has_secret: bool) -> dict:
+    """Non-secret per-channel settings. Unknown keys are refused so nothing secret is stored in clear."""
+    config = dict(config or {})
+    unknown = set(config) - CONFIG_KEYS.get(kind, set())
+    if unknown:
+        raise ChannelError(f"unsupported settings for {kind}: {sorted(unknown)}")
+    if kind == "email" and config.get("smtp_host"):
+        host = str(config["smtp_host"]).strip()
+        if not host or " " in host or "/" in host:
+            raise ChannelError("smtp_host must be a host name or address")
+        port = int(config.get("smtp_port") or 587)
+        if not 0 < port < 65536:
+            raise ChannelError("smtp_port must be 1-65535")
+        sec = config.get("smtp_security") or "starttls"
+        if sec not in ("starttls", "tls", "none"):
+            raise ChannelError("smtp_security must be starttls, tls or none")
+        if config.get("smtp_username") and not has_secret:
+            raise ChannelError("an SMTP username needs a password (stored encrypted)")
+        config |= {"smtp_host": host, "smtp_port": port, "smtp_security": sec}
+    if kind == "webhook":
+        auth = config.get("auth") or "none"
+        if auth not in ("none", "bearer", "hmac"):
+            raise ChannelError("webhook auth must be none, bearer or hmac")
+        if auth != "none" and not has_secret:
+            raise ChannelError(f"webhook {auth} authentication needs a secret (stored encrypted)")
+        config["auth"] = auth
+    if kind == "syslog":
+        proto = config.get("protocol") or "udp"
+        if proto not in ("udp", "tcp"):
+            raise ChannelError("syslog protocol must be udp or tcp")
+        config["protocol"] = proto
+    if kind == "heartbeat":
+        iv = int(config.get("interval_minutes") or 5)
+        if not 1 <= iv <= 1440:
+            raise ChannelError("heartbeat interval must be 1-1440 minutes")
+        config["interval_minutes"] = iv
+    return config
+
+
+def _secret(ch: NotificationChannel) -> str | None:
+    if not getattr(ch, "secret_enc", None):
+        return None
+    from ..security.crypto import decrypt_secret
+    return decrypt_secret(ch.secret_enc)
+
+
+def teams_card(payload: dict) -> dict:
+    """Adaptive Card message envelope accepted by Teams Workflows webhooks (MessageCard is not supported)."""
+    sev = str(payload.get("severity", "info"))
+    facts = [{"title": k, "value": str(payload[k])} for k in ("severity", "state", "rule_id", "device_id", "site_id",
+                                                               "value", "threshold", "opened_at", "event_kind")
+             if payload.get(k) not in (None, "")]
+    return {"type": "message", "attachments": [{
+        "contentType": "application/vnd.microsoft.card.adaptive", "contentUrl": None,
+        "content": {"$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "type": "AdaptiveCard",
+                    "version": "1.4", "body": [
+                        {"type": "TextBlock", "size": "Medium", "weight": "Bolder", "wrap": True,
+                         "color": "Attention" if sev in ("critical", "major") else "Default",
+                         "text": f"INM {payload.get('notification', '')}: {payload.get('message', '')}"[:300]},
+                        {"type": "FactSet", "facts": facts}]}}]}
 
 
 def _validate_webhook_dns(target: str) -> None:
@@ -134,6 +215,8 @@ def _enqueue(db: Session, ch: NotificationChannel, a: InmAlert | None, kind: str
 
 
 def _eligible(ch: NotificationChannel, a: InmAlert) -> bool:
+    if ch.kind == "heartbeat":
+        return False                      # monitoring push endpoints receive heartbeats, never alerts
     if a.suppressed or (a.source_type == "DEMO" and not ch.include_demo):
         return False
     return SEVERITY_RANK.get(a.severity, 0) >= SEVERITY_RANK[ch.min_severity]
@@ -169,13 +252,29 @@ def enqueue_and_escalate(db: Session, now: datetime) -> dict:
     return out
 
 
+def enqueue_event(db: Session, *, kind: str, severity: str, message: str, ref: str, event: str,
+                  now: datetime | None = None, detail: dict | None = None) -> int:
+    """Non-alert business event (rc17: purchase requests, print-inspection findings) to every enabled channel
+    whose minimum severity admits it. Same outbox, retry and dead-letter path as alerts; idempotent per event."""
+    now = now or datetime.now(timezone.utc)
+    n = 0
+    for ch in db.scalars(select(NotificationChannel).where(NotificationChannel.enabled.is_(True))):
+        if ch.kind == "heartbeat" or SEVERITY_RANK.get(severity, 0) < SEVERITY_RANK[ch.min_severity]:
+            continue
+        payload = {"schema": "inm.event.notification/v1", "notification": "EVENT", "event_kind": kind,
+                   "event": event, "severity": severity, "message": message[:300], "ref": ref,
+                   "detail": detail or {}, "occurred_at": now.isoformat()}
+        n += _enqueue(db, ch, None, "EVENT", payload, now, f"{kind}:{ref}:{event}:{ch.id}"[:160])
+    return n
+
+
 def _subject(p: dict) -> str:
     return f"[INM {p['severity'].upper()}] {p['notification']}: {p['message']}"[:200]
 
 
 def _public_send_error(ch: NotificationChannel, exc: Exception) -> str:
     """Never persist a webhook exception's URL, which can contain an API token in its path or query."""
-    if ch.kind == "webhook":
+    if ch.kind in URL_KINDS:
         # The numerical HTTP status is safe and operationally useful; URLs, paths,
         # query strings and exception bodies may hold secrets and stay redacted.
         import re
@@ -189,34 +288,61 @@ def _public_send_error(ch: NotificationChannel, exc: Exception) -> str:
 
 def send(ch: NotificationChannel, payload: dict) -> None:
     """Send one notification. Raises on any failure — callers never treat an exception as delivered."""
-    if ch.kind == "webhook":
+    cfg = getattr(ch, "config", None) or {}
+    if ch.kind in URL_KINDS:
         _validate_webhook_dns(ch.target)
-        r = httpx.post(ch.target, json={k: v for k, v in payload.items() if k != "delivery_key"},
-                       timeout=TIMEOUT_S, follow_redirects=False,
-                       headers={"User-Agent": "NetworkManager3-notifier", "X-INM-Notification": payload["notification"],
-                                "X-INM-Idempotency-Key": str(payload.get("delivery_key") or payload.get("alert_id") or "test")})
+        body_obj = teams_card(payload) if ch.kind == "teams" else \
+            {k: v for k, v in payload.items() if k != "delivery_key"}
+        body = json.dumps(body_obj, separators=(",", ":"), default=str).encode()
+        headers = {"User-Agent": "NetworkManager3-notifier", "Content-Type": "application/json",
+                   "X-INM-Notification": str(payload.get("notification", "")),
+                   "X-INM-Idempotency-Key": str(payload.get("delivery_key") or payload.get("alert_id") or "test")}
+        if ch.kind == "webhook" and cfg.get("auth") == "bearer":
+            headers["Authorization"] = f"Bearer {_secret(ch)}"
+        elif ch.kind == "webhook" and cfg.get("auth") == "hmac":
+            import hashlib
+            import hmac as _hmac
+            headers["X-INM-Signature"] = "sha256=" + _hmac.new((_secret(ch) or "").encode(), body,
+                                                                hashlib.sha256).hexdigest()
+        r = httpx.post(ch.target, content=body, timeout=TIMEOUT_S, follow_redirects=False, headers=headers)
         if r.status_code >= 300:
             raise RuntimeError(f"webhook answered HTTP {r.status_code}")
     elif ch.kind == "email":
-        host = os.environ.get("INM_SMTP_HOST")
+        host = cfg.get("smtp_host") or os.environ.get("INM_SMTP_HOST")
         if not host:
-            raise RuntimeError("INM_SMTP_HOST is not configured")
+            raise RuntimeError("No SMTP relay: configure one on the channel or set INM_SMTP_HOST")
         msg = EmailMessage()
-        msg["From"] = os.environ.get("INM_SMTP_FROM", "inm@localhost")
+        msg["From"] = cfg.get("from_address") or os.environ.get("INM_SMTP_FROM", "inm@localhost")
         msg["To"] = ch.target
         msg["Subject"] = _subject(payload)
-        msg.set_content(json.dumps(payload, indent=1))
-        with smtplib.SMTP(host, int(os.environ.get("INM_SMTP_PORT", "25")), timeout=TIMEOUT_S) as s:
-            if os.environ.get("INM_SMTP_STARTTLS", "false").lower() == "true":
-                s.starttls()
+        msg.set_content(json.dumps(payload, indent=1, default=str))
+        if cfg.get("smtp_host"):
+            port, sec = int(cfg.get("smtp_port") or 587), cfg.get("smtp_security") or "starttls"
+        else:
+            port = int(os.environ.get("INM_SMTP_PORT", "25"))
+            sec = "starttls" if os.environ.get("INM_SMTP_STARTTLS", "false").lower() == "true" else "none"
+        import ssl
+        ctx = ssl.create_default_context()
+        cls = smtplib.SMTP_SSL if sec == "tls" else smtplib.SMTP
+        kwargs = {"context": ctx} if sec == "tls" else {}
+        with cls(host, port, timeout=TIMEOUT_S, **kwargs) as s:
+            if sec == "starttls":
+                s.starttls(context=ctx)
+            if cfg.get("smtp_username"):
+                s.login(cfg["smtp_username"], _secret(ch) or "")
             s.send_message(msg)
     else:
         host, _, port = ch.target.rpartition(":")
         sev = {"critical": 2, "major": 3, "minor": 4, "info": 6}.get(payload.get("severity", "info"), 6)
         line = (f"<{8 * 16 + sev}>1 {datetime.now(timezone.utc).isoformat()} inm networkmanager3 - "
-                f"{payload['notification']} - {_subject(payload)} {json.dumps(payload, separators=(',', ':'))}")
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.sendto(line.encode()[:8000], (host, int(port)))
+                f"{payload['notification']} - {_subject(payload)} {json.dumps(payload, separators=(',', ':'), default=str)}")
+        data = line.encode()[:8000]
+        if cfg.get("protocol") == "tcp":
+            with socket.create_connection((host, int(port)), timeout=TIMEOUT_S) as s:
+                s.sendall(f"{len(data)} ".encode() + data)          # RFC 6587 octet counting
+        else:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.sendto(data, (host, int(port)))
 
 
 def deliver_due(db: Session, now: datetime, limit: int = 200) -> dict:
@@ -249,7 +375,10 @@ def deliver_due(db: Session, now: datetime, limit: int = 200) -> dict:
         except OperationalError:
             db.rollback()
             continue
-        d = db.get(NotificationDelivery, did)
+        # populate_existing: the claim was a bulk UPDATE; an instance already in this session's identity map
+        # (sweep() enqueues and delivers in one session, expire_on_commit=False) would otherwise be stale, and
+        # writing back the same pre-claim values would leave the row stuck in SENDING.
+        d = db.get(NotificationDelivery, did, populate_existing=True)
         ch = db.get(NotificationChannel, d.channel_id)
         try:
             if ch is None or not ch.enabled:
@@ -273,7 +402,7 @@ def deliver_due(db: Session, now: datetime, limit: int = 200) -> dict:
 
 def sweep(db: Session, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
-    return {**enqueue_and_escalate(db, now), **deliver_due(db, now)}
+    return {**enqueue_and_escalate(db, now), **deliver_due(db, now), "heartbeat": heartbeats(db, now)}
 
 
 def test_send(db: Session, ch: NotificationChannel, actor: str) -> dict:
@@ -289,5 +418,40 @@ def test_send(db: Session, ch: NotificationChannel, actor: str) -> dict:
         d.state, d.sent_at = "SENT", now
     except Exception as exc:  # noqa: BLE001
         d.state, d.last_error = "DEAD", _public_send_error(ch, exc)
+    ch.last_test_at, ch.last_test_ok = now, d.state == "SENT"
     db.flush()
     return {"delivered": d.state == "SENT", "error": d.last_error, "delivery_id": d.id}
+
+
+def heartbeat_summary(db: Session) -> dict:
+    from sqlalchemy import func
+    open_alerts = dict(db.execute(select(InmAlert.severity, func.count()).where(InmAlert.state == "OPEN")
+                                  .group_by(InmAlert.severity)).all())
+    dead = db.scalar(select(func.count()).select_from(NotificationDelivery)
+                     .where(NotificationDelivery.state == "DEAD")) or 0
+    return {"schema": "inm.heartbeat/v1", "notification": "HEARTBEAT", "severity": "info", "message": "INM alive",
+            "status": "DEGRADED" if open_alerts.get("critical") else "OK", "open_alerts": open_alerts,
+            "dead_notifications": dead, "sent_at": datetime.now(timezone.utc).isoformat()}
+
+
+def heartbeats(db: Session, now: datetime) -> dict:
+    """Push the platform heartbeat to each enabled external-monitoring endpoint when its interval elapsed."""
+    out = {"sent": 0, "failed": 0}
+    for ch in db.scalars(select(NotificationChannel).where(NotificationChannel.kind == "heartbeat",
+                                                           NotificationChannel.enabled.is_(True))):
+        iv = int((ch.config or {}).get("interval_minutes") or 5)
+        if ch.last_test_at is not None and _aware(ch.last_test_at) > now - timedelta(minutes=iv):
+            continue
+        payload = heartbeat_summary(db)
+        try:
+            send(ch, payload)
+            ch.last_test_at, ch.last_test_ok = now, True
+            out["sent"] += 1
+        except Exception as exc:  # noqa: BLE001  recorded, never reported as sent
+            ch.last_test_at, ch.last_test_ok = now, False
+            db.add(NotificationDelivery(dedupe_key=f"heartbeat:{ch.id}:{now.timestamp()}", channel_id=ch.id,
+                                        kind="HEARTBEAT", payload=payload, state="DEAD", attempts=1,
+                                        last_error=_public_send_error(ch, exc), created_at=now))
+            out["failed"] += 1
+    db.flush()
+    return out

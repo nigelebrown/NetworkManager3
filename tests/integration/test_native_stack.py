@@ -46,7 +46,28 @@ def wait(pred, timeout=60, step=1.0):
     return None
 
 
+_ADMIN = {"pw": ADMIN_PW}
+
+
 def token(user="admin", pw=None):
+    """Sign in. The native stack enforces SIMS_FORCE_INITIAL_PASSWORD_CHANGE (as production does): the first admin
+    sign-in completes the mandatory password change once, exactly as an operator would, and later calls reuse it."""
+    if user == "admin" and pw is None:
+        pw = _ADMIN["pw"]
+        r = httpx.post(API + "/api/auth/login", json={"username": user, "password": pw}, timeout=10)
+        if r.status_code == 401 and pw == ADMIN_PW and _ADMIN.get("changed"):
+            pw = _ADMIN["changed"]
+            r = httpx.post(API + "/api/auth/login", json={"username": user, "password": pw}, timeout=10)
+        r.raise_for_status()
+        body = r.json()
+        if body.get("must_change_password"):
+            new = ADMIN_PW + "-it-changed"
+            ch = httpx.post(API + "/api/auth/change-password", headers={"Authorization": "Bearer " + body["access_token"]},
+                            json={"current_password": pw, "new_password": new}, timeout=10)
+            ch.raise_for_status()
+            _ADMIN["pw"] = _ADMIN["changed"] = new
+            return token()
+        return {"Authorization": "Bearer " + body["access_token"]}
     r = httpx.post(API + "/api/auth/login", json={"username": user, "password": pw or ADMIN_PW}, timeout=10)
     r.raise_for_status()
     return {"Authorization": "Bearer " + r.json()["access_token"]}

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from cryptography.fernet import Fernet, InvalidToken
 
 FIDELITY_FULL = "FULL_FIDELITY"
+FORMAT_VERSION = 1                     # sealed-artifact record format written and accepted by this release
 FIDELITY_REDACTED = "REDACTED_NOT_RESTORABLE"
 
 
@@ -55,7 +56,7 @@ def seal(plaintext: bytes, *, master_key: bytes, identity: dict) -> SealedArtifa
     p_hash = hashlib.sha256(plaintext).hexdigest()
     c_hash = hashlib.sha256(ct).hexdigest()
     manifest = dict(identity, plaintext_sha256=p_hash, ciphertext_sha256=c_hash,
-                    key_id=key_id_of(master_key), size=len(plaintext), format_version=1)
+                    key_id=key_id_of(master_key), size=len(plaintext), format_version=FORMAT_VERSION)
     return SealedArtifact(ct, wrapped, manifest["key_id"], p_hash, c_hash, manifest,
                           _sign(master_key, manifest))
 
@@ -63,6 +64,10 @@ def seal(plaintext: bytes, *, master_key: bytes, identity: dict) -> SealedArtifa
 def open_sealed(ciphertext: bytes, *, wrapped_key: str, manifest: dict, signature: str,
                 master_key: bytes) -> bytes:
     """Verify signature, ciphertext hash, decrypt, verify plaintext hash. Any mismatch -> error."""
+    if int(manifest.get("format_version", 1)) > FORMAT_VERSION:
+        # rc18 (P5-DEP-01): versioned records; an artifact written by a NEWER release is refused, not guessed at
+        raise VaultIntegrityError(f"Artifact format {manifest.get('format_version')} is newer than this release "
+                                  f"supports ({FORMAT_VERSION}); upgrade before restoring it.")
     if not hmac.compare_digest(_sign(master_key, manifest), signature):
         raise VaultIntegrityError("Manifest signature mismatch (manifest tampered or wrong key).")
     if hashlib.sha256(ciphertext).hexdigest() != manifest["ciphertext_sha256"]:

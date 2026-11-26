@@ -15,6 +15,12 @@ loki.relabel "syslog" {
     source_labels = ["__syslog_message_severity"]
     target_label  = "severity"
   }
+  // rc18: the sender address of the TCP/UDP connection. The attribution bridge only trusts an event whose sender
+  // is a registered management address (the hostname inside a message is not proof of origin).
+  rule {
+    source_labels = ["__syslog_connection_ip_address"]
+    target_label  = "source_ip"
+  }
 }
 
 loki.source.syslog "inm" {
@@ -45,21 +51,27 @@ loki.source.syslog "inm" {
   forward_to    = [loki.process.syslog_fixups.receiver]
 }
 
-// Aruba Instant puts the year in the BSD header ("Nov 14 2026 19:31:02 <host> ..."): the RFC 3164 parser then
-// labels host="2026" and the real host is the first token after the time in the message. Correct only that shape
-// and mark it, so inventory mapping never relies on guesswork. Mirrors backend/domain/syslog_host.py.
+// Year-in-header BSD syslog (rc18, verified with real packets through this pipeline):
+//  * "Nov 14 19:31:02 2026 <host> <app>[pid]: ..." (year AFTER the time) is accepted by the RFC 3164 parser, which
+//    then labels host="2026" and leaves the real host as the first token of the message. Corrected here ONLY when
+//    that token is followed by an "<app>[pid]:" / "<app>:" tag; otherwise marked YEAR_AS_HOST_UNRESOLVED.
+//  * "Nov 14 2026 19:31:02 <host> ..." (year BEFORE the time) is REJECTED by this Alloy release's RFC 3164 parser
+//    ("expecting a Stamp timestamp"); it is counted in loki_source_syslog_parsing_errors_total, which
+//    `inm verify` reports, so such loss is never silent. Which header Aruba firmware emits must be confirmed by a
+//    hardware packet capture (HW checklist).  Mirrors backend/domain/syslog_host.py.
 loki.process "syslog_fixups" {
   forward_to = [loki.write.local.receiver]
   stage.match {
     selector = "{host=~\"(19|20)[0-9]{2}\"}"
     stage.regex {
-      expression = "^\\s*\\d{1,2}:\\d{2}:\\d{2}(\\.\\d+)?\\s+(?P<real_host>[A-Za-z0-9][A-Za-z0-9._:-]*)"
+      expression = "^\\s*(?:\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d+)?\\s+)?(?P<real_host>[A-Za-z0-9][A-Za-z0-9._:-]*)\\s+[A-Za-z0-9_./-]+(?:\\[\\d+\\])?:"
+    }
+    stage.template {
+      source   = "host_correction"
+      template = "{{ if .real_host }}YEAR_AS_HOST_CORRECTED{{ else }}YEAR_AS_HOST_UNRESOLVED{{ end }}"
     }
     stage.labels {
-      values = { host = "real_host" }
-    }
-    stage.static_labels {
-      values = { host_correction = "YEAR_AS_HOST_CORRECTED" }
+      values = { host = "real_host", host_correction = "host_correction" }
     }
   }
 }

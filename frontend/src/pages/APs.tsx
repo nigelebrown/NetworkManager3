@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import SiteFilter from "../components/SiteFilter";
 import { Badge, Card, ErrorNote, SimBadge, fmtUptime, val } from "../components/ui";
 import { useLoad } from "../components/useLoad";

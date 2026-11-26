@@ -109,8 +109,8 @@ export const ops = {
   // change control
   changePlans: () => request<ChangePlan[]>("/v1/changes/plans"),
   createChange: (b: Record<string, unknown>) => post<ChangePlan>("/v1/changes/plans", b),
-  decideChange: (id: string, a: "approve" | "reject", rev: number, note: string) =>
-    post<ChangePlan>(`/v1/changes/plans/${enc(id)}/${a}`, { expected_revision: rev, note }),
+  decideChange: (id: string, a: "approve" | "reject", rev: number, note: string, emergency = false) =>
+    post<ChangePlan>(`/v1/changes/plans/${enc(id)}/${a}`, { expected_revision: rev, note, ...(emergency ? { emergency: true } : {}) }),
   executeChange: (id: string) => post<{ decision: string; denial_reason: string | null; guards: Decision["guards"] }>(`/v1/changes/plans/${enc(id)}/execute`),
   decisions: () => request<Decision[]>("/v1/changes/decisions"),
   // vault

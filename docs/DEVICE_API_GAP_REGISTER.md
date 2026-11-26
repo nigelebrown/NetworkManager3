@@ -91,3 +91,69 @@ Vendor references:
 - `switch.vlan.voice` requires an existing static non-default VLAN and explicit approval. The writable baseline is retained while setting the documented `voice` Boolean, then verified by a separate GET. See https://developer.arubanetworks.com/aoscx/v10.13/reference/put_system-vlans-vlan-id .
 - Missing or partially parsed wireless inventories no longer imply disconnects/offline APs, new poor-experience observations, or zero aggregate measurements. Incomplete aggregate polls leave a history gap rather than fabricated data. Firmware alert resolution requires current evidence.
 - The previous candidate `064fe7c23098ef20046a4d26fc31639d1641fe67` passed CI (651 isolated tests, 180 legacy tests, one browser test; run 45539462515). That success does not certify these subsequent changes. Re-run all CI and laboratory tests before release.
+
+## 1.3.0-rc16 update (software audit, 25 November 2026)
+
+Verified against code in this candidate; nothing here is hardware evidence. Full matrix: `docs/ACCEPTANCE_MATRIX_1.3.0_RC16.md`;
+hardware campaign: `docs/HARDWARE_VALIDATION_CHECKLIST_1.3.0_RC16.md`; assumptions: `docs/PROTOCOL_ASSUMPTIONS_1.3.0_RC16.md`.
+
+### Closed in software (rc16)
+
+| Gap | Was | Now |
+|---|---|---|
+| Printer SNMPv3 protocol coverage | SHA-256/AES-128 only | SHA/SHA-224/256/384/512/MD5 × AES-128/192/256/3DES/DES, authPriv and authNoPriv; weak protocols flagged. **Hardware interoperability pending (HW-PRN-01).** |
+| Printer fault preservation on truncated walks | partial alert table closed open faults | truncated tables kept as partial, never authoritative |
+| Switch counter-rate integrity | missing counters as zero; speed change and short intervals produced implausible values | withheld with reason codes |
+| Alert hysteresis | none | per-metric clear bands + per-site override |
+| Port monitoring groups | admin-only, no delete/utilisation/stale/unsupported, single-port add | complete software workflow (see changelog #8) |
+| Inventory CSV import | whole-file rejection, fixed layouts | mapping, per-row rejection, partial import, rejected export |
+| Printer list scale | 2 queries per printer | bulk load; p95 7.3 s → 0.39 s at 500 printers / 25 users (harness) |
+
+### Still open (unchanged unless noted)
+
+| Gap | State |
+|---|---|
+| Group assignment from imported group column | **NEW — PARTIAL**: column kept as reference text only |
+| Printer raw-sample storage budget | **NEW — DECISION NEEDED**: ≈ 12.4 KB/poll in the management DB; 365-day default |
+| Device-log retention/disposal | not automatic |
+| Firmware vendor signature verification; CX firmware transport | not implemented |
+| VSF provisioning; device-initiated diagnostics; Cisco/UniFi/generic SNMPv3 switch adapters | not implemented |
+| Enterprise WLAN full lifecycle; CX 802.1X/MAB provisioning; ACL/routing/QoS lifecycle | partial |
+| Instant automatic full restore | guided only |
+| Physical AP-505/AP-535/CX 6100/CX 6200 and printer certification | **BLOCKED** — no hardware access in this review |
+| HA/DR, CentOS install/restore, TimescaleDB retention, external penetration test | **BLOCKED (environment)** |
+
+
+## 1.3.0-rc17 update (25 November 2026)
+
+**Implemented in software. EMULATED evidence only, so REQUIRES HARDWARE VALIDATION:**
+
+- **CX:**
+  - `switch.acl.define/apply`, `switch.route.static`, `switch.qos.dscp_policy`, `switch.vsf.member`
+  - firmware upload/stage/boot/recover (journal-before-send; version+serial verification)
+  - ping/traceroute
+- **Instant:**
+  - `ap.role.define`, `ap.captive_portal.external`, `ap.ssid.multi_auth`
+  - cluster reboot after staging (`reload all`, never resent)
+  - typed reconciliation restore
+- **Read-only adapters:** generic SNMPv3, Cisco IOS-XE SNMP, UniFi controller.
+- **Active probe and clock offset** (HTTP Date).
+
+**UNSUPPORTED by design or vendor:**
+
+- 80 MHz configuration
+- Instant full-config restore (typed reconciliation instead)
+- CX cable test and packet capture
+- VSF on CX 6100
+- any write through non-Aruba adapters
+
+**Still open:**
+
+- CX RADIUS server/group/method creation
+- Instant multi-server RADIUS groups
+- dynamic routing
+- additional DOM formats
+- print-server agent
+- printer settings beyond location
+
+Protocol assumptions for all new paths: `docs/PROTOCOL_ASSUMPTIONS_1.3.0_RC17.md`.

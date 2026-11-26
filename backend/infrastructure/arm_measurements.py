@@ -1,5 +1,6 @@
 """Persisted, bounded read-only ARM measurement collection for real Instant APs."""
 from __future__ import annotations
+import logging
 import ipaddress
 import os
 import uuid
@@ -16,6 +17,8 @@ from ..security.crypto import decrypt_secret
 from ..security.deps import audit
 from . import ap_autodiscovery as AD
 from .change_executor import _lease, _release
+
+_log = logging.getLogger(__name__)
 
 PREFIX = "arm-rf:"
 
@@ -149,8 +152,8 @@ def collect(db, device, actor="arm-collector", *, client=None):
                             version = output_text(client.show("show version",iap_ip=target_ip) if target_ip else client.show("show version"))
                             if "arubaos-cx" in version.lower():
                                 errors["device_type"] = "Expected an Instant AP; this management address reports ArubaOS-CX"
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            _log.warning("device-type confirmation (show version) failed: %s", type(_exc).__name__, exc_info=True)
                     break
         if outputs:
             try:

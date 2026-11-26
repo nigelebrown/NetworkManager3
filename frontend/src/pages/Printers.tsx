@@ -1,12 +1,13 @@
 import { PageHeader } from "../components/viz";
 import { request } from "../services/api";
 import { FormEvent, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { Badge, Card, ErrorNote, Stat, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { printerApi, type DiscoveredPrinter, type PrinterAnalysis } from "../services/printers";
 
-type PrinterProfile = { id: string; name: string; version: string };
+type PrinterProfile = { id: string; name: string; version: string; auth_protocol?: string; priv_protocol?: string;
+  security_level?: string; weak_protocols?: string[] };
 const profilePath = "/printers/credential-profiles";
 const fieldStyle = "mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm";
 const btn = "rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50";
@@ -45,6 +46,7 @@ export function Printers() {
   const [discovery, setDiscovery] = useState<{ scanned: number; printers: DiscoveredPrinter[]; unverified?: string[] } | null>(null);
   const profiles = useLoad(() => request<PrinterProfile[]>(profilePath), [], 0);
   const [credentials, setCredentials] = useState({name: "", version: "3"});
+  const [v3Level, setV3Level] = useState<"authPriv" | "authNoPriv">("authPriv");
   const [profileId, setProfileId] = useState("");
   const [target, setTarget] = useState("");
   const [analysis, setAnalysis] = useState<PrinterAnalysis | null>(null);
@@ -151,7 +153,7 @@ export function Printers() {
           }, "Printer check completed.");
         }}>
           <label>Saved profile<select className={fieldStyle} required value={profileId} onChange={e => setProfileId(e.target.value)}>
-            <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version})</option>)}
+            <option value="">Choose a profile</option>{profiles.data?.map(p => <option value={p.id} key={p.id}>{p.name} (v{p.version}{p.auth_protocol ? ` ${p.auth_protocol}/${p.priv_protocol}` : ""}{p.weak_protocols?.length ? " — weak" : ""})</option>)}
           </select></label>
           <label>Management IPs or CIDR<textarea className={fieldStyle} required rows={3} value={target} onChange={e => setTarget(e.target.value)} /></label>
           <button className={sub} disabled={busy || !profileId}>{busy ? "Checking…" : "Discover"}</button>
@@ -193,7 +195,7 @@ export function Printers() {
             </form>}
           </div>)}
         </div>}
-        <details className="mt-4"><summary className="cursor-pointer font-medium">Add a credential profile</summary>
+        <details className="mt-4" open={profiles.data ? !profiles.data.length : undefined}><summary className="cursor-pointer font-medium">Add a credential profile</summary>
         <form className="flex flex-wrap items-end gap-3" onSubmit={e => {
           e.preventDefault();
           const form = e.currentTarget;
@@ -213,12 +215,27 @@ export function Printers() {
             onChange={e => setCredentials({...credentials, name: e.target.value})} /></label>
           <label>SNMP version<select className={fieldStyle} value={credentials.version}
             onChange={e => setCredentials({...credentials, version: e.target.value})}>
-            <option value="1">SNMPv1</option><option value="2c">SNMPv2c</option><option value="3">SNMPv3 (SHA-256 / AES-128)</option>
+            <option value="1">SNMPv1</option><option value="2c">SNMPv2c</option><option value="3">SNMPv3</option>
           </select></label>
           {credentials.version === "3" ? <>
             <label>Username<input className={fieldStyle} name="username" required maxLength={100} /></label>
+            <label>Security level<select className={fieldStyle} name="security_level" value={v3Level}
+              onChange={e => setV3Level(e.target.value as "authPriv" | "authNoPriv")}>
+              <option value="authPriv">authPriv (recommended)</option><option value="authNoPriv">authNoPriv</option>
+            </select></label>
+            <div><label htmlFor="snmp-auth-protocol">Authentication protocol</label><select id="snmp-auth-protocol" className={fieldStyle} name="auth_protocol" defaultValue="SHA256">
+              {["SHA256", "SHA", "SHA224", "SHA384", "SHA512", "MD5"].map(v =>
+                <option key={v} value={v}>{v === "MD5" ? "MD5 (weak)" : v === "SHA" ? "SHA-1" : v}</option>)}
+            </select></div>
             <label>Authentication passphrase<input className={fieldStyle} name="auth_passphrase" type="password" required minLength={8} maxLength={200} /></label>
-            <label>Privacy passphrase<input className={fieldStyle} name="privacy_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+            {v3Level === "authPriv" && <>
+              <div><label htmlFor="snmp-priv-protocol">Privacy protocol</label><select id="snmp-priv-protocol" className={fieldStyle} name="priv_protocol" defaultValue="AES128">
+                {["AES128", "AES192", "AES256", "3DES", "DES"].map(v =>
+                  <option key={v} value={v}>{v === "DES" ? "DES (weak)" : v}</option>)}
+              </select></div>
+              <label>Privacy passphrase<input className={fieldStyle} name="privacy_passphrase" type="password" required minLength={8} maxLength={200} /></label>
+            </>}
+            <p className="w-full text-xs text-slate-500">Choose the protocols configured on the printer. Mismatched protocols look the same as wrong passphrases or an unreachable printer.</p>
           </> : <label>Read-only community<input className={fieldStyle} name="community" type="password" required maxLength={200} /></label>}
           <button className={btn} disabled={busy}>Save profile</button>
         </form>

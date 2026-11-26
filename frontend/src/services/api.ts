@@ -40,6 +40,7 @@ async function performRequest<T>(path: string, init: RequestInit = {}): Promise<
     }
     throw new ApiError(resp.status, msg, retryAfterMs);
   }
+  if (resp.status === 204 || resp.headers.get("content-length") === "0") return undefined as T;
   return resp.json();
 }
 
@@ -236,6 +237,8 @@ export const fwApi = {
     post<FwChange>(`/firmware/sites/${siteId}/upgrade/plan`, { image_ids: imageIds, allow_downgrade: allowDowngrade }),
   upgradeHistory: (siteId: number) => request<FwChange[]>(`/firmware/sites/${siteId}/upgrade/history`),
   verifyUpgrade: (changeId: number) => post<FwVerification>(`/firmware/upgrades/${changeId}/verify`, {}),
+  approveReboot: (changeId: number) => post<{ by: string; at: string; members: string[] }>(`/firmware/upgrades/${changeId}/reboot-approval`, {}),
+  rebootCluster: (changeId: number) => post<{ state: string; next: string | null }>(`/firmware/upgrades/${changeId}/reboot`, {}),
   recoveryPlan: (changeId: number, imageIds: number[]) => post<FwChange>(`/firmware/upgrades/${changeId}/recovery-plan`, { image_ids: imageIds, allow_downgrade: true }),
   planCert: (siteId: number, file: File, passphrase: string) => {
     const f = new FormData(); f.append("file", file, file.name); f.append("passphrase", passphrase);

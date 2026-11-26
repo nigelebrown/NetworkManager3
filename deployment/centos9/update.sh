@@ -18,6 +18,7 @@ start_transcript update
 git -C "$ROOT" fetch --tags --quiet origin 2>/dev/null || warn "could not fetch from origin; using local tags"
 git -C "$ROOT" rev-parse -q --verify "refs/tags/$REF" >/dev/null || die "'$REF' is not a tag. Updates must use an immutable release tag." 3
 if [[ "${INM_REQUIRE_SIGNED_TAGS:-0}" == 1 ]]; then git -C "$ROOT" verify-tag "$REF" || die "tag signature verification failed" 3; fi
+verify_release_ref "$REF" || die "UPDATE REFUSED: release $REF failed signature/integrity verification (unknown or revoked key, tampered file, missing signature). Nothing was changed." 3
 
 OLD_COMMIT="$(git_commit)"; OLD_VERSION="$(release_version)"
 OLD_SCHEMA="$(schema_status)"
@@ -26,6 +27,7 @@ NEW_RELEASE="$(mktemp)"; git -C "$ROOT" show "$REF:release.json" > "$NEW_RELEASE
 python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));assert r.get("migrations_expand_only") is True, "target release does not declare expand-only migrations"' "$NEW_RELEASE" \
   || die "target release is not marked migrations_expand_only: requires a planned, manual upgrade" 3
 
+require_change_quiesce
 log "BACKUP before any change"
 BACKUP="$(bash "$ROOT/deployment/centos9/backup.sh" --label "pre-update-$REF" | tail -1)"
 [[ -f "$BACKUP" ]] || die "backup failed: update aborted, nothing changed" 4

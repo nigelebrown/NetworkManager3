@@ -25,18 +25,6 @@ export function CapChip({ op, status, evidence }: { op: string; status: string; 
   return <span title={`${status}${evidence ? ` — ${evidence}` : ""}`} className={`rounded border px-1.5 py-0.5 text-[10px] ${CAP[status] ?? CAP.UNVERIFIED}`}>{op}</span>;
 }
 
-export function PlannedNotice({ phase, title, children }: { phase: number; title: string; children?: ReactNode }) {
-  return (
-    <div className="inm-planned-notice">
-      <div className="flex items-center gap-2">
-        <span className="rounded bg-slate-700/50 px-2 py-0.5 text-xs font-bold text-slate-300">PLANNED · Phase {phase}</span>
-        <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
-      </div>
-      <div className="mt-2 text-sm text-slate-400">{children}</div>
-    </div>
-  );
-}
-
 export function Table({ head, children, empty }: { head: string[]; children: ReactNode; empty?: boolean }) {
   return (
     <div className="inm-tablewrap">

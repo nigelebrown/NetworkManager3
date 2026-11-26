@@ -35,7 +35,8 @@ def apply(db: Session, device: InmDevice, values: dict, *, now: datetime | None 
     """Evaluate rules for one device observation. correlation_id/event_id link each opened, refreshed or
     resolved alert to the observation event that caused it (E2E-15)."""
     now = now or datetime.now(timezone.utc)
-    fired = {f["rule_id"]: f for f in R.evaluate(device.family, values, overrides_for(db, device.site_id))}
+    overrides = overrides_for(db, device.site_id)
+    fired = {f["rule_id"]: f for f in R.evaluate(device.family, values, overrides)}
     suppressed = in_maintenance(db, device, now)
     opened = resolved = 0
     open_rows = {a.rule_id: a for a in db.scalars(select(InmAlert).where(
@@ -56,6 +57,12 @@ def apply(db: Session, device: InmDevice, values: dict, *, now: datetime | None 
     measured = {r.id for r in R.CATALOGUE if isinstance(values.get(r.metric), (int, float))}
     for rid, a in open_rows.items():
         if rid not in fired and rid in measured:
+            rule = R.rule_by_id(rid)
+            o = overrides.get(rid, {})
+            v = float(values[rule.metric])
+            if not R.cleared(rule, v, float(o.get("threshold", rule.threshold)), o):
+                a.value = v          # inside the hysteresis band: keep open, no resolve/notify churn
+                continue
             a.state, a.resolved_at = "RESOLVED", now
             a.correlation_id, a.event_id = correlation_id or a.correlation_id, event_id or a.event_id
             resolved += 1
@@ -95,6 +102,8 @@ def apply_entities(db: Session, device: InmDevice, per_entity: dict[str, dict], 
                 opened += 1
             elif hit:
                 a.value, a.last_seen_at = float(v), now
+            elif a is not None and not R.cleared(r, float(v), thr, o):
+                a.value = float(v)   # inside the hysteresis band
             elif a is not None:
                 a.state, a.resolved_at, a.correlation_id = "RESOLVED", now, correlation_id or a.correlation_id
                 resolved += 1

@@ -175,32 +175,158 @@ def _enrollment(db: Session, eid: str) -> OptimizationEnrollment:
     return e
 
 
+def _arm(db: Session, e: OptimizationEnrollment, user: User, request: Request) -> tuple[bool, str]:
+    """Per-device approval checks shared by single and site-batch approval. Returns (armed, reason)."""
+    if e.status != "PENDING_APPROVAL":
+        return False, f"Enrollment is {e.status}."
+    d = real_device(db, e.device_id)
+    if d.serial_number != e.immutable_serial or d.firmware != e.firmware_bound:
+        e.status, e.status_reason = "PAUSED", "Device identity/firmware changed before approval"
+        return False, "Device identity or firmware changed since request; re-request."
+    if utc(e.expires_at_utc) <= now():
+        e.status = "EXPIRED"
+        return False, "Enrollment request expired."
+    if not db.scalar(select(ConfigArtifact).where(ConfigArtifact.device_id == d.id).limit(1)):
+        return False, "Backup readiness not recorded: seal a vault artifact for this device first."
+    e.status, e.independent_approver_id, e.approved_at_utc = "ARMED", user.username, now()
+    audit(db, "optimization_enrollment_armed", username=user.username, target=d.id,
+          detail=f"enrollment={e.id} requester={e.requester_id}; global write lock still applies", request=request)
+    return True, "ARMED"
+
+
+def _independent(db: Session, requester: str, user: User, target: str, request: Request) -> None:
+    try:
+        P.check_independent_approval(requester, user.username)
+    except PolicyViolation as exc:
+        audit(db, "optimization_self_approval_denied", username=user.username, target=target,
+              detail=str(exc), request=request, success=False)
+        db.commit()
+        raise HTTPException(403, str(exc)) from None
+
+
 @router.post("/optimization/enrollments/{enrollment_id}/approve")
 def approve(enrollment_id: str, request: Request, db: Session = Depends(get_db),
             user: User = Depends(require_any_role("approver", "admin"))):
     e = _enrollment(db, enrollment_id)
-    try:
-        P.check_independent_approval(e.requester_id, user.username)
-    except PolicyViolation as exc:
-        audit(db, "optimization_self_approval_denied", username=user.username, target=e.device_id,
-              detail=str(exc), request=request, success=False)
+    _independent(db, e.requester_id, user, e.device_id, request)
+    armed, reason = _arm(db, e, user, request)
+    if not armed:
         db.commit()
-        raise HTTPException(403, str(exc)) from None
-    if e.status != "PENDING_APPROVAL":
-        raise HTTPException(409, f"Enrollment is {e.status}.")
-    d = real_device(db, e.device_id)
-    if d.serial_number != e.immutable_serial or d.firmware != e.firmware_bound:
-        e.status, e.status_reason = "PAUSED", "Device identity/firmware changed before approval"
-        raise HTTPException(409, "Device identity or firmware changed since request; re-request.")
-    if utc(e.expires_at_utc) <= now():
-        e.status = "EXPIRED"
-        raise HTTPException(409, "Enrollment request expired.")
-    if not db.scalar(select(ConfigArtifact).where(ConfigArtifact.device_id == d.id).limit(1)):
-        raise HTTPException(409, "Backup readiness not recorded: seal a vault artifact for this device first.")
-    e.status, e.independent_approver_id, e.approved_at_utc = "ARMED", user.username, now()
-    audit(db, "optimization_enrollment_armed", username=user.username, target=d.id,
-          detail=f"enrollment={e.id} requester={e.requester_id}; global write lock still applies", request=request)
+        raise HTTPException(409, reason)
     return _enr_public(e)
+
+
+# ---- site batch enrollment (owner directive 2026-11-25) -----------------------------------------
+# One request enumerates the access points registered at a site AT REQUEST TIME and creates one serial-bound
+# enrollment per AP. One independent approval arms every member that individually passes the same checks as a
+# single approval. Nothing is inherited: APs added to the site later are never enrolled by an existing batch.
+# Global write lock, emergency stop, certification, cooldown, daily limits and per-AP disable all still apply.
+BATCH_PREFIX = "opt-batch:"
+
+
+class SiteBatchInput(BaseModel):
+    site_id: str = Field(min_length=1, max_length=36)
+    template: EnrollInput
+    exclude_device_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+def _batch(db: Session, batch_id: str):
+    from ..database.models import AppSetting
+    row = db.get(AppSetting, BATCH_PREFIX + batch_id)
+    if row is None:
+        raise HTTPException(404, "Site batch not found.")
+    return row
+
+
+def _batch_public(db: Session, row) -> dict:
+    members = [db.get(OptimizationEnrollment, eid) for eid in row.value["enrollment_ids"]]
+    return {"id": row.key.removeprefix(BATCH_PREFIX), **{k: v for k, v in row.value.items() if k != "enrollment_ids"},
+            "members": [_enr_public(e) for e in members if e is not None]}
+
+
+@router.post("/optimization/site-batches", status_code=201)
+def create_site_batch(body: SiteBatchInput, request: Request, db: Session = Depends(get_db),
+                      user: User = Depends(require_role("admin"))):
+    from uuid import uuid4
+    from ..database.models import AppSetting
+    from ..database.models_inm import InmDevice, InmSite
+    if db.get(InmSite, body.site_id) is None:
+        raise HTTPException(404, "Site not found.")
+    aps = list(db.scalars(select(InmDevice).where(InmDevice.site_id == body.site_id, InmDevice.family == "access_point",
+                                                 InmDevice.source_type.in_(("REAL", "DEMO"))).order_by(InmDevice.hostname)))
+    created, skipped = [], []
+    for d in aps:
+        if d.id in body.exclude_device_ids:
+            skipped.append({"device_id": d.id, "reason": "Excluded by requester"})
+            continue
+        if not d.serial_number:
+            skipped.append({"device_id": d.id, "reason": "No serial number recorded"})
+            continue
+        if _current(db, d.id) is not None:
+            skipped.append({"device_id": d.id, "reason": "Already has an active or pending enrollment"})
+            continue
+        req = _validated(body.template.model_copy(update={"serial": d.serial_number}), d)
+        created.append(_create(db, d, req, user))
+    if not created:
+        raise HTTPException(422, "No access point at this site is eligible for a new enrollment.")
+    bid = str(uuid4())
+    row = AppSetting(key=BATCH_PREFIX + bid, updated_by=user.username, value={
+        "site_id": body.site_id, "requester_id": user.username, "created_at": iso(now()), "status": "PENDING_APPROVAL",
+        "enrollment_ids": [e.id for e in created], "skipped": skipped, "approved_by": None, "approved_at": None,
+        "inheritance": "NONE — APs added to the site later are not enrolled by this batch"})
+    db.add(row)
+    audit(db, "optimization_site_batch_requested", username=user.username, target=body.site_id,
+          detail=f"batch={bid} {len(created)} per-AP enrollments, {len(skipped)} skipped; one independent approval required",
+          request=request)
+    db.flush()
+    return _batch_public(db, row)
+
+
+@router.get("/optimization/site-batches")
+def list_site_batches(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor", "approver"))):
+    from ..database.models import AppSetting
+    rows = db.scalars(select(AppSetting).where(AppSetting.key.startswith(BATCH_PREFIX)))
+    return sorted((_batch_public(db, r) for r in rows), key=lambda b: b["created_at"], reverse=True)
+
+
+@router.post("/optimization/site-batches/{batch_id}/approve")
+def approve_site_batch(batch_id: str, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(require_any_role("approver", "admin"))):
+    row = _batch(db, batch_id)
+    _independent(db, row.value["requester_id"], user, row.value["site_id"], request)
+    if row.value["status"] != "PENDING_APPROVAL":
+        raise HTTPException(409, f"Batch is {row.value['status']}.")
+    results = []
+    for eid in row.value["enrollment_ids"]:
+        e = db.get(OptimizationEnrollment, eid)
+        if e is None:
+            continue
+        armed, reason = _arm(db, e, user, request)
+        results.append({"enrollment_id": e.id, "device_id": e.device_id, "armed": armed, "reason": reason})
+    n = sum(r["armed"] for r in results)
+    row.value = {**row.value, "status": "APPROVED" if n == len(results) else "PARTIALLY_APPROVED" if n else "REJECTED",
+                 "approved_by": user.username, "approved_at": iso(now()), "results": results}
+    audit(db, "optimization_site_batch_approved", username=user.username, target=row.value["site_id"],
+          detail=f"batch={batch_id} armed={n}/{len(results)} requester={row.value['requester_id']}", request=request)
+    db.flush()
+    return _batch_public(db, row)
+
+
+@router.post("/optimization/site-batches/{batch_id}/disable")
+def disable_site_batch(batch_id: str, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(require_role("admin"))):
+    row = _batch(db, batch_id)
+    n = 0
+    for eid in row.value["enrollment_ids"]:
+        e = db.get(OptimizationEnrollment, eid)
+        if e is not None and e.status in ACTIVE_ENROLLMENT + ("PAUSED",):
+            e.status, e.revoked_at_utc, e.revoked_by, e.status_reason = "REVOKED", now(), user.username, "BATCH_DISABLED"
+            n += 1
+    row.value = {**row.value, "status": "DISABLED"}
+    audit(db, "optimization_site_batch_disabled", username=user.username, target=row.value["site_id"],
+          detail=f"batch={batch_id} revoked={n}; immediate, no second approval", request=request)
+    db.flush()
+    return _batch_public(db, row)
 
 
 @router.post("/devices/{device_id}/optimization/disable")

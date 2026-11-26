@@ -175,3 +175,49 @@ print(json.dumps({"ts":datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }
 
 schema_status() { compose exec -T api python -m backend.cli schema-status 2>/dev/null | tail -1; }
+
+# rc18 (P6-DEP-01): never stop the platform while a device change is executing or an interrupted change still
+# needs recovery. Exit 4 from the CLI = not quiescent. If the API cannot answer (stack down), the journal
+# cannot be read, so the update also refuses rather than assuming nothing is in flight.
+require_change_quiesce() {
+  local out rc=0
+  out="$(compose exec -T api python -m backend.cli change-quiesce-check 2>/dev/null | tail -1)" || rc=$?
+  if [[ $rc -eq 0 ]] && grep -q '"quiescent": true' <<<"$out"; then log "change quiesce check: $out"; return 0; fi
+  die "UPDATE REFUSED: a device change is executing or awaiting recovery ($out). Wait for it to finish or resolve it in Change recovery, then retry. Nothing was changed." 5
+}
+
+# ---- release authenticity (rc18, P11-DEP-06) -------------------------------------------------------------
+# The verifier that runs is the copy INSTALLED by release-trust.sh (hash recorded in the trust store), never the
+# one inside the package being checked: a tampered package cannot vouch for itself.
+TRUST_DIR="${INM_RELEASE_TRUST_DIR:-$ETC/release-keys}"
+VERIFIER="${INM_RELEASE_VERIFIER:-/usr/local/lib/inm/release_signing.py}"
+
+release_signature_required() {  # live: always. demo: unless INM_ALLOW_UNSIGNED_RELEASE=1 (logged loudly)
+  local mode="${INM_MODE:-}"
+  [[ -z "$mode" && -f "$ENV_FILE" ]] && mode="$(env_get INM_MODE || true)"
+  if [[ "$mode" != live && "${INM_ALLOW_UNSIGNED_RELEASE:-0}" == 1 ]]; then
+    warn "UNSIGNED RELEASE ALLOWED (mode=${mode:-unset}, INM_ALLOW_UNSIGNED_RELEASE=1). Never use this in production."
+    return 1
+  fi
+  return 0
+}
+
+_verifier_ok() {
+  [[ -f "$VERIFIER" ]] || { warn "release verifier not installed at $VERIFIER: run deployment/centos9/release-trust.sh init"; return 1; }
+  [[ -f "$TRUST_DIR/verifier.sha256" ]] || { warn "no recorded verifier hash in $TRUST_DIR"; return 1; }
+  local want have
+  want="$(tr -d '[:space:]' < "$TRUST_DIR/verifier.sha256")"; have="$(sha256sum "$VERIFIER" | cut -d' ' -f1)"
+  [[ "$want" == "$have" ]] || { warn "installed verifier hash changed ($have != $want): refusing"; return 1; }
+}
+
+verify_release_dir() {  # $1 = extracted release directory
+  if ! release_signature_required; then return 0; fi
+  _verifier_ok || return 3
+  python3 -I "$VERIFIER" verify --store "$TRUST_DIR" --dir "$1"
+}
+
+verify_release_ref() {  # $1 = git ref in $ROOT; verifies exactly the tracked tree of that ref
+  if ! release_signature_required; then return 0; fi
+  _verifier_ok || return 3
+  python3 -I "$VERIFIER" verify-git --store "$TRUST_DIR" --repo "$ROOT" --ref "$1"
+}

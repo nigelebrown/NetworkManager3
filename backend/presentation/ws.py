@@ -98,8 +98,8 @@ class Hub:
         self.clients.discard(c)
         try:
             await c.ws.close(code=code, reason=reason)
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("best-effort closing a dropped WebSocket: %s", type(_exc).__name__)
 
 
 hub = Hub()
@@ -152,7 +152,7 @@ async def events(ws: WebSocket):
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     except WebSocketDisconnect:
-        pass
+        pass  # client disconnected: normal end of the session
     finally:
         for t in tasks:
             t.cancel()
@@ -193,7 +193,7 @@ async def run_ui_subscriber(stop: asyncio.Event) -> None:
             if nc:
                 try:
                     await nc.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    log.debug("best-effort NATS close after a bus error: %s", type(_exc).__name__)
         if not stop.is_set():
             await asyncio.sleep(3)

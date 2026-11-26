@@ -37,7 +37,9 @@ from . import utilization as U
 log = logging.getLogger("inm.printers")
 PROFILE_PREFIX = "printer-snmp:"
 RETENTION_KEY = "printer_retention"
-DEFAULT_RETENTION = {"raw_days": 365, "aggregate_years": 5}
+# sample_heartbeat_hours: raw SNMP samples are stored on change; an unchanged value is re-stored at most once per
+# heartbeat (rc17 storage fix — previously every metric of every poll was stored, ~12.4 KB/poll).
+DEFAULT_RETENTION = {"raw_days": 365, "aggregate_years": 5, "sample_heartbeat_hours": 6}
 MAX_BACKOFF_SECONDS = 6 * 3600
 LEASE_SECONDS = 120
 
@@ -184,7 +186,9 @@ def _credentials(db: Session, profile_id: str | None):
     if row is None:
         return None
     from ..security.crypto import decrypt_secret
-    return row.value["version"], json.loads(decrypt_secret(row.value["encrypted"]))
+    from .snmp import usm_options
+    options = usm_options(row.value) if row.value["version"] == "3" else {}
+    return row.value["version"], json.loads(decrypt_secret(row.value["encrypted"])), options
 
 
 def make_reader(db: Session, host: str | None, credential_profile_id: str | None) -> C.SnmpReader:
@@ -195,8 +199,8 @@ def make_reader(db: Session, host: str | None, credential_profile_id: str | None
     creds = _credentials(db, credential_profile_id)
     if creds is None:
         raise LookupError("no usable SNMP credential profile assigned")
-    version, secrets = creds
-    return C.PysnmpReader(host, version, *secrets)
+    version, secrets, options = creds
+    return C.PysnmpReader(host, version, *secrets, **options)
 
 
 # ---- applying a poll --------------------------------------------------------------------------------
@@ -296,7 +300,19 @@ def apply_poll(db: Session, printer: PrinterDevice, res: C.PollResult, *, poll_i
     conflict = _reconcile_identity(db, printer, ident, res.identity, at)
     printer.last_checked_at = at
 
+    heartbeat = timedelta(hours=float(retention_policy(db).get("sample_heartbeat_hours") or 6))
+    previous: dict[tuple[str, str], tuple] = {}
+    for row in db.execute(select(PrinterMetricSample.metric_key, PrinterMetricSample.instance, PrinterMetricSample.value_state,
+                                 PrinterMetricSample.normalized_value, PrinterMetricSample.text_value,
+                                 PrinterMetricSample.observed_at)
+                          .where(PrinterMetricSample.printer_id == printer.id, PrinterMetricSample.observed_at > at - heartbeat)
+                          .order_by(PrinterMetricSample.observed_at.desc())):
+        previous.setdefault((row[0], row[1]), row[2:5])
+    stored = 0
     for s in res.samples:
+        if previous.get((s.metric_key, s.instance[:32])) == (s.value_state, s.normalized_value, s.text_value):
+            continue    # unchanged within the heartbeat: freshness is mon.last_success_at / metric_last_polled
+        stored += 1
         db.add(PrinterMetricSample(printer_id=printer.id, poll_id=poll_id, metric_key=s.metric_key, instance=s.instance[:32],
                                    oid=(s.oid or "")[:200] or None, raw_value=s.raw_value, normalized_value=s.normalized_value,
                                    text_value=s.text_value, unit=s.unit, value_state=s.value_state,
@@ -304,6 +320,7 @@ def apply_poll(db: Session, printer: PrinterDevice, res: C.PollResult, *, poll_i
                                    source=res.source, profile_key=res.profile_key, profile_version=res.profile_version,
                                    observed_at=at))
     summary["samples"] = len(res.samples)
+    summary["samples_stored"] = stored
 
     # meters → readings + validated intervals
     current_impressions = None
@@ -509,8 +526,8 @@ async def poll_printer(session_factory: Callable, printer_id: str, owner: str | 
         finally:
             try:
                 await reader.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as _exc:  # noqa: BLE001
+                log.debug("best-effort closing the SNMP reader after a poll: %s", type(_exc).__name__)
     import uuid
     with session_factory() as db:
         p = db.get(PrinterDevice, printer_id)
@@ -898,8 +915,8 @@ async def _run_discovery(session_factory, job_id, params, owner):
                 if reader is not None:
                     try:
                         await reader.close()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        log.debug("best-effort closing the SNMP reader after discovery: %s", type(_exc).__name__)
         return {"error": {"address": host, "error": last_error}}
 
     async def one(host):
@@ -1169,6 +1186,8 @@ REPORTS = {
     "low_utilization": {"title": "Low utilization printers"},
     "maintenance": {"title": "Maintenance history"},
     "standardization": {"title": "Standardization (model comparison)"},
+    "annual_utilization": {"title": "Annual utilization (mono / colour / duplex)"},
+    "paper_size_utilization": {"title": "Paper-size utilization"},
     "executive_fleet": {"title": "Executive fleet summary"},
 }
 
@@ -1212,7 +1231,9 @@ def build_report(db: Session, key: str, filters: dict, scope: list[int] | None =
     if key not in REPORTS:
         raise ValueError("unknown report")
     printers = filtered_printers(db, filters, scope)
-    start, end = _period_from(filters, 365 if key in ("model_reliability", "standardization", "executive_fleet") else 30)
+    start, end = _period_from(filters, 730 if key == "annual_utilization" else
+                              365 if key in ("model_reliability", "standardization", "executive_fleet",
+                                             "paper_size_utilization") else 30)
     meta = {"report": REPORTS[key]["title"], "period": f"{start.date()} to {end.date()}",
             "filters": json.dumps({k: v for k, v in filters.items() if v}), "printers_in_scope": len(printers),
             "basis": "Validated counter intervals; missing coverage is reported, never filled with zeros"}
@@ -1255,6 +1276,47 @@ def build_report(db: Session, key: str, filters: dict, scope: list[int] | None =
             covered = [r["volume"] for r in rows if r["volume"] is not None]
             meta["reconciled_total"] = round(sum(covered), 2) if covered else None
             meta["missing_buckets"] = sum(1 for r in rows if r["volume"] is None)
+    elif key == "annual_utilization":
+        # Calendar-year totals from validated monthly intervals; a month without coverage stays missing (never 0).
+        cols = ["printer_id", "printer", "model", "year", "impressions", "mono", "colour", "duplex_sheets",
+                "colour_share_percent", "duplex_share_percent", "months_covered", "months_missing", "basis"]
+        for p in printers:
+            name = p.hostname or p.serial_number
+            u = utilization(db, p.id, start, end, "month")
+            years: dict = {}
+            for b in u["buckets"]:
+                y = years.setdefault(b["bucket_start"][:4], {"vol": 0.0, "cov": 0, "miss": 0})
+                if b["volume"] is None:
+                    y["miss"] += 1
+                else:
+                    y["vol"] += b["volume"]
+                    y["cov"] += 1
+            split = _meter_deltas(db, p.id, start, end, ("bw_impressions", "colour_impressions", "duplex_sheets"))
+            for year, y in sorted(years.items()):
+                sp = split.get(year, {})
+                mono, colour, duplex = sp.get("bw_impressions"), sp.get("colour_impressions"), sp.get("duplex_sheets")
+                tot = (mono or 0) + (colour or 0)
+                rows.append({"printer_id": p.id, "printer": name, "model": p.model, "year": year,
+                             "impressions": round(y["vol"], 2) if y["cov"] else None, "mono": mono, "colour": colour,
+                             "duplex_sheets": duplex,
+                             "colour_share_percent": round(100 * colour / tot, 1) if colour is not None and tot else None,
+                             "duplex_share_percent": round(100 * duplex / y["vol"], 1) if duplex is not None and y["vol"] else None,
+                             "months_covered": y["cov"], "months_missing": y["miss"],
+                             "basis": u["meter_kind"] + "; mono/colour/duplex from device meters where reported"})
+    elif key == "paper_size_utilization":
+        # Standard Printer-MIB has no per-size page counters. Values come only from vendor counters mapped in an SNMP
+        # MIB profile (metric keys pages_a4/pages_letter/pages_legal/pages_a3/pages_other_size); models without
+        # such a mapping are listed as NOT_SUPPORTED_BY_PROFILE rather than estimated.
+        keys = ("pages_a4", "pages_letter", "pages_legal", "pages_a3", "pages_other_size")
+        cols = ["printer_id", "printer", "model", "status", *keys, "a4_share_percent"]
+        for p in printers:
+            d = _meter_deltas(db, p.id, start, end, keys, by_year=False).get("all", {})
+            vals = {k: d.get(k) for k in keys}
+            tot = sum(v for v in vals.values() if v is not None)
+            rows.append({"printer_id": p.id, "printer": p.hostname or p.serial_number, "model": p.model,
+                         "status": "MEASURED" if any(v is not None for v in vals.values()) else "NOT_SUPPORTED_BY_PROFILE",
+                         **vals, "a4_share_percent": round(100 * vals["pages_a4"] / tot, 1) if vals["pages_a4"] and tot else None})
+        meta["basis"] = "Vendor per-size counters (deltas within the period); no estimate where a model reports none"
     elif key == "consumable_efficiency":
         cols = ["printer_id", "printer", "model", "supply", "colour", "installed_at", "removed_at", "measured_yield",
                 "cost_amount", "currency", "cost_per_1000", "basis"]
@@ -1313,3 +1375,27 @@ def build_report(db: Session, key: str, filters: dict, scope: list[int] | None =
             {"metric": "Recommendations awaiting review", "value": recs, "basis": "rules " + fleet.RULE_VERSION},
         ]
     return cols, rows, meta
+
+
+
+def _meter_deltas(db: Session, printer_id: str, start, end, keys, *, by_year: bool = True) -> dict:
+    """Monotonic counter deltas per key (per calendar year, or 'all'), from stored raw samples. A counter decrease is
+    treated as a reset and its interval is skipped (never negative, never filled)."""
+    from ..database.models_printer_srs import PrinterMetricSample
+    rows = db.execute(select(PrinterMetricSample.metric_key, PrinterMetricSample.observed_at,
+                             PrinterMetricSample.normalized_value)
+                      .where(PrinterMetricSample.printer_id == printer_id, PrinterMetricSample.metric_key.in_(list(keys)),
+                             PrinterMetricSample.observed_at >= start, PrinterMetricSample.observed_at <= end,
+                             PrinterMetricSample.normalized_value.is_not(None))
+                      .order_by(PrinterMetricSample.metric_key, PrinterMetricSample.observed_at)).all()
+    out: dict = {}
+    prev: dict = {}
+    for k, t, v in rows:
+        bucket = (t.isoformat()[:4]) if by_year else "all"
+        if k in prev:
+            dv = v - prev[k]
+            if dv >= 0:
+                out.setdefault(bucket, {}).setdefault(k, 0.0)
+                out[bucket][k] += dv
+        prev[k] = v
+    return {b: {k: round(x, 2) for k, x in d.items()} for b, d in out.items()}

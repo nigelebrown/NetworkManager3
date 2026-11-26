@@ -195,10 +195,15 @@ class Worker:
             await asyncio.to_thread(J.safe(J.optimizer))
             await asyncio.to_thread(J.safe(J.recovery_sweep))
             await asyncio.to_thread(J.safe(J.discovery_rules))
+            await asyncio.to_thread(J.safe(J.device_probes))
+            await asyncio.to_thread(J.safe(J.syslog_bridge))
             if tick % 12 == 0:
                 await asyncio.to_thread(J.safe(J.scheduled_analysis))
             if tick % 72 == 0:
                 await asyncio.to_thread(J.safe(J.predictive))
+            if tick % 288 == 0:                       # daily: model scoring/drift, then retraining check
+                await asyncio.to_thread(J.safe(J.ml_monitor))
+                await asyncio.to_thread(J.safe(J.ml_retrain))
             tick += 1
             await self._sleep(300)
 
@@ -228,6 +233,9 @@ class Worker:
                 await PS.tick_jobs(session_scope, f"worker-{self.instance}")
                 if tick % 1440 == 0:
                     await asyncio.to_thread(J.safe(J.printer_daily))
+                    await asyncio.to_thread(J.safe(J.device_log_retention))
+                    await asyncio.to_thread(J.safe(J.printer_purchasing))
+                    await asyncio.to_thread(J.safe(J.print_job_retention))
             except Exception as exc:  # never crash the worker on one bad printer or job
                 log.warning("printer cycle failed: %s", type(exc).__name__)
                 self.stats["last_error"] = f"printers: {type(exc).__name__}"
@@ -538,7 +546,7 @@ class Worker:
         try:
             await asyncio.wait_for(self.stop.wait(), timeout=max(0.1, seconds))
         except asyncio.TimeoutError:
-            pass
+            pass  # the interval elapsed without a stop request (normal)
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()

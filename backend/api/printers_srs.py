@@ -41,7 +41,8 @@ viewer = Depends(require_role("viewer"))
 operator = Depends(require_role("operator"))
 admin = Depends(require_role("admin"))
 reviewer = Depends(require_any_role("approver", "admin"))
-METRIC_KEYS = ("impressions_total", "sheets_total", "bw_impressions", "colour_impressions", "copy_impressions",
+METRIC_KEYS = ("pages_a4", "pages_letter", "pages_legal", "pages_a3", "pages_other_size",   # rc18 vendor counters
+               "impressions_total", "sheets_total", "bw_impressions", "colour_impressions", "copy_impressions",
                "scan_count", "fax_impressions", "duplex_sheets", "supply_level_vendor", "serial_number", "firmware")
 
 
@@ -78,8 +79,24 @@ def _parse_dt(v: str | None, default: datetime) -> datetime:
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-def _summary(db: Session, p: PrinterDevice, site_names: dict[int, str], now: datetime) -> dict:
-    mon, ident = db.get(PrinterMonitoring, p.id), db.get(PrinterIdentity, p.id)
+def _preload(db: Session, printer_ids: list[str]) -> tuple[dict, dict]:
+    """Monitoring + identity rows for many printers in two queries per 1,000 ids (was 2 queries per printer).
+    Returned dicts hold strong references; the session identity map alone is weak and may drop them."""
+    mons: dict = {}
+    idents: dict = {}
+    for start in range(0, len(printer_ids), 1000):
+        chunk = printer_ids[start:start + 1000]
+        mons |= {m.printer_id: m for m in db.scalars(select(PrinterMonitoring).where(PrinterMonitoring.printer_id.in_(chunk)))}
+        idents |= {i.printer_id: i for i in db.scalars(select(PrinterIdentity).where(PrinterIdentity.printer_id.in_(chunk)))}
+    return mons, idents
+
+
+def _summary(db: Session, p: PrinterDevice, site_names: dict[int, str], now: datetime,
+             preloaded: tuple[dict, dict] | None = None) -> dict:
+    if preloaded is not None:
+        mon, ident = preloaded[0].get(p.id), preloaded[1].get(p.id)
+    else:
+        mon, ident = db.get(PrinterMonitoring, p.id), db.get(PrinterIdentity, p.id)
     fresh = None
     if mon and mon.last_success_at:
         age = (now - S._utc(mon.last_success_at)).total_seconds()
@@ -123,14 +140,17 @@ def list_printers(response: Response, manufacturer: str | None = None, model: st
     response.headers["X-Total-Count"] = str(len(printers))
     sites = {s.id: s.name for s in db.scalars(select(Site))}
     now = S.now_utc()
-    return [_summary(db, p, sites, now) for p in printers[offset:offset + limit]]
+    page = printers[offset:offset + limit]
+    pre = _preload(db, [p.id for p in page])
+    return [_summary(db, p, sites, now, pre) for p in page]
 
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db), user: User = viewer):
     printers = S.filtered_printers(db, {}, _scope())
     ids = [p.id for p in printers] or [""]
-    mons = [m for m in (db.get(PrinterMonitoring, p.id) for p in printers) if m]
+    pre_mons, _ = _preload(db, [p.id for p in printers])
+    mons = [m for m in (pre_mons.get(p.id) for p in printers) if m]
     health = [m.health_score for m in mons if m.health_score is not None]
     faults = db.execute(select(PrinterFaultEvent.category, PrinterFaultEvent.severity, func.count()).where(
         PrinterFaultEvent.printer_id.in_(ids), PrinterFaultEvent.ended_at.is_(None))
@@ -928,6 +948,7 @@ async def test_profile(profile_id: str, body: ProfileTest, request: Request, db:
 class SettingsInput(BaseModel):
     raw_days: int = Field(365, ge=30, le=3650)
     aggregate_years: int = Field(5, ge=1, le=20)
+    sample_heartbeat_hours: float = Field(6, ge=1, le=24)   # unchanged raw samples stored at most this often
     operating_window: dict | None = None
     allow_v2c: bool = True
     allow_v1: bool = False
@@ -958,7 +979,8 @@ def put_settings(body: SettingsInput, request: Request, db: Session = Depends(ge
         except Exception:  # noqa: BLE001
             raise HTTPException(422, "operating_window = {days:[0-6], start:'HH:MM', end:'HH:MM'}") from None
         _put(db, "printer_operating_window", {"days": days, "start": w.get("start", "00:00"), "end": w.get("end", "23:59")}, user.username)
-    _put(db, S.RETENTION_KEY, {"raw_days": body.raw_days, "aggregate_years": body.aggregate_years}, user.username)
+    _put(db, S.RETENTION_KEY, {"raw_days": body.raw_days, "aggregate_years": body.aggregate_years,
+                                    "sample_heartbeat_hours": body.sample_heartbeat_hours}, user.username)
     _put(db, "printer_snmp_policy", {"allow_v2c": body.allow_v2c, "allow_v1": body.allow_v1}, user.username)
     audit(db, "printer_settings_updated", username=user.username, detail=body.model_dump_json()[:900], request=request)
     return get_settings_(db=db, user=user)
@@ -1147,7 +1169,12 @@ def metrics(printer_id: str, metric: str | None = None, since: str | None = None
                          "normalized_value": s.normalized_value, "text_value": s.text_value, "unit": s.unit,
                          "value_state": s.value_state, "interpretation": s.interpretation, "source": s.source,
                          "profile": s.profile_key, "profile_version": s.profile_version, "poll_id": s.poll_id,
-                         "observed_at": S.iso(s.observed_at)} for s in rows]}
+                         "observed_at": S.iso(s.observed_at)} for s in rows],
+            "storage": {"mode": "CHANGE_ONLY_WITH_HEARTBEAT",
+                        "heartbeat_hours": S.retention_policy(db).get("sample_heartbeat_hours"),
+                        "note": "A sample is stored when its value or state changes, and an unchanged value at least once "
+                                "per heartbeat. Gaps between samples mean 'unchanged', not 'missing'; polling freshness "
+                                "is shown on the printer's monitoring status."}}
 
 
 @router.get("/{printer_id}/utilization")
@@ -1457,13 +1484,19 @@ def decide_identity(printer_id: str, change_id: int, body: IdentityDecision, req
 
 # ---- verified printer configuration ---------------------------------------------------------------
 class PrinterLocationChange(BaseModel):
-    location: str = Field(max_length=255)
+    location: str | None = Field(default=None, max_length=255)       # legacy body
+    operation: str = Field(default="system.location", max_length=40)
+    value: str | int | None = None
 
     @field_validator("location")
     @classmethod
-    def printable_location(cls, value: str) -> str:
+    def printable_location(cls, value):
         from ..printers.configuration import validate_location
-        return validate_location(value)
+        return validate_location(value) if value is not None else value
+
+
+class PrinterSettingTest(BaseModel):
+    operation: str = Field(max_length=40)
 
 
 @router.get("/{printer_id}/configuration")
@@ -1476,7 +1509,17 @@ async def printer_configuration(printer_id: str, db: Session = Depends(get_db), 
 async def printer_configuration_preview(printer_id: str, body: PrinterLocationChange,
                                         db: Session = Depends(get_db), user: User = admin):
     from ..printers import configuration as PC
-    return await PC.preview(db, _visible(db, printer_id), body.location, user.username)
+    desired = body.location if body.location is not None else body.value
+    if desired is None:
+        raise HTTPException(422, "Provide the desired value")
+    return await PC.preview(db, _visible(db, printer_id), desired, user.username, body.operation)
+
+
+@router.post("/{printer_id}/configuration/hardware-test")
+async def printer_configuration_hardware_test(printer_id: str, body: PrinterSettingTest,
+                                              db: Session = Depends(get_db), user: User = admin):
+    from ..printers import configuration as PC
+    return await PC.hardware_test(db, _visible(db, printer_id), body.operation, user.username)
 
 
 @router.post("/{printer_id}/configuration/{plan_id}/apply")

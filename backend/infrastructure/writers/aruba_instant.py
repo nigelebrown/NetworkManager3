@@ -12,11 +12,14 @@ values read before the change, followed by a readback. 80 MHz is never configure
 also emits `no 80mhz-support`.
 """
 from __future__ import annotations
+import logging
 
 import re
 
 from . import Credentials, WriterError
 from ...domain import change_control as CC
+
+_log = logging.getLogger(__name__)
 
 ARM_KEYS = {
     "ap.client_match": "client-match", "ap.band_steering": "band-steering-mode",
@@ -84,6 +87,60 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
 SSID_FLAGS = ("dot11k", "dot11v", "dot11r", "radius-accounting")
 ACCOUNTING_INTERVAL = "radius-interim-accounting-interval"
 GUEST_KEYS = ("captive-portal", "mac-authentication", "set-role-pre-auth", "set-role-mac-auth")
+MULTI_AUTH_KEYS = ("mac-authentication", "l2-auth-failthrough", "set-role-mac-auth")
+RC17_WLAN_OPS = ("ap.role.define", "ap.captive_portal.external", "ap.ssid.multi_auth")
+RC18_RADIUS_OPS = ("ap.radius.server", "ap.ssid.auth_servers")
+AUTH_SERVER_KEYS = (("ip", "ip"), ("port", "port"), ("acct_port", "acctport"), ("timeout", "timeout"),
+                    ("retry_count", "retry-count"))
+
+
+def auth_server_lines(op: dict) -> list[str]:
+    out = [f"{cli} {op[f]}" for f, cli in AUTH_SERVER_KEYS if op.get(f) is not None]
+    if op.get("_secret"):
+        out.append(f"key {op['_secret']}")
+    elif op.get("secret_ref"):
+        out.append("key ********")                      # preview only; apply refuses a masked secret
+    return out
+
+
+def ssid_auth_lines(op: dict) -> list[str]:
+    lines = [f"auth-server {s}" for s in op["servers"]]
+    lines.append("server-load-balancing" if op["load_balancing"] else "no server-load-balancing")
+    if op["accounting"] == "enabled":
+        lines += ["radius-accounting", f"radius-interim-accounting-interval {op['interval_minutes']}"]
+    elif op["accounting"] == "disabled":
+        lines.append("no radius-accounting")
+    return lines
+
+
+def role_lines(op: dict) -> list[str]:
+    out = []
+    for r in op["rules"]:
+        dest = "any any" if r["dest"] == "any" else f"{r['dest']['ip']} {r['dest']['mask']}"
+        ports = "any any" if r["ports"] is None else f"{r['ports'][0]} {r['ports'][1]}"
+        out.append(f"rule {dest} match {r['protocol']} {ports} {r['action']}")
+    return out
+
+
+def portal_lines(op: dict) -> list[str]:
+    out = [f"server {op['server']}", f"port {op['port']}", f'url "{op["url"]}"']
+    if op["https"]:
+        out.append("https")
+    if op.get("redirect_url"):
+        out.append(f"redirect-url {op['redirect_url']}")
+    return out
+
+
+def multi_auth_settings(lines: list[str] | None) -> dict:
+    if lines is None:
+        raise WriterError("PRECONDITION", "The exact existing SSID profile was not found.")
+    out = {}
+    for key in MULTI_AUTH_KEYS:
+        m = [ln for ln in lines if ln == key or ln == "no " + key or ln.startswith(key + " ")]
+        if len(m) > 1:
+            raise WriterError("PRECONDITION", "Ambiguous authentication settings; no write attempted.")
+        out[key] = m[0] if m else None
+    return out
 
 
 def guest_auth_settings(lines):
@@ -172,7 +229,9 @@ class ArubaInstantWriter:
     # Every typed operation implemented below (asserted equal to domain.adapters.INSTANT_TYPED_OPS).
     OPERATIONS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
                   "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness",
-                  "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth")
+                  "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
+                  "ap.role.define", "ap.captive_portal.external", "ap.ssid.multi_auth",
+                  "ap.radius.server", "ap.ssid.auth_servers")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, client=None, ssh_runner=None,
                  snapshot=None, diagnostic_target=None):
@@ -199,8 +258,8 @@ class ArubaInstantWriter:
     def close(self) -> None:
         try:
             self.client.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            _log.debug("best-effort closing the Instant client: %s", type(_exc).__name__)
 
     def _read_configuration(self, *, full_fidelity: bool = False) -> str:
         """Retry only idempotent configuration reads after transient transport/503 errors."""
@@ -388,8 +447,44 @@ class ArubaInstantWriter:
         if lines:
             self._ssh_lines(["arm", *lines, "exit"])
 
+        # rc18: restore modified/deleted RADIUS servers (attributes and, when rotated, the previous secret) and the
+        # SSID's ordered auth-server list before the generic create/delete handling below.
+        last = getattr(self, "_last_rc18", None) or {}
+        for hdr in re.findall(r"^(wlan auth-server \S+)$", before_text, re.M):
+            pb, cb = cli_block(before_text, hdr), cli_block(cur_text, hdr)
+            name = hdr.split()[-1]
+            if not NAME_RE.fullmatch(name):
+                raise WriterError("ROLLBACK_FAILED", "Unsupported prior RADIUS server name.")
+            pd, cd = block_dict(pb), block_dict(cb)
+            fix = [f"{cli} {pd[cli]}" for _, cli in AUTH_SERVER_KEYS if pd.get(cli) is not None and pd.get(cli) != cd.get(cli)]
+            rotated = last.get("name") == name and last.get("op") == "ap.radius.server" and bool(last.get("_previous_secret"))
+            if cb is None or rotated or pd.get("key") != cd.get("key"):   # keys may be shown masked: trust the op
+                secret = last.get("_previous_secret") if last.get("name") == name and last.get("_previous_secret") else \
+                    last.get("_secret") if last.get("name") == name and last.get("action") == "delete" else None
+                if secret is None:
+                    raise WriterError("ROLLBACK_FAILED", f"The prior shared secret of {name} is not available.")
+                fix.append(f"key {secret}")
+            if cb is None:
+                fix = [f"{cli} {pd[cli]}" for _, cli in AUTH_SERVER_KEYS if pd.get(cli) is not None] + [fix[-1]]
+            if fix:
+                self._ssh_lines([hdr, *fix, "exit"])
+        for prof in re.findall(r"^wlan ssid-profile (\S+)$", before_text, re.M):
+            hdr = "wlan ssid-profile " + prof
+            pb, cb = cli_block(before_text, hdr), cli_block(self._running(), hdr)
+            if pb is None or cb is None:
+                continue
+            ps = [ln for ln in pb if ln.startswith("auth-server ")]
+            cs = [ln for ln in cb if ln.startswith("auth-server ")]
+            plb, clb = "server-load-balancing" in pb, "server-load-balancing" in cb
+            if ps != cs or plb != clb:
+                if not NAME_RE.fullmatch(prof):
+                    raise WriterError("ROLLBACK_FAILED", "Unsupported prior SSID profile name.")
+                self._ssh_lines([hdr, *[f"no {ln}" for ln in cs], *ps,
+                                 "server-load-balancing" if plb else "no server-load-balancing", "exit"])
+        cur_text = self._running()
+
         # Delete dependent SSIDs before their newly created RADIUS servers.
-        for kind in ("ssid-profile", "auth-server"):
+        for kind in ("ssid-profile", "auth-server", "external-captive-portal", "access-rule"):
             headers = re.findall(rf"^(wlan {kind} \S+)$", cur_text, re.M)
             undo = [f"no {hdr}" for hdr in headers if cli_block(before_text, hdr) is None]
             if undo:
@@ -414,6 +509,15 @@ class ArubaInstantWriter:
                             raise WriterError("ROLLBACK_FAILED", "Unsupported prior SSID profile name.")
                         old_value = ssid_settings(prior_block)[key]
                         changed.append(old_value or "no " + key)
+                if "type guest" not in prior_block:
+                    pm, cm = multi_auth_settings(prior_block), multi_auth_settings(current_block)
+                    for key in MULTI_AUTH_KEYS:
+                        if pm[key] != cm[key]:
+                            if pm[key] is not None and key == "set-role-mac-auth" and \
+                                    not re.fullmatch(r"set-role-mac-auth [A-Za-z0-9][A-Za-z0-9_.-]{0,31}", pm[key]):
+                                raise WriterError("ROLLBACK_FAILED", "Prior MAC-auth role cannot be safely restored.")
+                            changed.append(pm[key] if pm[key] is not None else
+                                           ("no " + key if key != "set-role-mac-auth" else "no set-role-mac-auth"))
                 if "type guest" in prior_block:
                     guest_changed = []
                     for key in GUEST_KEYS:
@@ -461,6 +565,33 @@ class ArubaInstantWriter:
     # ---- typed operations ------------------------------------------------------------------
     def render(self, op: dict) -> list[dict]:
         k, v = op.get("op"), op.get("value")
+        if k in RC18_RADIUS_OPS:
+            secret, prev = op.get("_secret"), op.get("_previous_secret")
+            op = _validated({x: y for x, y in op.items() if not x.startswith("_")}) | \
+                ({"_secret": secret} if secret else {}) | ({"_previous_secret": prev} if prev else {})
+            if k == "ap.radius.server":
+                header = f"wlan auth-server {op['name']}"
+                lines = [f"no {header}"] if op["action"] == "delete" else [header, *auth_server_lines(op), "exit"]
+            else:
+                current = [ln.split(" ", 1)[1] for ln in (cli_block(self._running(), _ssid_header(op)) or [])
+                           if ln.startswith("auth-server ")]
+                lines = [_ssid_header(op), *[f"no auth-server {x}" for x in current],   # re-add in priority order
+                         *ssid_auth_lines(op), "exit"]
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host,
+                     "lines": ["configure terminal", *lines, "end", "commit apply"]}]
+        if k in RC17_WLAN_OPS:
+            op = _validated(op)
+            if k == "ap.role.define":
+                lines = [f"wlan access-rule {op['role']}", *role_lines(op), "exit"]
+            elif k == "ap.captive_portal.external":
+                lines = [f"wlan external-captive-portal {op['profile']}", *portal_lines(op), "exit"]
+            elif op["value"] == "enabled":
+                lines = [_ssid_header(op), "mac-authentication", "l2-auth-failthrough",
+                         f"set-role-mac-auth {op['mac_role']}", "exit"]
+            else:
+                lines = [_ssid_header(op), "no mac-authentication", "no l2-auth-failthrough", "exit"]
+            return [{"transport": "SSH-CONFIG", "host": self.creds.host,
+                     "lines": ["configure terminal", *lines, "end", "commit apply"]}]
         if k == "ap.ssid.guest_auth":
             op = _validated(op)
             return [{"transport": "SSH-CONFIG", "host": self.creds.host, "lines": ["configure terminal", _ssid_header(op),
@@ -494,7 +625,8 @@ class ArubaInstantWriter:
             secret = op.get("_secret")
             ch = SsidChange(profile=op["ssid"], essid=op.get("essid") or op["ssid"], vlan=int(op["vlan"]),
                             opmode=op.get("security", "wpa2-psk-aes"),
-                            passphrase=(secret or "placeholder-secret") if op.get("security", "wpa2-psk-aes") != "opensystem" else None,
+                            # preview without a resolved secret is masked; apply refuses it (see apply precondition)
+                            passphrase=(secret or "********") if op.get("security", "wpa2-psk-aes") != "opensystem" else None,
                             enabled=True)
             payload = build_ssid_payload(ch, creating=True)
             return [{"transport": "REST", "endpoint": "ssid", "json": payload if secret else mask_payload(payload)}]
@@ -606,11 +738,60 @@ class ArubaInstantWriter:
                     if not any(NAME_RE.fullmatch(name) and cli_block(text, "wlan auth-server " + name) is not None
                                for name in servers):
                         raise WriterError("PRECONDITION", "Configure and validate an external RADIUS server before enabling accounting.")
+        if op.get("op") in RC18_RADIUS_OPS:
+            if not prior or not prior.get("running"):
+                raise WriterError("PRECONDITION", "Capture a configuration checkpoint before changing RADIUS settings.")
+            v = _validated({x: y for x, y in op.items() if not x.startswith("_")})
+            text = self._running()
+            self._last_rc18 = dict(op)                     # rollback needs the resolved secrets of THIS change
+            if v["op"] == "ap.radius.server":
+                exists = cli_block(text, f"wlan auth-server {v['name']}") is not None
+                if v["action"] == "create" and exists:
+                    raise WriterError("PRECONDITION", "RADIUS server already exists; use modify.")
+                if v["action"] != "create" and not exists:
+                    raise WriterError("PRECONDITION", "RADIUS server does not exist.")
+                if v["action"] == "delete" and re.search(rf"^ auth-server {re.escape(v['name'])}$", text, re.M):
+                    raise WriterError("PRECONDITION", "RADIUS server is still assigned to an SSID; reassign it first.")
+                if v.get("secret_ref") and v["action"] != "delete" and not op.get("_secret"):
+                    raise WriterError("PRECONDITION", "The shared secret could not be resolved from secret_ref.")
+                if v["action"] == "delete" and not op.get("_secret"):
+                    raise WriterError("PRECONDITION", "The deleted server's secret must be resolvable for rollback.")
+            else:
+                block = cli_block(text, _ssid_header(v))
+                d = block_dict(block)
+                if block is None or d.get("opmode") not in ENTERPRISE_OPMODES.values():
+                    raise WriterError("PRECONDITION", "Assign RADIUS servers only to an existing enterprise SSID.")
+                for name in v["servers"]:
+                    if cli_block(text, f"wlan auth-server {name}") is None:
+                        raise WriterError("PRECONDITION", f"RADIUS server {name} does not exist.")
+        if op.get("op") in RC17_WLAN_OPS:
+            op = _validated(op)
+            if not prior or not prior.get("running"):
+                raise WriterError("PRECONDITION", "Capture a configuration checkpoint before changing WLAN security.")
+            text = self._running()
+            if op["op"] == "ap.role.define" and cli_block(text, f"wlan access-rule {op['role']}") is not None:
+                raise WriterError("PRECONDITION", "Role already exists; refusing to overwrite it.")
+            if op["op"] == "ap.captive_portal.external" and \
+                    cli_block(text, f"wlan external-captive-portal {op['profile']}") is not None:
+                raise WriterError("PRECONDITION", "Portal profile already exists; refusing to overwrite it.")
+            if op["op"] == "ap.ssid.multi_auth":
+                block = cli_block(text, _ssid_header(op))
+                multi_auth_settings(block)
+                d = block_dict(block)
+                if d.get("opmode") not in ENTERPRISE_OPMODES.values() or not d.get("auth-server"):
+                    raise WriterError("PRECONDITION", "MAC + 802.1X needs an existing enterprise SSID with a RADIUS server.")
+                if op["value"] == "enabled" and not cli_block(text, "wlan access-rule " + op["mac_role"]):
+                    raise WriterError("PRECONDITION", "The MAC-authentication role must already exist with rules.")
         if op.get("op") == "ap.ssid.vlan":
             previous = block_dict(cli_block(self._running(), f"wlan ssid-profile {op['ssid']}")).get("vlan")
             if previous and not (previous.isdigit() or NAME_RE.fullmatch(previous)):
                 raise WriterError("PRECONDITION", "Prior SSID VLAN cannot be safely restored.")
         if op.get("op") in ("ap.ssid.create", "ap.ssid.enterprise"):
+            needs_secret = op.get("op") == "ap.ssid.enterprise" or op.get("security", "wpa2-psk-aes") != "opensystem"
+            if needs_secret and not op.get("_secret"):
+                # rc18 sweep: never send a masked or placeholder key to a device
+                raise WriterError("PRECONDITION", "The SSID/RADIUS secret could not be resolved from secret_ref; "
+                                                  "nothing was sent.")
             text = self._running()
             headers = [f"wlan ssid-profile {op['ssid']}"]
             if op.get("op") == "ap.ssid.enterprise":
@@ -632,6 +813,43 @@ class ArubaInstantWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k in RC18_RADIUS_OPS:
+            op = _validated({x: y for x, y in op.items() if not x.startswith("_")})
+            text = self._running()
+            if k == "ap.radius.server":
+                block = cli_block(text, f"wlan auth-server {op['name']}")
+                if op["action"] == "delete":
+                    return block is None, {"present": block is not None}
+                d = block_dict(block)
+                got = {f: d.get(cli) for f, cli in AUTH_SERVER_KEYS if op.get(f) is not None}
+                want = {f: str(op[f]) for f, cli in AUTH_SERVER_KEYS if op.get(f) is not None}
+                ok = block is not None and got == want and (not op.get("secret_ref") or "key" in d)
+                return ok, {"present": block is not None, **got, "key_set": "key" in d}
+            block = cli_block(text, _ssid_header(op)) or []
+            servers = [ln.split(" ", 1)[1] for ln in block if ln.startswith("auth-server ")]
+            lb = "server-load-balancing" in block
+            acct = "radius-accounting" in block
+            ok = servers == op["servers"] and lb == op["load_balancing"] and (
+                op["accounting"] == "unchanged" or acct == (op["accounting"] == "enabled"))
+            return ok, {"servers": servers, "load_balancing": lb, "accounting": acct}
+        if k in RC17_WLAN_OPS:
+            op = _validated(op)
+            text = self._running()
+            if k == "ap.role.define":
+                got = cli_block(text, f"wlan access-rule {op['role']}")
+                return got == role_lines(op), {"rules": got}
+            if k == "ap.captive_portal.external":
+                got = cli_block(text, f"wlan external-captive-portal {op['profile']}") or []
+                want = portal_lines(op)
+                return all(w in got for w in want) and not any("fail-through" in g for g in got), {"lines": got}
+            st = multi_auth_settings(cli_block(text, _ssid_header(op)))
+            if op["value"] == "enabled":
+                ok = st == {"mac-authentication": "mac-authentication", "l2-auth-failthrough": "l2-auth-failthrough",
+                            "set-role-mac-auth": f"set-role-mac-auth {op['mac_role']}"}
+            else:
+                ok = st["mac-authentication"] in (None, "no mac-authentication") and \
+                    st["l2-auth-failthrough"] in (None, "no l2-auth-failthrough")
+            return ok, st
         if k == "ap.ssid.guest_auth":
             op = _validated(op)
             state = guest_auth_settings(cli_block(self._running(), _ssid_header(op)))

@@ -134,14 +134,14 @@ def apply() -> None:
         try:
             prior = set(exact_ips(json.loads(FILE.read_text()).get("ips", [])))
         except (OSError, ValueError, TypeError):
-            pass
+            pass  # no readable previous approval file: start from an empty set
         guard = ["bash", str(GUARD)]
         if prior == set(wanted):
             try:
                 command(guard + ["--check"])
                 return
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                pass
+                pass  # guard check failed: fall through and rewrite the configuration
         replacement = "\n".join(line for line in old.splitlines()
                                 if not line.startswith("INM_APPROVED_DEVICE_IPS="))
         replacement += "\nINM_APPROVED_DEVICE_IPS=" + ",".join(wanted) + "\n"
@@ -154,9 +154,9 @@ def apply() -> None:
             atomic_file(ENV, old, 0o600)
             try:
                 command(guard + ["--apply"])
-            except Exception:
+            except Exception as _exc:
                 # Fail closed: the firewall's temporary DROP remains in place.
-                pass
+                print(f"warning: rollback re-apply failed; firewall DROP stays in place (fail closed): {type(_exc).__name__}", file=__import__("sys").stderr)
             raise
         print("[INM approvals] Host firewall now enforces", len(wanted), "exact /32 IPs")
 

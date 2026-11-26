@@ -37,6 +37,7 @@ class PlanInput(BaseModel):
 class Decision(BaseModel):
     expected_revision: int = Field(ge=1)
     note: str = Field(default="", max_length=2000)
+    emergency: bool = False          # approve own plan under an active emergency (break-glass) session
 
 
 def _latest_hash(db: Session, device_id: str) -> str | None:
@@ -129,14 +130,25 @@ def submit(plan_id: str, request: Request, db: Session = Depends(get_db),
 def approve(plan_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
             user: User = Depends(require_any_role("approver", "admin"))):
     p = _plan(db, plan_id)
+    emergency = None
     try:
         CC.check_approval(requester=p.requester, approver=user.username, approver_role=user.role)
     except CC.PolicyViolation as exc:
-        audit(db, "change_plan_self_approval_denied", username=user.username, target=p.id,
-              detail=str(exc), request=request, success=False)
-        db.commit()
-        raise HTTPException(403, str(exc)) from None
+        from .emergency_access import active_session
+        emergency = active_session(db, user.username) if body.emergency and user.role == "admin" else None
+        if emergency is None or p.requester.casefold() != user.username.casefold():
+            audit(db, "change_plan_self_approval_denied", username=user.username, target=p.id,
+                  detail=str(exc) + (" (no active emergency session)" if body.emergency else ""), request=request,
+                  success=False)
+            db.commit()
+            raise HTTPException(403, str(exc)) from None
+        # break-glass: only the two-person rule is waived; certification/backup/readback/rollback still apply
+        body = body.model_copy(update={"note": f"[EMERGENCY {emergency['id'][:8]} ticket {emergency['ticket']}] "
+                                               + body.note})
     _transition(db, p, body, "APPROVED", user)
+    if emergency is not None:
+        audit(db, "change_plan_emergency_self_approved", username=user.username, target=p.device_id,
+              detail=f"plan={p.id} emergency_session={emergency['id']} ticket={emergency['ticket']}", request=request)
     audit(db, "change_plan_approved", username=user.username, target=p.device_id,
           detail=f"plan={p.id} requester={p.requester}; approval is not a write", request=request)
     return _public(p)

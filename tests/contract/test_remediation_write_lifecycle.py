@@ -29,9 +29,10 @@ def test_registry_matches_writers_and_never_claims_unimplemented_or_uncertified(
         assert spec.certification == "UNCERTIFIED"
     assert cx.operations["restore_full_config"] == "IMPLEMENTED" and iap.operations["restore_full_config"] == "GUIDED"
     for spec in AD.REGISTRY:
-        if spec.vendor in ("Cisco", "Ubiquiti", "Generic"):
-            assert not spec.implemented and "PLACEHOLDER" in spec.notes
-            assert AD.operation_result(spec, "collect")["status"] == "UNSUPPORTED"
+        if spec.vendor in ("Cisco", "Ubiquiti", "Generic"):      # rc17: read-only adapters, never a write path
+            assert spec.implemented and "READ-ONLY" in spec.notes
+            assert AD.operation_result(spec, "collect")["status"] == "AVAILABLE_READ_ONLY"
+            assert AD.operation_result(spec, "apply_change")["status"] == "UNSUPPORTED"
     # every typed op the writers declare is accepted by domain validation for its family
     from backend.domain import change_control as CC
     assert set(ArubaCxWriter.OPERATIONS) <= CC.SWITCH_OPERATIONS
@@ -42,7 +43,12 @@ def test_device_capability_report_follows_certification_records(env):
     c, adm, appr, sw, ap = env
     before = c.get(f"/api/v1/devices/{sw['id']}/capabilities", headers=adm).json()
     assert before["environment"] == "EMULATED" and before["hardware_certified"] is False
-    assert {r["certification"] for r in before["operations"]} == {"UNCERTIFIED"}
+    # rc18 (2.11): capabilities are detected per model; BGP is not available on CX 6100/6200 at all
+    model_unsupported = {r["operation"] for r in before["operations"] if r["software"] == "UNSUPPORTED_BY_MODEL"}
+    assert "switch.route.bgp" in model_unsupported
+    assert ("switch.route.ospf" in model_unsupported) == ("6200" not in (sw.get("model") or ""))
+    assert {r["certification"] for r in before["operations"] if r["operation"] not in model_unsupported} == {"UNCERTIFIED"}
+    assert {r["certification"] for r in before["operations"] if r["operation"] in model_unsupported} == {"UNSUPPORTED"}
     assert not any(r["executable_now"] for r in before["operations"])
     expected = {
         "switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
@@ -51,15 +57,28 @@ def test_device_capability_report_follows_certification_records(env):
         "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp",
         "switch.system.dns", "switch.system.syslog", "config.restore",
         "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab",
+        # rc17
+        "switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy", "switch.vsf.member",
+        # rc18
+        "switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting", "switch.port.auth_policy",
+        "switch.route.ospf",
     }
-    assert {r["operation"] for r in before["operations"]} == expected
-    assert all(r["software"] == "IMPLEMENTED" for r in before["operations"])
+    assert {r["operation"] for r in before["operations"]} == expected | {"switch.route.bgp"}
+    assert all(r["software"] == "IMPLEMENTED" for r in before["operations"] if r["operation"] not in model_unsupported)
     certify(c, adm, appr, sw, test_port="1/1/20", lag_ports=["1/1/21", "1/1/22"])
     after = c.get(f"/api/v1/devices/{sw['id']}/capabilities", headers=adm).json()
     st = {r["operation"]: r for r in after["operations"]}
     # switch.central.disable is only certifiable on a lab switch that is actually Central-managed
     assert st.pop("switch.central.disable")["certification"] == "UNCERTIFIED"
-    assert all(r["certification"] == "CERTIFIED_WRITE" and r["executable_now"] for r in st.values())
+    # VSF member provisioning is certified only when a lab stack is declared (vsf_member/vsf_links)
+    assert st.pop("switch.vsf.member")["certification"] == "UNCERTIFIED"
+    # rc18: group membership needs servers that persist across campaign steps (HW-CX-22); OSPF/port policy need a
+    # declared lab routed interface; certified individually on hardware
+    for op in ("switch.aaa.server_group", "switch.route.ospf"):
+        assert st.pop(op)["certification"] in ("UNCERTIFIED", "UNSUPPORTED"), op
+    assert st.pop("switch.route.bgp")["certification"] == "UNSUPPORTED"
+    assert all(r["certification"] == "CERTIFIED_WRITE" and r["executable_now"] for r in st.values()), \
+        {k: (r["certification"], r["executable_now"]) for k, r in st.items() if r["certification"] != "CERTIFIED_WRITE" or not r["executable_now"]}
     assert after["hardware_certified"] is False                      # emulated certification is never hardware
     apcap = c.get(f"/api/v1/devices/{ap['id']}/capabilities", headers=adm).json()
     restore = next(r for r in apcap["operations"] if r["operation"] == "config.restore")
@@ -73,7 +92,8 @@ def test_device_capability_report_follows_certification_records(env):
         "model": sw["model"], "firmware": sw["firmware"], "management_ip": "10.1.1.1", "status": "up",
         "metrics": {}}).json()["id"]
     rc = c.get(f"/api/v1/devices/{real}/capabilities", headers=adm).json()
-    assert rc["environment"] == "HARDWARE" and {r["certification"] for r in rc["operations"]} == {"UNCERTIFIED"}
+    assert rc["environment"] == "HARDWARE" and {r["certification"] for r in rc["operations"]
+                                                if r["software"] != "UNSUPPORTED_BY_MODEL"} == {"UNCERTIFIED"}
     assert rc["write_posture"]["hardware_writes"] == "LOCKED"
 
 

@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { FormEvent, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { v1, type Device } from "../services/inm";

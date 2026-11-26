@@ -100,6 +100,36 @@ def update_channel(channel_id: str, body: ChannelIn, request: Request, db: Sessi
     return _ch(c)
 
 
+class RoutingIn(BaseModel):
+    min_severity: str = "major"
+    escalate_after_minutes: int | None = Field(default=None, ge=1, le=10080)
+    escalation_channel_id: str | None = None
+    include_demo: bool = False
+
+
+@router.patch("/channels/{channel_id}/routing")
+def update_routing(channel_id: str, body: RoutingIn, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_role("admin"))):
+    """Alert routing only (severity floor, escalation, demo opt-in); connections are managed in Integrations."""
+    c = db.get(NotificationChannel, channel_id)
+    if c is None:
+        raise HTTPException(404, "Channel not found.")
+    if c.kind == "heartbeat":
+        raise HTTPException(422, "Heartbeat connections receive platform health, not alerts.")
+    if body.min_severity not in N.SEVERITY_RANK:
+        raise HTTPException(422, f"min_severity must be one of {tuple(N.SEVERITY_RANK)}")
+    if body.escalate_after_minutes and not body.escalation_channel_id:
+        raise HTTPException(422, "escalate_after_minutes needs an escalation_channel_id")
+    if body.escalation_channel_id and (body.escalation_channel_id == channel_id or
+                                       db.get(NotificationChannel, body.escalation_channel_id) is None):
+        raise HTTPException(422, "escalation channel not found (and cannot be the channel itself)")
+    for k, v in body.model_dump().items():
+        setattr(c, k, v)
+    audit(db, "notification_channel_routing_updated", username=user.username, target=c.id,
+          detail=f"{c.name} >= {c.min_severity} escalate={c.escalate_after_minutes}", request=request)
+    return _ch(c)
+
+
 @router.delete("/channels/{channel_id}", status_code=204)
 def delete_channel(channel_id: str, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_role("admin"))):

@@ -33,17 +33,28 @@ class SnmpUnreachable(Exception):
     """No response at all: host down / filtered / wrong credentials (SNMPv3 auth failures look the same)."""
 
 
+class SnmpTruncated(Exception):
+    """A table walk stopped on a transport error after returning some rows. The rows are real readings and
+    are kept, but the table is INCOMPLETE: absence of a row must not be read as cleared or removed."""
+
+    def __init__(self, rows: list):
+        super().__init__("table walk truncated")
+        self.rows = rows
+
+
 # ---- production reader ---------------------------------------------------------------------------
 class PysnmpReader:
     """pysnmp-backed read-only reader. Credentials live only in this object for one poll."""
 
     def __init__(self, host: str, version: str, identity: str, auth_key: str = "", privacy_key: str = "",
-                 timeout: float = 3.0, retries: int = 1):
+                 timeout: float = 3.0, retries: int = 1, *, auth_protocol: str = "SHA256",
+                 priv_protocol: str = "AES128"):
         from .snmp import permitted_target
         if not permitted_target(host):
             raise ValueError("Target outside authorized read-only management ranges")
         self.host, self.version, self.timeout, self.retries = host, version, timeout, retries
         self._identity, self._auth, self._priv = identity, auth_key, privacy_key
+        self._protocols = {"auth_protocol": auth_protocol, "priv_protocol": priv_protocol}
         self.source = "SNMPV" + version.upper()
         self._engine = None
         self._transport = None
@@ -52,16 +63,10 @@ class PysnmpReader:
     async def _ensure(self):
         if self._engine is not None:
             return
-        from pysnmp.hlapi.v3arch.asyncio import (CommunityData, SnmpEngine, UdpTransportTarget, UsmUserData,
-                                                 USM_AUTH_HMAC192_SHA256, USM_PRIV_CFB128_AES)
+        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
+        from .snmp import build_auth_data
+        self._auth_data = build_auth_data(self.version, self._identity, self._auth, self._priv, **self._protocols)
         self._engine = SnmpEngine()
-        if self.version == "3":
-            self._auth_data = UsmUserData(self._identity, authKey=self._auth, privKey=self._priv,
-                                          authProtocol=USM_AUTH_HMAC192_SHA256, privProtocol=USM_PRIV_CFB128_AES)
-        elif self.version in ("1", "2c"):
-            self._auth_data = CommunityData(self._identity, mpModel=0 if self.version == "1" else 1)
-        else:
-            raise ValueError("Unsupported SNMP version")
         self._transport = await UdpTransportTarget.create((self.host, 161), timeout=self.timeout, retries=self.retries)
 
     @staticmethod
@@ -106,6 +111,8 @@ class PysnmpReader:
             if err:
                 if not rows and ("timeout" in str(err).lower() or "No SNMP response" in str(err)):
                     raise SnmpUnreachable(type(err).__name__)
+                if rows:
+                    raise SnmpTruncated(rows)
                 break
             if status or not binds:
                 break
@@ -139,22 +146,27 @@ class EmulatedPrinterAgent:
     def __init__(self, values: dict[str, Any] | None = None, *, reachable: bool = True):
         self.values = dict(values or {})
         self.reachable = reachable
+        # Test hooks: OIDs whose GET/walk time out, and table bases whose walk stops after N rows.
+        self.timeout_oids: set[str] = set()
+        self.truncate_tables: dict[str, int] = {}
         self.requests: list[tuple[str, str]] = []   # (op, oid) — proves only GET/GETNEXT are used
 
     async def get(self, oid: str):
         self.requests.append(("GET", oid))
-        if not self.reachable:
+        if not self.reachable or oid in self.timeout_oids:
             raise SnmpUnreachable("emulated timeout")
         return self.values.get(oid)
 
     async def walk(self, base: str, max_rows: int = MAX_WALK_ROWS):
         self.requests.append(("GETNEXT", base))
-        if not self.reachable:
+        if not self.reachable or base in self.timeout_oids:
             raise SnmpUnreachable("emulated timeout")
         prefix = _oid_key(base)
         rows = sorted(((k, v) for k, v in self.values.items()
                        if _oid_key(k)[:len(prefix)] == prefix and len(_oid_key(k)) > len(prefix)),
                       key=lambda kv: _oid_key(kv[0]))
+        if base in self.truncate_tables and rows:
+            raise SnmpTruncated(rows[:self.truncate_tables[base]])
         return rows[:max_rows]
 
     async def close(self):
@@ -231,6 +243,7 @@ class PollResult:
     trays: list[dict] = field(default_factory=list)
     capabilities: dict[str, dict] = field(default_factory=dict)
     unsupported_oids: list[str] = field(default_factory=list)
+    incomplete_metrics: list[str] = field(default_factory=list)
     profile_key: str | None = None
     profile_version: int | None = None
 
@@ -344,7 +357,14 @@ async def poll(reader: SnmpReader, profiles: list[dict], *, now: datetime | None
             res.samples.append(Sample(d["metric_key"], d["oid"], value_state="MISSING",
                                       interpretation="no response"))
             continue
-        completed.add(d["metric_key"])
+        except SnmpTruncated as exc:
+            # Keep rows that were read; leave the metric out of `completed` so downstream logic
+            # (fault clearing, supply removal) treats the table as incomplete rather than authoritative.
+            res.error = "table walk interrupted; partial rows kept"
+            rows = exc.rows
+            res.incomplete_metrics.append(d["metric_key"])
+        else:
+            completed.add(d["metric_key"])
         if not rows:
             res.unsupported_oids.append(d["oid"])
             res.samples.append(Sample(d["metric_key"], d["oid"], value_state="UNSUPPORTED",

@@ -36,7 +36,17 @@ export type Journal = { id: string; execution_id: string; plan_id: string; devic
   state: string; strategy: string; last_step: string | null; owner: string | null; heartbeat_at: string | null;
   created_at: string | null; resolved_by: string | null; notes: string | null };
 export type Group = { id: string; name: string; family: string; description: string | null; members: string[] };
-export type Batch = { batch_id: string; plans: WfPlan[]; progress: Record<string, number>; wave?: { state: string; stopped_at?: string | null; selected_plans?: string[] } };
+export type GroupAssignResult = { device_id: string; group: string; group_id?: string | null; status: string; reason?: string;
+  moved_from?: string[]; other_groups?: string[] };
+export type Impact = { batch_id: string; risk: "HIGH" | "STANDARD"; reasons: { code: string; detail: string }[]; warnings: string[];
+  devices_in_batch: number; devices_reached: number; sites: { site_id: string; name: string }[];
+  clusters: { cluster_id: string; name: string; member_count: number; cluster_wide: boolean; members: { device_id: string; hostname: string | null }[];
+    also_affected: { device_id: string; hostname: string | null }[]; plans: string[] }[];
+  operations: Record<string, number>; digest: string; policy: string };
+export type Release = { required: boolean; approved: boolean; stale?: boolean;
+  approval: { approved_by: string; approved_at: string; digest: string; note: string } | null };
+export type Batch = { batch_id: string; plans: WfPlan[]; progress: Record<string, number>; wave?: { state: string; stopped_at?: string | null; selected_plans?: string[] };
+  impact?: Impact | null; release?: Release | null; created_by?: string | null };
 export type SeriesPoint = { t: string; v: number | null; q: string; src: string };
 
 export const wf = {
@@ -61,7 +71,7 @@ export const wf = {
     post(`/v1/onboarding/discoveries/${enc(jobId)}/control/${action}`),
 };
 
-export type NotifyChannel = { id: string; name: string; kind: "webhook" | "email" | "syslog"; target: string;
+export type NotifyChannel = { id: string; name: string; kind: "webhook" | "email" | "syslog" | "teams" | "heartbeat"; target: string;
   min_severity: string; escalate_after_minutes: number | null; escalation_channel_id: string | null;
   include_demo: boolean; enabled: boolean; created_by: string; created_at: string | null };
 export type NotifyDelivery = { id: string; channel_id: string; alert_id: string | null; kind: string; state: string;
@@ -72,6 +82,8 @@ export const notify = {
   channels: () => request<NotifyChannel[]>("/v1/notifications/channels"),
   create: (b: Partial<NotifyChannel>) => post<NotifyChannel>("/v1/notifications/channels", b),
   remove: (id: string) => request<void>(`/v1/notifications/channels/${enc(id)}`, { method: "DELETE" }),
+  routing: (id: string, b: { min_severity: string; escalate_after_minutes: number | null; escalation_channel_id: string | null; include_demo: boolean }) =>
+    request<NotifyChannel>(`/v1/notifications/channels/${enc(id)}/routing`, { method: "PATCH", body: JSON.stringify(b) }),
   test: (id: string) => post<{ delivered: boolean; error: string | null }>(`/v1/notifications/channels/${enc(id)}/test`),
   deliveries: (state?: string) => request<NotifyDelivery[]>(`/v1/notifications/deliveries${state ? `?state=${enc(state)}` : ""}`),
   retry: (id: string) => post<NotifyDelivery>(`/v1/notifications/deliveries/${enc(id)}/retry`),
@@ -90,9 +102,16 @@ export const rem = {
   groups: () => request<Group[]>("/v1/device-groups"),
   createGroup: (b: { name: string; family: string; description?: string }) => post<Group>("/v1/device-groups", b),
   addMembers: (id: string, device_ids: string[]) => post<Group>(`/v1/device-groups/${enc(id)}/members`, { device_ids }),
+  importAssign: (b: { assignments: { group: string; family: string; device_ids: string[]; target: "create" | "existing" | "skip"; group_id?: string }[];
+    reassign: boolean; dry_run?: boolean }) =>
+    post<{ results: GroupAssignResult[]; counts: Record<string, number>; created_groups: { id: string; name: string; family: string }[]; dry_run: boolean }>("/v1/device-groups/import-assign", b),
   deploy: (b: { group_id?: string; device_ids?: string[] }) =>
     post<{ batch_id: string; devices: { device_id: string; plan_id: string | null; in_compliance?: boolean; error?: string }[] }>("/v1/deployments", b),
+  batches: () => request<{ batch_id: string; created_at: string | null; created_by: string | null; progress: Record<string, number>;
+    risk: "HIGH" | "STANDARD"; release: Release }[]>("/v1/deployments"),
   batch: (id: string) => request<Batch>(`/v1/deployments/${enc(id)}`),
+  releaseBatch: (id: string, digest: string, note: string) =>
+    post<{ release: Release; impact: Impact }>(`/v1/deployments/${enc(id)}/release-approval`, { digest, note }),
   executeBatch: (id: string, stop_on_failure = true, wave_size = 10, one_site = true, resume_after_failure = false, review_note = "") =>
     post<{ executed: { plan_id: string; outcome: string | null; decision: string; denial_reason: string | null }[];
       stopped_at: string | null; progress: Record<string, number> }>(`/v1/deployments/${enc(id)}/execute`, { stop_on_failure, wave_size, one_site, resume_after_failure, review_note }),

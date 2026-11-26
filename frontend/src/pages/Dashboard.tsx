@@ -4,7 +4,7 @@ import HistoryChart from "../charts/HistoryChart";
 import SiteFilter from "../components/SiteFilter";
 import { Card, ErrorNote, NA, SimBadge, Stat, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { api } from "../services/api";
 import DashboardSwitcher from "../components/DashboardSwitcher";
 import FirmwareExperience from "../components/FirmwareExperience";

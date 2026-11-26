@@ -19,7 +19,7 @@ from .aruba_cx import API, ArubaCxWriter
 from .aruba_instant import ArubaInstantWriter
 
 
-IFACE_WRITABLE = {"admin", "vlan_mode", "vlan_tag", "vlan_trunks", "description", "other_config", "stp_config",
+IFACE_WRITABLE = {"aclv4_in_cfg", "policy_in_cfg", "admin", "vlan_mode", "vlan_tag", "vlan_trunks", "description", "other_config", "stp_config",
                   "rate_limits", "qos_config"}
 
 
@@ -38,6 +38,12 @@ class CxEmulator:
             "central": None,
             "vlans": {"1": {"id": 1, "name": "DEFAULT_VLAN_1"}},
             "ntp_associations": {},
+            # rc17 objects: ACLs, QoS classes/policies, static routes (default VRF), VSF members (6200 only)
+            "acls": {}, "classes": {}, "policies": {}, "static_routes": {}, "vsf_members": {},
+            # rc18 objects: RADIUS servers per VRF, AAA server groups, port-access accounting, OSPF routers
+            "radius_servers": {"default": {}, "mgmt": {}},
+            "aaa_server_groups": {"radius": {"group_name": "radius", "group_type": "radius", "origin": "built-in"}},
+            "aaa_accounting": {}, "ospf_routers": {},
             "syslog_remotes": {},
             "vrfs": {"mgmt": {"name": "mgmt", "dns_name_servers": {}, "dns_domain_name": None},
                      "default": {"name": "default", "dns_name_servers": {}, "dns_domain_name": None}},
@@ -70,6 +76,13 @@ class CxEmulator:
         if "6200" in model:
             self.cli_commands.append("show vsf detail")
         self.checkpoints: dict[str, dict] = {}
+        self.prefix = "/rest/v10.14"
+        if lab_port in self.state["interfaces"]:                     # one authenticated client for status monitoring
+            self.state["interfaces"][lab_port]["port_access_clients"] = {"00:11:22:33:44:55": {
+                "mac": "00:11:22:33:44:55", "status": "authenticated", "auth_attributes": {"dot1x": {"status": "success"}},
+                "role": "EMULATED-EMPLOYEE", "vlan_id": 20}}
+        self.fw = {"primary": firmware, "secondary": "", "booted": "primary"}
+        self.fail_boot = False              # test hook: the switch comes back on the old image
         self.startup: dict | None = None
         self.audit_records = {
             "audit": {
@@ -179,6 +192,7 @@ class CxEmulator:
         if not mv or mv.group(1) not in self.api_versions():
             return httpx.Response(404, text="Unknown REST version")
         p = mv.group(2)
+        self.prefix = f"/rest/{mv.group(1)}"
         m = req.method
         denied = self._auth(req, q, p)
         if denied is not None:
@@ -194,6 +208,9 @@ class CxEmulator:
                 return httpx.Response(400, text="Invalid command body")
             if cmd not in self.cli_commands:
                 return httpx.Response(400, text="Invalid show command")
+            if cmd == "show interface transceiver detail":
+                return httpx.Response(200, text="! EMULATED SHOW result: show interface transceiver detail — no device write\n"
+                                      + self.transceiver_text())
             return httpx.Response(200, text=f"EMULATED SHOW result: {cmd} — no device write")
         if m in ("POST", "PUT", "PATCH", "DELETE"):
             if self.drop_after is not None and self.writes >= self.drop_after and not p.startswith("/fullconfigs"):
@@ -202,13 +219,38 @@ class CxEmulator:
                 return httpx.Response(500, text="emulated device error")
         elif self.fail_read and self.fail_read in p:
             return httpx.Response(500, text="emulated device read error")
-        body = json.loads(req.content) if req.content else {}
+        multipart = req.headers.get("content-type", "").startswith("multipart/")
+        body = json.loads(req.content) if req.content and not multipart else {}
         if p in ("/logs/audit", "/logs/event") and m == "GET":
             return httpx.Response(200, json=copy.deepcopy(self.audit_records[p.rsplit("/", 1)[-1]]))
+        fw = self.fw
         if p == "/firmware" and m == "GET":
             return httpx.Response(200, json={"current_version": self.state["system"]["software_version"],
-                "primary_version": self.state["system"]["software_version"], "secondary_version": "",
-                "default_image": "primary", "booted_image": "primary"})
+                "primary_version": fw["primary"], "secondary_version": fw["secondary"],
+                "default_image": fw["booted"], "booted_image": fw["booted"]})
+        if p == "/firmware" and m == "PUT":
+            slot = q.get("image")
+            if slot not in ("primary", "secondary") or slot == fw["booted"]:
+                return httpx.Response(400, text="Invalid or booted image slot")
+            mm = re.search(rb'filename="([A-Z]{2})_(\d+)_(\d+)_(\d+)\.swi"', req.content or b"")
+            if not mm:
+                return httpx.Response(400, text="Image rejected: not a valid signed AOS-CX image")
+            if mm.group(1).decode() != self.state["system"]["software_version"].split(".")[0] and \
+                    "." in self.state["system"]["software_version"]:
+                return httpx.Response(400, text="Image is for a different platform")
+            self.writes += 1
+            if not self.lie:
+                fw[slot] = ".".join(x.decode() for x in mm.groups())
+            return httpx.Response(200)
+        if p == "/boot" and m == "POST":
+            slot = q.get("image")
+            if slot not in ("primary", "secondary") or not fw[slot]:
+                return httpx.Response(400, text="No image in that slot")
+            self.writes += 1
+            if not self.fail_boot:
+                fw["booted"] = slot
+                self.state["system"]["software_version"] = fw[slot]
+            raise httpx.ConnectError("emulated reboot")
         if p == "/system":
             return httpx.Response(200, json=self.state["system"])
         if p == "/system/subsystems":
@@ -245,6 +287,12 @@ class CxEmulator:
                 if name == "running-config":
                     self.state = copy.deepcopy(body)
                     return httpx.Response(200)
+        rc18 = self._rc18(p, m, body)
+        if rc18 is not None:
+            return rc18
+        rc17 = self._rc17(p, m, body)
+        if rc17 is not None:
+            return rc17
         for coll, keyf in (("ntp_associations", "address"), ("syslog_remotes", "remote_host")):
             if p == ("/system/vrfs/mgmt/ntp_associations" if coll == "ntp_associations" else f"/system/{coll}") and m == "GET":
                 return httpx.Response(200, json=copy.deepcopy(self.state[coll]))
@@ -355,6 +403,338 @@ class CxEmulator:
                                 it[k] = v
                 return httpx.Response(200)
         return httpx.Response(404)
+
+    _SRV_KEYS = {"address", "port", "port_type", "vrf", "passkey", "timeout", "retries", "accounting_udp_port",
+                 "auth_type", "tracking_enable", "server_group"}
+    _AUTH_KEYS = {"authentication_method", "auth_enable", "reauth_enable", "cached_reauth_enable", "reauth_period",
+                  "quiet_period", "max_retries", "max_requests", "eapol_timeout", "discovery_period",
+                  "radius_server_group", "canned_eap_success_enable"}
+
+    def _ok(self, code=204, **kw):
+        self.writes += 1
+        return httpx.Response(code, **kw)
+
+    def _rc18(self, p: str, m: str, body: dict):
+        """Strict store for RADIUS servers, AAA server groups, port-access accounting, port authentication
+        configurations, port-access clients and OSPF (EMULATED; OSPF only on a 6200 platform)."""
+        from urllib.parse import unquote
+        st = self.state
+        b = body if isinstance(body, dict) else {}
+        for vrf in ("default", "mgmt"):
+            base = f"/system/vrfs/{vrf}/radius_servers"
+            if p == base:
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(st["radius_servers"][vrf]))
+                if m == "POST":
+                    if set(b) - self._SRV_KEYS or not b.get("address") or b.get("port_type") not in ("udp", "tcp") \
+                            or not isinstance(b.get("port"), int) or not isinstance(b.get("passkey"), str) or "*" in b["passkey"]:
+                        return httpx.Response(400, text="Invalid RADIUS server")
+                    key = f"{b['address']},{b['port']},{b['port_type']}"
+                    if key in st["radius_servers"][vrf]:
+                        return httpx.Response(400, text="RADIUS server exists")
+                    if not self.lie:
+                        st["radius_servers"][vrf][key] = {**copy.deepcopy(b), "server_group":
+                                                          {f"{self.prefix}/system/aaa_server_groups/radius": len(st["radius_servers"][vrf]) + 1}}
+                    return self._ok(201)
+                return httpx.Response(405)
+            if p.startswith(base + "/"):
+                key = unquote(p[len(base) + 1:])
+                srv = st["radius_servers"][vrf].get(key)
+                if srv is None:
+                    return httpx.Response(404)
+                if m == "GET":
+                    out = {k: v for k, v in srv.items() if k != "passkey"}      # secrets are never read back
+                    return httpx.Response(200, json=copy.deepcopy(out))
+                if m == "PATCH":
+                    if set(b) - (self._SRV_KEYS - {"address", "port", "port_type", "vrf"}) or \
+                            ("passkey" in b and (not isinstance(b["passkey"], str) or "*" in b["passkey"])):
+                        return httpx.Response(400, text="Invalid RADIUS server attributes")
+                    for g in (b.get("server_group") or {}):
+                        if unquote(g.rsplit("/", 1)[-1]) not in st["aaa_server_groups"]:
+                            return httpx.Response(400, text="Unknown server group")
+                    if not self.lie:
+                        srv.update(copy.deepcopy(b))
+                    return self._ok()
+                if m == "DELETE":
+                    if not self.lie:
+                        del st["radius_servers"][vrf][key]
+                    return self._ok()
+                return httpx.Response(405)
+        gbase = "/system/aaa_server_groups"
+        if p == gbase:
+            if m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(st["aaa_server_groups"]))
+            if m == "POST":
+                if set(b) - {"group_name", "group_type", "load_balancing_mode", "origin"} or b.get("group_type") != "radius" \
+                        or b.get("load_balancing_mode") not in (None, "priority-based", "round-robin"):
+                    return httpx.Response(400, text="Invalid server group")
+                if b["group_name"] in st["aaa_server_groups"]:
+                    return httpx.Response(400, text="Group exists")
+                if not self.lie:
+                    st["aaa_server_groups"][b["group_name"]] = {**copy.deepcopy(b), "origin": "configuration"}
+                return self._ok(201)
+            return httpx.Response(405)
+        if p.startswith(gbase + "/"):
+            name = unquote(p[len(gbase) + 1:])
+            g = st["aaa_server_groups"].get(name)
+            if g is None:
+                return httpx.Response(404)
+            if m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(g))
+            if g.get("origin") == "built-in" and m in ("PATCH", "DELETE"):
+                return httpx.Response(400, text="Built-in group")
+            if m == "PATCH":
+                if set(b) - {"load_balancing_mode"}:
+                    return httpx.Response(400, text="Invalid group attributes")
+                if not self.lie:
+                    g.update(b)
+                return self._ok()
+            if m == "DELETE":
+                ref = f"{self.prefix}{gbase}/{name}"
+                if any(ref in (sv.get("server_group") or {}) for v in st["radius_servers"].values() for sv in v.values()):
+                    return httpx.Response(400, text="Group still has servers")
+                if not self.lie:
+                    del st["aaa_server_groups"][name]
+                return self._ok()
+            return httpx.Response(405)
+        abase = "/system/aaa_accounting_attributes"
+        if p == abase and m == "POST":
+            if b.get("session_type") != "port-access" or b.get("accounting_mode") not in ("start-stop", "stop-only"):
+                return httpx.Response(400, text="Invalid accounting attributes")
+            if not self.lie:
+                st["aaa_accounting"]["port-access"] = copy.deepcopy(b)
+            return self._ok(201)
+        if p == abase + "/port-access":
+            cur = st["aaa_accounting"].get("port-access")
+            if m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(cur)) if cur else httpx.Response(404)
+            if cur is None:
+                return httpx.Response(404)
+            if m == "PATCH":
+                if set(b) - {"accounting_mode", "interim_update_enable", "interim_update_interval", "interim_update_onreauth_enable"}:
+                    return httpx.Response(400, text="Invalid accounting attributes")
+                if not self.lie:
+                    cur.update(b)
+                    if cur.get("accounting_mode") != "start-stop":
+                        cur.pop("interim_update_interval", None); cur["interim_update_enable"] = False
+                return self._ok()
+            if m == "DELETE":
+                if not self.lie:
+                    del st["aaa_accounting"]["port-access"]
+                return self._ok()
+            return httpx.Response(405)
+        if p.startswith("/system/interfaces/") and "/port_access_" in p:
+            rest = unquote(p[len("/system/interfaces/"):])
+            if rest.endswith("/port_access_clients"):
+                it = st["interfaces"].get(rest[:-len("/port_access_clients")])
+                if it is None:
+                    return httpx.Response(404)
+                return httpx.Response(200, json=copy.deepcopy(it.get("port_access_clients", {})))
+            name, _, method = rest.partition("/port_access_auth_configurations")
+            it = st["interfaces"].get(name)
+            if it is None:
+                return httpx.Response(404)
+            methods = it.setdefault("auth_methods", {})
+            method = method.lstrip("/")
+            if not method:
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(methods))
+                if m == "POST":
+                    if set(b) - self._AUTH_KEYS or b.get("authentication_method") not in ("dot1x", "mac-auth") \
+                            or b["authentication_method"] in methods or any(
+                                k.endswith("_enable") and type(v) is not bool for k, v in b.items()):
+                        return httpx.Response(400, text="Invalid port authentication configuration")
+                    if not self.lie:
+                        methods[b["authentication_method"]] = copy.deepcopy(b)
+                    return self._ok(201)
+                return httpx.Response(405)
+            item = methods.get(method)
+            if item is None:
+                return httpx.Response(404)
+            if m == "GET":
+                return httpx.Response(200, json=copy.deepcopy(item))
+            if m == "PATCH":
+                if set(b) - (self._AUTH_KEYS - {"authentication_method"}) or any(
+                        k.endswith("_enable") and type(v) is not bool for k, v in b.items()):
+                    return httpx.Response(400, text="Invalid authentication attributes")
+                if method == "mac-auth" and set(b) & {"max_requests", "eapol_timeout", "discovery_period"}:
+                    return httpx.Response(400, text="Attribute applies to 802.1X only")
+                if not self.lie:
+                    item.update(copy.deepcopy(b))
+                return self._ok()
+            if m == "DELETE":
+                if not self.lie:
+                    del methods[method]
+                return self._ok()
+            return httpx.Response(405)
+        obase = "/system/vrfs/default/ospf_routers"
+        if p.startswith(obase):
+            if "6200" not in st["system"]["platform_name"]:
+                return httpx.Response(404, text="OSPF not supported on this platform")
+            parts = [unquote(x) for x in p[len(obase):].strip("/").split("/") if x]
+            if not parts:
+                if m == "GET":
+                    return httpx.Response(200, json={k: f"{self.prefix}{obase}/{k}" for k in st["ospf_routers"]})
+                if m == "POST":
+                    tag = str(b.get("instance_tag"))
+                    if tag in st["ospf_routers"] or set(b) - {"instance_tag", "admin_router_id", "maximum_paths",
+                                                             "passive_interface_default", "redistribute", "active_interfaces"}:
+                        return httpx.Response(400, text="Invalid OSPF router")
+                    if not self.lie:
+                        st["ospf_routers"][tag] = {**copy.deepcopy(b), "areas": {}}
+                    return self._ok(201)
+                return httpx.Response(405)
+            r = st["ospf_routers"].get(parts[0])
+            if r is None:
+                return httpx.Response(404)
+            if len(parts) == 1:
+                if m == "GET":
+                    return httpx.Response(200, json={k: v for k, v in copy.deepcopy(r).items() if k != "areas"})
+                if m == "PATCH":
+                    if set(b) - {"admin_router_id", "maximum_paths", "passive_interface_default", "redistribute", "active_interfaces"}:
+                        return httpx.Response(400, text="Invalid OSPF attributes")
+                    if not self.lie:
+                        r.update(copy.deepcopy(b))
+                    return self._ok()
+                if m == "DELETE":
+                    if not self.lie:
+                        del st["ospf_routers"][parts[0]]
+                    return self._ok()
+            if len(parts) >= 2 and parts[1] == "areas":
+                if len(parts) == 2 and m == "POST":
+                    if r["areas"] and b.get("area_id") not in r["areas"]:
+                        return httpx.Response(400, text="Access OSPF supports a single area")
+                    if not self.lie:
+                        r["areas"][b["area_id"]] = copy.deepcopy(b)
+                    return self._ok(201)
+                if len(parts) == 3:
+                    a = r["areas"].get(parts[2])
+                    if a is None:
+                        return httpx.Response(404)
+                    if m == "GET":
+                        return httpx.Response(200, json=copy.deepcopy(a))
+                    if m == "PATCH":
+                        if not self.lie:
+                            a.update(copy.deepcopy(b))
+                        return self._ok()
+            return httpx.Response(405)
+        return None
+
+    def _rc17(self, p: str, m: str, body: dict):
+        """Strict store for ACLs, classes, policies, static routes and VSF members (EMULATED)."""
+        from urllib.parse import unquote
+        st = self.state
+        for coll in ("acls", "classes", "policies"):
+            base = f"/system/{coll}/"
+            if p.startswith(base) and "/" not in p[len(base):]:
+                key = unquote(p[len(base):])
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(st[coll][key])) if key in st[coll] else httpx.Response(404)
+                if m == "PUT":
+                    if coll == "acls" and (body.get("list_type") != "ipv4" or not isinstance(body.get("cfg_aces"), dict)
+                                           or any(a.get("action") not in ("permit", "deny") for a in body["cfg_aces"].values())):
+                        return httpx.Response(400, text="Invalid ACL")
+                    if coll == "policies":
+                        for e in (body.get("cfg_entries") or {}).values():
+                            if unquote(str(e.get("class", "")).rsplit("/", 1)[-1]) not in st["classes"]:
+                                return httpx.Response(400, text="Policy references an unknown class")
+                    self.writes += 1
+                    if not self.lie:
+                        st[coll][key] = copy.deepcopy(body)
+                    return httpx.Response(200)
+                return httpx.Response(405)
+        if p == "/system/vrfs/default/static_routes" and m == "POST":
+            key = body.get("prefix")
+            if key in st["static_routes"]:
+                return httpx.Response(400, text="Route exists")
+            self.writes += 1
+            if not self.lie:
+                st["static_routes"][key] = {**copy.deepcopy(body), "static_nexthops": {}}
+            return httpx.Response(201)
+        if p.startswith("/system/vrfs/default/static_routes/"):
+            rest = unquote(p[len("/system/vrfs/default/static_routes/"):])
+            key, sub = (rest[:-len("/static_nexthops")], "static_nexthops") if rest.endswith("/static_nexthops") else (rest, "")
+            route = st["static_routes"].get(unquote(key))
+            if route is None:
+                return httpx.Response(404)
+            if not sub:
+                return httpx.Response(200, json=copy.deepcopy(route)) if m == "GET" else httpx.Response(405)
+            if sub == "static_nexthops":
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(route["static_nexthops"]))
+                if m == "POST":
+                    try:
+                        import ipaddress
+                        ipaddress.IPv4Address(body.get("ip_address"))
+                    except ValueError:
+                        return httpx.Response(400, text="Invalid next hop")
+                    self.writes += 1
+                    if not self.lie:
+                        route["static_nexthops"][str(len(route["static_nexthops"]))] = copy.deepcopy(body)
+                    return httpx.Response(201)
+            return httpx.Response(405)
+        if p.startswith("/system/vsf_members"):
+            if "6200" not in st["system"]["platform_name"]:
+                return httpx.Response(404, text="VSF not supported on this platform")
+            parts = p.split("/")[3:]
+            if len(parts) == 1:
+                n = parts[0]
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(st["vsf_members"][n])) if n in st["vsf_members"] else httpx.Response(404)
+                if m == "PUT":
+                    if not str(body.get("type", "")).strip():
+                        return httpx.Response(400, text="Member type required")
+                    self.writes += 1
+                    if not self.lie:
+                        st["vsf_members"][n] = {**st["vsf_members"].get(n, {"links": {}}), "id": body.get("id"), "type": body["type"]}
+                    return httpx.Response(200)
+            if len(parts) == 3 and parts[1] == "links":
+                mem = st["vsf_members"].get(parts[0])
+                if mem is None:
+                    return httpx.Response(404)
+                if m == "GET":
+                    return httpx.Response(200, json=copy.deepcopy(mem["links"][parts[2]])) if parts[2] in mem["links"] else httpx.Response(404)
+                if m == "PUT":
+                    self.writes += 1
+                    if not self.lie:
+                        mem["links"][parts[2]] = copy.deepcopy(body)
+                    return httpx.Response(200)
+            return httpx.Response(405)
+        if p.startswith("/system/interfaces/") and m in ("PATCH", "PUT"):
+            for attr, coll in (("aclv4_in_cfg", "acls"), ("policy_in_cfg", "policies")):
+                ref = body.get(attr)
+                if ref and unquote(str(ref).rsplit("/", 1)[-1]) not in st[coll]:
+                    return httpx.Response(400, text=f"{attr} references an unknown object")
+        return None
+
+    # EMULATED optics: 1/1/49 healthy SFP+, 1/1/50 SFP+ whose Rx power is set by optics_rx_dbm (default warning),
+    # 1/1/51 module without DOM, 1/1/52 4-lane QSFP+ (lane 3 at 0 mW = loss of signal).
+    optics_rx_dbm = -15.20
+
+    def transceiver_text(self) -> str:
+        thr = ("               High Alarm  High Warn  Low Warn  Low Alarm\n"
+               "   Temperature C     75.00      70.00     0.00     -5.00\n"
+               "   Voltage V          3.63       3.47     3.13      2.97\n"
+               "   Bias Current mA   12.00      10.00     2.00      1.00\n"
+               "   Rx Power dBm       0.00      -1.00   -14.00    -18.00\n"
+               "   Tx Power dBm      -1.00      -2.00    -7.00     -9.00\n")
+
+        def sfp(port, rx, serial):
+            return (f"Transceiver in {port}\n   Interface Name    : {port}\n   Type              : SFP+SR\n"
+                    "   Connector Type    : LC\n   Wavelength        : 850nm\n   Diagnostic Support: DOM\n"
+                    "   Vendor Name       : HPE (EMULATED)\n   Vendor Part Number: J9150D\n"
+                    f"   Vendor Serial Num : {serial}\n\n   Temperature  : 34.50C\n   Voltage      : 3.30V\n"
+                    f"   Tx Bias      : 6.40mA\n   Rx Power     : {10 ** (rx / 10):.4f}mW, {rx:.2f}dBm\n"
+                    f"   Tx Power     : 0.6026mW, -2.20dBm\n\n{thr}\n")
+        lanes = "".join(f"   Lane {n}\n   Tx Bias      : 7.0{n}mA\n   Rx Power     : "
+                        + ("0.0000mW\n" if n == 3 else f"0.5{n}00mW\n") + "   Tx Power     : 0.7000mW, -1.55dBm\n"
+                        for n in range(1, 5))
+        return (sfp("1/1/49", -3.10, "EMU-OPT-49") + sfp("1/1/50", self.optics_rx_dbm, "EMU-OPT-50")
+                + "Transceiver in 1/1/51\n   Interface Name    : 1/1/51\n   Type              : SFP-1G-T\n"
+                  "   Diagnostic Support: None\n   Vendor Name       : HPE (EMULATED)\n\n"
+                + "Transceiver in 1/1/52\n   Interface Name    : 1/1/52\n   Type              : QSFP+SR4\n"
+                  "   Diagnostic Support: DOM\n   Vendor Name       : HPE (EMULATED)\n   Vendor Part Number: JL309A\n"
+                  "   Temperature  : 41.00C\n   Voltage      : 3.29V\n" + lanes + "\n")
 
     def writer(self, password: str | None = None) -> ArubaCxWriter:
         return ArubaCxWriter(Credentials("emulated-cx", "admin", password or self.password), transport=self.transport())
@@ -529,7 +909,8 @@ class InstantEmulator:
             if ln.startswith("no wlan "):
                 self._drop_block(ln[3:])
                 continue
-            if ln == "arm" or ln.startswith(("wlan ssid-profile ", "wlan auth-server ")):
+            if ln == "arm" or ln.startswith(("wlan ssid-profile ", "wlan auth-server ", "wlan access-rule ",
+                                             "wlan external-captive-portal ")):
                 ctx = ln
                 self._ensure_block(ctx)
                 continue
@@ -538,8 +919,20 @@ class InstantEmulator:
                 continue
             if ctx is None:
                 continue
+            if ctx.startswith("wlan ssid-profile") and (ln.startswith("auth-server ") or ln.startswith("no auth-server ")):
+                lines_, start_, end_ = self._block_range(ctx)
+                block_ = lines_[start_ + 1:end_]
+                target = " " + (ln[3:] if ln.startswith("no ") else ln)
+                block_ = [x for x in block_ if x != target]
+                if not ln.startswith("no "):
+                    block_.append(target)                        # ordered: first = primary, second = failover
+                self.text = "\n".join(lines_[:start_ + 1] + block_ + lines_[end_:])
+                continue
+            if ctx.startswith("wlan access-rule") and ln.startswith("rule "):
+                self._append_in_block(ctx, ln)                  # rules are ordered and accumulate
+                continue
             if ctx.startswith("wlan auth-server") and ln.startswith("key "):
-                ln = "key " + ("%064x" % abs(hash(ln[4:])))[:32]      # stored encrypted, as on Instant
+                ln = "key " + __import__("hashlib").sha256(ln[4:].encode()).hexdigest()[:32]   # stored encrypted, as on Instant
             self._set_in_block(ctx, ln)
 
     def _block_range(self, header: str):
@@ -561,6 +954,10 @@ class InstantEmulator:
         lines, start, end = self._block_range(header)
         if start is not None:
             self.text = "\n".join(lines[:start] + lines[end:])
+
+    def _append_in_block(self, header: str, ln: str) -> None:
+        lines, start, end = self._block_range(header)
+        self.text = "\n".join(lines[:end] + [" " + ln] + lines[end:])
 
     def _set_in_block(self, header: str, ln: str) -> None:
         lines, start, end = self._block_range(header)

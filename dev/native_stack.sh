@@ -71,7 +71,20 @@ bg() {  # name cmd...
   echo $! > "$STATE/$name.pid"   # setsid makes this pid a process-group leader: stop kills the whole group
 }
 
+provision() {
+  # rc18: reuse the pinned, checksum-verified binaries (and TimescaleDB build) from the full-stack harness
+  if [[ ! -x "$BIN/loki-linux-amd64" || ! -x "$BIN/alloy-linux-amd64" || ! -x "$BIN/nats-server-v2.11.9-linux-amd64/nats-server" ]]; then
+    bash "$ROOT/tests/fullstack/stack.sh" provision
+    local src="${INM_STACK_DIR:-/tmp/inm-stack}/bin"
+    mkdir -p "$BIN/nats-server-v2.11.9-linux-amd64"
+    ln -sf "$src/nats-server" "$BIN/nats-server-v2.11.9-linux-amd64/nats-server"
+    ln -sf "$src/loki-linux-amd64" "$BIN/loki-linux-amd64"
+    ln -sf "$src/alloy-linux-amd64" "$BIN/alloy-linux-amd64"
+  fi
+}
+
 start() {
+  provision
   write_env; common_env
   pg_cluster mgmt 55432 inm_management inm_app "$MGMT_PW"
   pg_cluster ts 55433 inm_telemetry inm_metrics "$TS_PW" timescaledb
@@ -118,6 +131,7 @@ status() {
 }
 
 case "${1:-}" in
+  provision) provision ;;
   start) start ;;
   stop) stop ;;
   status) status ;;
@@ -128,5 +142,5 @@ case "${1:-}" in
       *) stop_one "$2" ;;
     esac ;;
   start-role) write_env; common_env; start ;;
-  *) echo "usage: $0 start|stop|status|env|stop-role <name>"; exit 2 ;;
+  *) echo "usage: $0 provision|start|stop|status|env|stop-role <name>"; exit 2 ;;
 esac

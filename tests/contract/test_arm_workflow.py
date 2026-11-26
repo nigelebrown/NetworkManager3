@@ -15,7 +15,7 @@ from tests.unit.test_arm_intelligence import measured,outputs
 def arm_device(client,admin,monkeypatch):
     from backend.api import ap_operations as API
     with session_scope() as db:
-        d=InmDevice(source_type="REAL",environment="production",vendor="Aruba",family="access_point",
+        d=InmDevice(source_type="REAL",environment="live",vendor="Aruba",family="access_point",
              model="AP-505",firmware="8.10.0.21",serial_number="REAL-REFERENCE-1",
              hostname="Measured-AP",adapter="aruba_instant",mgmt_addresses=["10.9.8.10"])
         db.add(d);db.flush();did=d.id

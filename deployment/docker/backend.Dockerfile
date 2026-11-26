@@ -5,7 +5,7 @@ FROM ${PYTHON_IMAGE}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY requirements.lock /app/requirements.lock
-RUN apt-get update && apt-get install -y --no-install-recommends iputils-ping \
+RUN apt-get update && apt-get install -y --no-install-recommends iputils-ping openssh-client \
  && setcap -r /usr/bin/ping \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir -r /app/requirements.lock \

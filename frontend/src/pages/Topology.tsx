@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { PageHeader, Pill } from "../components/viz";

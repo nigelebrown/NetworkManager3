@@ -4,7 +4,8 @@ import { ErrorNote } from "../components/ui";
 import { Card } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { DevicePicker, Notice, PageHeader, Pill, btn, btn2, btnDanger, statusTone, useAction } from "../components/viz";
-import { getSession } from "../services/api";
+import { getSession, request } from "../services/api";
+import { v1 } from "../services/inm";
 import type { Device } from "../services/inm";
 import { ops, rw } from "../services/ops";
 import GuidePanel from "../components/GuidePanel";
@@ -23,7 +24,7 @@ export default function Optimization() {
   const me = getSession();
   const enr = state.data?.enrollment as { id: string; status: string; requester_id: string } | null | undefined;
   return <div className="space-y-4">
-    <PageHeader title="RF optimization — per-device opt-in" subtitle="Native Aruba ARM selects channels and power. This application uses its per-AP measurements to detect policy problems and persistent client-impacting degradation. Reviewed automatic interventions require an enabled feature and individual DEVICE_OPT_IN enrollment with independent approval, expiry, action limits and cooldown. It is never inherited from a site, model or template. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
+    <PageHeader title="RF optimization — per-device opt-in" subtitle="Native Aruba ARM selects channels and power. This application uses its per-AP measurements to detect policy problems and persistent client-impacting degradation. Reviewed automatic interventions require an enabled feature and individual DEVICE_OPT_IN enrollment with independent approval, expiry, action limits and cooldown. It is never inherited from a site, model or template; a site batch enrolls only the APs present when it is requested, each with its own record. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
     <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">AUTOMATIC OPTIMIZATION FEATURE: <b>{control.data?.automatic_optimization_feature ? "ENABLED (per-device opt-in only)" : "OFF (INM_AUTOMATIC_OPTIMIZATION=false)"}</b> · Global write lock: <b>{control.data?.global_write_lock ? "ON" : "OFF"}</b> ·
       Emergency stop: <b>{control.data?.emergency_stop ? "ACTIVE" : "clear"}</b>. Vendor-native features such as Aruba ARM remain as configured on each device.</div>
     <ErrorNote error={control.error || state.error || enrollments.error || sites.error} />
@@ -50,6 +51,7 @@ export default function Optimization() {
       {enr && me?.role === "admin" && <button className={`${btnDanger} ml-2 mt-3`} disabled={act.busy} onClick={() => act.run(async () => { await ops.optDisable(device!.id); state.reload(); enrollments.reload(); return "Disabled immediately."; })}>Disable</button>}
       <Notice error={act.error} message={act.message} />
     </Card>
+    <SiteBatches mode={mode} onChanged={() => { enrollments.reload(); state.reload(); }} />
     {me?.role === "admin" && <Card title="Optimizer">
       <p className="mb-2 text-sm text-slate-400">The optimizer evaluates ARM measurements every 5 minutes. Healthy radios stay under native ARM control; static overrides can be returned to ARM through a reviewed change. Run now to evaluate enrolled APs.</p>
       <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { const r = await rw.optimizerRun(); enrollments.reload();
@@ -81,4 +83,54 @@ export default function Optimization() {
       <div className="mt-2"><Notice error={act.error} message={act.message} /></div>
       {!enrollments.data?.length && <p className="text-sm text-slate-500">No enrollments yet. Pick a cluster above to propose SHADOW enrollments for its APs.</p>}</Card>
   </div>;
+}
+
+
+type Batch = { id: string; site_id: string; requester_id: string; created_at: string; status: string; approved_by: string | null;
+  skipped: { device_id: string; reason: string }[]; members: { id: string; device_id: string; immutable_serial: string; status: string; status_reason: string | null }[];
+  results?: { device_id: string; armed: boolean; reason: string }[] };
+
+/** Site batch enrollment (owner directive 2026-11-25): one approval, one record per AP, no later inheritance. */
+function SiteBatches({ mode, onChanged }: { mode: string; onChanged: () => void }) {
+  const me = getSession();
+  const canSee = me && ["admin", "approver", "auditor"].includes(me.role);
+  const batches = useLoad(() => canSee ? request<Batch[]>("/v1/optimization/site-batches") : Promise.resolve([]), [canSee], 30000);
+  const sites = useLoad(() => me?.role === "admin" ? v1.physicalSites() : Promise.resolve({ sites: [], clusters: [] }), [me?.role], 0);
+  const [site, setSite] = useState("");
+  const act = useAction();
+  if (!canSee) return null;
+  const siteName = (id: string) => (sites.data?.sites ?? []).find((x: { id: string; name: string }) => x.id === id)?.name ?? id;
+  const run = (fn: () => Promise<string>) => act.run(async () => { const m = await fn(); batches.reload(); onChanged(); return m; });
+  return <Card title="Site batch enrollment">
+    <p className="text-sm text-slate-600">Creates one enrollment per access point currently registered at the site, bound to its serial number.
+      One independent approval arms each AP that passes its own checks (identity, firmware, expiry, backup). APs added later are not included.</p>
+    <Notice error={act.error || batches.error || sites.error} message={act.message} />
+    {me?.role === "admin" && <div className="mt-2 flex flex-wrap items-end gap-2 text-sm">
+      <label htmlFor="opt-batch-site">Site</label>
+      <select id="opt-batch-site" className="rounded border px-2 py-1" value={site} onChange={e => setSite(e.target.value)}>
+        <option value="">Choose a site</option>{(sites.data?.sites ?? []).map((x: { id: string; name: string }) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+      <button className={btn} disabled={act.busy || !site} onClick={() => run(async () => {
+        const b = await request<Batch>("/v1/optimization/site-batches", { method: "POST", body: JSON.stringify({ site_id: site, template: {
+          serial: "-", mode, allowed_operation_types: ["ap.radio.channel", "ap.radio.tx_power"], value_constraints: { allowed_widths_mhz: [20, 40] },
+          cooldown_seconds: 7200, max_actions_per_day: 2, expires_at_utc: new Date(Date.now() + 30 * 86400e3).toISOString() } }) });
+        return `${b.members.length} AP enrollment(s) requested (${mode}); ${b.skipped.length} skipped. An independent approver must approve the batch.`;
+      })}>Request {mode} for all APs at this site</button></div>}
+    <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>
+      {["Site", "Requested", "APs", "Status", "Approver", ""].map(h => <th key={h} scope="col" className="p-1">{h}</th>)}</tr></thead>
+      <tbody>{(batches.data ?? []).map(b => <tr key={b.id} className="border-t">
+        <td className="p-1">{siteName(b.site_id)}</td><td className="p-1">{new Date(b.created_at).toLocaleString()} by {b.requester_id}</td>
+        <td className="p-1">{b.members.length} ({b.members.filter(m => m.status === "ARMED").length} armed){b.skipped.length ? ` · ${b.skipped.length} skipped` : ""}
+          {b.results?.some(r => !r.armed) && <details><summary className="cursor-pointer text-xs">Not armed</summary>
+            <ul className="text-xs">{b.results.filter(r => !r.armed).map(r => <li key={r.device_id}>{r.device_id.slice(0, 8)}: {r.reason}</li>)}</ul></details>}</td>
+        <td className="p-1"><Pill value={b.status} tone={statusTone(b.status)} /></td><td className="p-1">{b.approved_by ?? "—"}</td>
+        <td className="p-1 space-x-2">
+          {b.status === "PENDING_APPROVAL" && me && ["approver", "admin"].includes(me.role) && me.username !== b.requester_id &&
+            <button className={btn2} disabled={act.busy} onClick={() => run(async () => {
+              const r = await request<Batch>(`/v1/optimization/site-batches/${b.id}/approve`, { method: "POST" });
+              return `Batch ${r.status.toLowerCase().replace("_", " ")}.`; })}>Approve batch</button>}
+          {me?.role === "admin" && !["DISABLED", "REJECTED"].includes(b.status) && <button className={btnDanger} disabled={act.busy}
+            onClick={() => run(async () => { await request(`/v1/optimization/site-batches/${b.id}/disable`, { method: "POST" }); return "Batch disabled; all members revoked."; })}>Disable batch</button>}
+        </td></tr>)}</tbody></table>
+      {!batches.data?.length && <p className="text-sm text-slate-500">No site batches.</p>}</div>
+  </Card>;
 }

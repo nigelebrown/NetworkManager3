@@ -197,6 +197,8 @@ def test_channel_validation_permissions_and_truthful_test_send(live, rx):
 def test_feature_list_declares_notifications_live_and_unbuilt_features_not_implemented(live):
     f = {m["key"]: m["status"] for m in live.get("/api/v1/system/features", headers=login(live)).json()["modules"]}
     assert f["notifications"] == "LIVE"
-    for k in ("switch_port_access_control", "switch_stacking", "switch_acl_routing", "client_roaming_rf_interference",
-              "remote_diagnostics"):
-        assert f[k] == "NOT_IMPLEMENTED", k
+    assert f["remote_diagnostics"] == "PARTIAL"
+    for k in ("switch_stacking", "switch_acl_routing", "firmware", "switch_port_access_control", "instant_radius"):
+        assert f[k] == "IMPLEMENTED_UNCERTIFIED", k     # built, but never presented as hardware-certified
+    assert f["vendors_cisco_unifi"] == "READ_ONLY" and f["print_jobs"] in ("OFF_BY_POLICY", "DISABLED_PENDING_AUTHORIZATION")
+    assert f["predictive"] in ("NO_RUN", "VALIDATED", "PARTIALLY_VALIDATED", "EXPERIMENTAL", "INSUFFICIENT_HISTORY")

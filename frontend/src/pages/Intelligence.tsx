@@ -1,11 +1,12 @@
 /** Network Intelligence workspaces: Recommendations, Predictive health, Operational analytics, AI rules. */
 import { ReactNode, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { Notice, PageHeader, Pill, ago, btn, btn2, inputCls, statusTone, useAction } from "../components/viz";
 import { getSession } from "../services/api";
 import { exportAnalytics, intel, type IntelRec, type Rule } from "../services/intel";
+import { EngineOfRecord } from "../components/TrainedModels";
 
 const role = () => getSession()?.role ?? "viewer";
 const canOperate = () => ["admin", "operator"].includes(role());
@@ -97,6 +98,7 @@ export function PredictiveHealth() {
         <button className={btn} disabled={act.busy} onClick={() => act.run(async () => { const r = await intel.runPredictive(); p.reload();
           return `Run ${r.status}: ${r.validation_state}.`; })}>Run predictions</button></div>} />
     <Notice error={act.error || p.error} message={act.message} />
+    <EngineOfRecord />
     {run && <section className="inm-status-overview">
       <Kpi label="Model" value={run.model_version} hint={`run ${ago(run.created_at)} by ${run.requested_by}`} />
       <Kpi label="Validation" value={<Pill value={run.validation_state} tone={run.validation_state === "VALIDATED" ? "good" : run.validation_state === "PARTIALLY_VALIDATED" ? "info" : "fair"} />} hint="per rule below (walk-forward backtest)" />

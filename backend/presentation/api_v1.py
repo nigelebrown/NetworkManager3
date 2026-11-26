@@ -1,6 +1,8 @@
 """Versioned product API (/api/v1). Legacy /api routes remain mounted unchanged as the compatibility facade."""
 from __future__ import annotations
 
+import os
+
 import csv
 import io
 import json
@@ -46,12 +48,6 @@ def _iso(dt):
 
 def _visible_legacy_ids(db: Session) -> set[int]:
     return {s.id for s in visible_sites(db)}
-
-
-def _not_implemented(phase: int, what: str):
-    return JSONResponse(status_code=501, content={
-        "status": "NOT_IMPLEMENTED", "phase": phase,
-        "detail": f"{what} is delivered in Phase {phase}. Nothing was executed."})
 
 
 # ---------------------------------------------------------------- system
@@ -204,8 +200,17 @@ def set_collection_capacity(body: ApPollCapacity, request: Request, db: Session 
     return {"concurrency": body.concurrency}
 
 
+def _ml_state(db: Session) -> str:
+    from ..database.models_phases import MlModel
+    from ..ml.service import mode_of
+    modes = {mode_of(db, m)[0] for m in db.scalars(select(MlModel).where(MlModel.status == "PROMOTED",
+                                                                          MlModel.target.is_not(None)))}
+    return ("TRAINED_ML_PRIMARY" if "PRIMARY" in modes else "TRAINED_ML_SHADOW" if "SHADOW" in modes
+            else "RULES_AND_STATISTICAL")
+
+
 @router.get("/system/features")
-def features(_: User = Depends(get_current_user)):
+def features(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     """Truthful module states for the navigation. PLANNED pages show their phase; DEMO is labelled."""
     s = get_settings()
     demo = s.mode == "demo"
@@ -213,40 +218,86 @@ def features(_: User = Depends(get_current_user)):
     from ..infrastructure.optimizer import feature_enabled
     from ..infrastructure.posture import write_posture
     posture = write_posture()
+    from ..database.models_intelligence import PredictionRun
+    run = db.scalar(select(PredictionRun).order_by(PredictionRun.created_at.desc()).limit(1))
     return {"device_writes": posture["hardware_writes"], "write_posture": posture, "modules": [
+        {"key": "predictive", "status": run.validation_state if run else "NO_RUN",
+         "note": "State of the most recent prediction run (walk-forward backtest); not a fixed label"},
         {"key": "dashboard", "status": live_or_demo}, {"key": "aps", "status": live_or_demo},
         {"key": "clients", "status": live_or_demo}, {"key": "sites", "status": live_or_demo},
         {"key": "experience", "status": live_or_demo}, {"key": "alerts", "status": live_or_demo},
         {"key": "switches", "status": "LIVE", "note": "REST telemetry per port; demo switches use a labelled emulator"},
         {"key": "configuration", "status": "CERTIFIED_WRITE_ENGINE",
          "note": "Writes need an approved plan, per-model/firmware certification and an unlocked posture"},
-        {"key": "firmware", "status": "PARTIAL",
-         "note": "AP firmware staging uses the legacy SIMS path (independent approval required); CX firmware "
-                 "orchestration and post-upgrade certification are not implemented"},
+        {"key": "firmware", "status": "IMPLEMENTED_UNCERTIFIED",
+         "note": "AP staging (legacy SIMS path) and CX image upload/stage/boot/recover with vendor SHA-256, "
+                 "independent approval and version+serial verification; no hardware certification yet"},
         {"key": "assistant", "status": "ADVISORY_READ_ONLY"},
         {"key": "logs", "status": "LIVE", "note": "platform events, collector and change events in Loki; device "
-                                                 "syslog via Alloy"},
+                                                 "syslog via Alloy reaches the device timeline and change attribution "
+                                                 "(sender-address verified); SYSLOG_SILENT / AAA_EVIDENCE_GAP alerts"},
         {"key": "audit", "status": "LIVE"}, {"key": "system_health", "status": "LIVE"},
         {"key": "recovery", "status": "LIVE", "note": "encrypted vault, change-recovery journal; legacy SIMS "
                                                      "backups remain NOT RESTORABLE"},
-        {"key": "ai_learning", "status": "RULES_ONLY", "note": "Rule-based recommendations; no trained ML model "
-                                                              "is deployed"},
+        {"key": "ai_learning", "status": _ml_state(db),
+         "note": "Trained breach-risk models (logistic regression, temporal holdout, drift and live-performance "
+                 "monitoring, independent promotion, rollback). PRIMARY only when production-validated on live "
+                 "telemetry; synthetic/demo models never drive predictions; rules + statistical engine are the fallback"},
         {"key": "phase4_insights", "status": "RECORDED_DATA_RULES", "note": "Rules over persisted telemetry"},
         {"key": "onboarding", "status": "WORKFLOW", "note": "Resumable workflow: discover -> import -> templates -> "
                                                           "approve -> apply -> verify -> monitor"},
         {"key": "change_control", "status": "LIVE"},
         {"key": "optimization", "status": "PER_DEVICE_OPT_IN" if feature_enabled() else "OFF",
          "note": "Off unless INM_AUTOMATIC_OPTIMIZATION=true and an AP is individually enrolled"},
-        {"key": "vendors_cisco_unifi", "status": "PLACEHOLDER", "note": "Manual inventory only; no adapter"},
-        {"key": "notifications", "status": "LIVE", "note": "Webhook / email (SMTP relay) / syslog; retry, DEAD "
-                                                           "state, escalation of unacknowledged alerts"},
-        # Not built in this release: listed so no screen or report can imply they exist.
-        {"key": "switch_port_access_control", "status": "NOT_IMPLEMENTED", "note": "802.1X / MAB on switch ports"},
-        {"key": "switch_stacking", "status": "NOT_IMPLEMENTED", "note": "VSF stacking provisioning"},
-        {"key": "switch_acl_routing", "status": "NOT_IMPLEMENTED", "note": "ACLs, static/dynamic routing"},
-        {"key": "client_roaming_rf_interference", "status": "NOT_IMPLEMENTED",
-         "note": "Roaming history and interference analytics need AP event feeds not yet collected"},
-        {"key": "remote_diagnostics", "status": "NOT_IMPLEMENTED", "note": "Ping/traceroute/cable test from devices"},
+        {"key": "vendors_cisco_unifi", "status": "READ_ONLY",
+         "note": "SNMPv3 (generic / Cisco IOS-XE) and UniFi controller read-only collection; no writes"},
+        {"key": "notifications", "status": "LIVE", "note": "Alert routing (severity floor, escalation of "
+                                                           "unacknowledged alerts); retry, DEAD state"},
+        {"key": "integrations", "status": "LIVE",
+         "note": "SMTP (per-connection relay + encrypted auth), webhook (bearer/HMAC), Microsoft Teams Workflows "
+                 "(Adaptive Card), syslog UDP/TCP, heartbeat push, Prometheus metrics, read-only API tokens; "
+                 "connection tests, enable/disable, delivery status/retry, audit"},
+        # Partially built or uncertified capabilities: listed so no screen or report can overstate them.
+        {"key": "switch_port_access_control", "status": "IMPLEMENTED_UNCERTIFIED",
+         "note": "CX RADIUS servers (create/modify/delete, secret by reference), server groups with ordered "
+                 "primary/secondary, port-access accounting, 802.1X/MAB per-port policy and live client status; "
+                 "RadSec and built-in groups refused; not hardware-certified"},
+        {"key": "instant_radius", "status": "IMPLEMENTED_UNCERTIFIED",
+         "note": "Instant auth-servers (timeout/retry/accounting port, secret rotation by reference) and SSID "
+                 "primary/failover order, load balancing, RADIUS accounting; Instant has no named server groups"},
+        {"key": "routing_dynamic", "status": "PER_MODEL",
+         "note": "CX 6200: Access OSPF (OSPFv2, default VRF, single area) through change governance, uncertified. "
+                 "CX 6100: static routing only (OSPF refused). BGP: UNSUPPORTED on 6100/6200 (no platform support)"},
+        {"key": "optics", "status": "LIVE_READ_ONLY",
+         "note": "Transceiver DOM (tx/rx power, temperature, voltage, bias, per lane) with module or platform "
+                 "thresholds, history, degradation trend and alerts; unsupported values shown as NOT MEASURED"},
+        {"key": "printer_configuration", "status": "PER_DEVICE_VERIFIED",
+         "note": "Location, contact, device name, asset ID, printer name, default tray and default media path via "
+                 "standard MIBs; each setting needs a per-printer hardware write+restore test. Energy saving: "
+                 "UNSUPPORTED"},
+        {"key": "ssh_legacy_compat", "status": "ON_APPROVAL" if os.environ.get("INM_SSH_LEGACY_COMPAT", "false") == "true"
+                                               else "OFF",
+         "note": "Modern SSH only by default (Paramiko 5); SHA-1 devices need an expiring per-device approval and "
+                 "use pinned OpenSSH; every use is audited"},
+        {"key": "switch_stacking", "status": "IMPLEMENTED_UNCERTIFIED",
+         "note": "VSF member provisioning (6200/6300 platforms) through change governance; not hardware-certified"},
+        {"key": "switch_acl_routing", "status": "IMPLEMENTED_UNCERTIFIED",
+         "note": "IPv4 ACL define/apply, static routes and DSCP QoS policy; dynamic routing: see routing_dynamic"},
+        {"key": "client_roaming_rf_interference", "status": "LIVE_INFERRED",
+         "note": "Poll-inferred roams (pairs, ping-pong, excessive), sticky candidates, noise/retry correlation; "
+                 "roams shorter than the poll interval are invisible"},
+        {"key": "remote_diagnostics", "status": "PARTIAL",
+         "note": "Ping and traceroute from the device over pinned SSH; cable test and packet capture unsupported"},
+        {"key": "active_probe_clock", "status": "OPT_IN",
+         "note": "Independent TCP reachability + HTTP-Date clock offset for allow-listed devices "
+                 "(INM_SCHEDULED_ACTIVE_PROBE)"},
+        {"key": "printer_purchasing", "status": "LIVE" if os.environ.get("INM_FEATURE_PURCHASING", "false") == "true"
+                                                else "DISABLED_PENDING_AUTHORIZATION",
+         "note": "Internal requests; module not mounted unless INM_FEATURE_PURCHASING=true"},
+        {"key": "print_jobs", "status": ("OFF_BY_POLICY" if os.environ.get("INM_FEATURE_PRINT_JOBS", "false") == "true"
+                                         else "DISABLED_PENDING_AUTHORIZATION"),
+         "note": "Print-job metadata + document inspection; not mounted unless INM_FEATURE_PRINT_JOBS=true, then off "
+                 "until a purpose and approval are set"},
     ]}
 
 
@@ -344,8 +395,13 @@ def v1_devices(family: str | None = Query(None, pattern="^(access_point|switch)$
         caps.setdefault(c.device_id, []).append(c)
     plans = plans_by_device(db)
     controllers = {s.id: s for s in db.scalars(select(Site).where(Site.id.in_(ids)))}
+    from ..database.models_remediation import DeviceGroup, DeviceGroupMember
+    groups: dict[str, list] = {}
+    for m, g in db.execute(select(DeviceGroupMember, DeviceGroup).join(DeviceGroup, DeviceGroup.id == DeviceGroupMember.group_id)
+                           .where(DeviceGroupMember.device_id.in_([d.id for d in devs]))).all():
+        groups.setdefault(m.device_id, []).append({"id": g.id, "name": g.name})
     return [_device_out(d, caps.get(d.id, []), plans.get(d.id), controllers.get(d.legacy_site_id))
-            for d in devs]
+            | {"groups": sorted(groups.get(d.id, []), key=lambda x: x["name"].casefold())} for d in devs]
 
 
 def _visible_device(db: Session, device_id: str) -> InmDevice:
@@ -710,27 +766,34 @@ def reset_password(user_id: int, body: ResetBody, request: Request, db: Session 
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- later-phase contracts: explicit 501, never fake success
+# ---------------------------------------------------------------- retired Phase 1 placeholders
+# These paths answered 501 "delivered in Phase 2/6" while the capabilities already existed elsewhere.
+# They now answer 410 Gone with the live route, so API users are not told a built feature is missing.
+def _moved(what: str, route: str):
+    return JSONResponse(status_code=410, content={
+        "status": "MOVED", "detail": f"{what} is available at {route}. Nothing was executed.", "use": route})
+
+
 @router.post("/discovery/jobs")
 def discovery_create(_: User = Depends(require_role("operator"))):
-    return _not_implemented(2, "Credential-profile discovery")
+    return _moved("Credential-profile discovery", "POST /api/v1/onboarding/discover")
 
 
 @router.get("/discovery/jobs/{job_id}")
 def discovery_get(job_id: str, _: User = Depends(require_role("viewer"))):
-    return _not_implemented(2, "Discovery job status")
+    return _moved("Discovery job status", "GET /api/v1/onboarding/discoveries/{job_id}")
 
 
 @router.post("/changes")
 def changes_create(_: User = Depends(require_role("operator"))):
-    return _not_implemented(6, "Controlled change requests")
+    return _moved("Controlled change requests", "POST /api/v1/changes/plans")
 
 
 @router.post("/changes/{change_id}/approve")
 def changes_approve(change_id: str, _: User = Depends(get_current_user)):
-    return _not_implemented(6, "Independent change approval")
+    return _moved("Independent change approval", "POST /api/v1/changes/plans/{plan_id}/approve")
 
 
 @router.post("/changes/{change_id}/execute")
 def changes_execute(change_id: str, _: User = Depends(get_current_user)):
-    return _not_implemented(6, "Change execution")
+    return _moved("Change execution", "POST /api/v1/changes/plans/{plan_id}/execute")

@@ -16,6 +16,7 @@ from backend.domain.model import DataQuality, SourceType, TelemetryPoint
 from backend.infrastructure.runtime import telemetry_store
 
 NOW = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+from backend.infrastructure import clock  # noqa: E402
 
 
 def device(hostname, family="access_point", source="REAL", legacy_site_id=None, site_id=None):
@@ -176,7 +177,12 @@ def test_predictive_insufficient_experimental_and_validated_paths(intel):
         write(d, "cpu_percent", _daily(45, 30, 21))
     viewer = make_user(client, admin, "pred.viewer", "viewer")
     assert client.post("/api/v1/intelligence/predictive/run", headers=viewer).status_code == 403
-    run = client.post("/api/v1/intelligence/predictive/run", headers=admin).json()
+    # One clock for issuing and scoring (rc18): the run happens 5 minutes after the last sample, whatever the wall
+    # clock says. Previously the API used the real clock while the data used NOW (import time), so a run that
+    # crossed an hour boundary issued windows ending after the scoring instant and nothing was scored.
+    issued_at = NOW + timedelta(minutes=5)
+    with clock.frozen(issued_at):
+        run = client.post("/api/v1/intelligence/predictive/run", headers=admin).json()
     ev = run["evaluation"]["PRED_CPU_BREACH"]
     assert ev["windows"] >= 30 and ev["brier_skill"] > 0 and ev["state"] == "VALIDATED"
     assert run["summary"]["predictions"]["INSUFFICIENT_DATA"] >= 1
@@ -194,7 +200,7 @@ def test_predictive_insufficient_experimental_and_validated_paths(intel):
     # memory/util rules have no history → their evaluation is not validated and nothing is surfaced for them
     assert run["evaluation"]["PRED_MEMORY_BREACH"]["state"] == "INSUFFICIENT_HISTORY"
     # close the loop: the predicted window is observed, then scored
-    later = NOW + timedelta(hours=25)
+    later = issued_at + timedelta(hours=24)                         # exactly the end of every issued window
     for d in hot:
         write(d, "cpu_percent", [(NOW + timedelta(hours=h), 96.0 if 13 <= (NOW + timedelta(hours=h)).hour <= 15 else 35.0)
                                  for h in range(1, 25)])

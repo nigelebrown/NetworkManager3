@@ -203,6 +203,33 @@ def _reconcile(db: Session, d, text: str) -> None:
                                                              if r["status"] == "FAIL" and r["severity"] == "critical"))})
 
 
+def drift_key(content: bytes, family: str) -> str:
+    """Order-preserving canonical form for change detection. JSON (CX): sorted keys, lists keep their order.
+    Text (Instant): CRLF -> LF, trailing whitespace and blank lines removed; line ORDER is kept because it is
+    semantic (ACL / role rules)."""
+    import hashlib
+    import json as _json
+    if family == "switch":
+        try:
+            return hashlib.sha256(_json.dumps(_json.loads(content), sort_keys=True, separators=(",", ":"))
+                                  .encode()).hexdigest()
+        except ValueError:
+            pass  # not JSON: canonicalised as text below
+    text = content.decode(errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256("\n".join(x.rstrip() for x in text.split("\n") if x.strip()).encode()).hexdigest()
+
+
+def _same_configuration(latest: ConfigArtifact, content: bytes, family: str) -> bool:
+    from ..domain import vault as V
+    from ..infrastructure.phase_services import LocalObjectStore, vault_master_key
+    try:
+        old = V.open_sealed(LocalObjectStore().get(latest.object_path), wrapped_key=latest.wrapped_key,
+                            manifest=latest.manifest, signature=latest.signature, master_key=vault_master_key())
+    except Exception:  # noqa: BLE001  an unreadable baseline is never assumed equal: capture a new version
+        return False
+    return drift_key(old, family) == drift_key(content, family)
+
+
 def run_due_captures(db: Session, *, actor: str = "vault-scheduler") -> dict:
     """Worker/scheduler entry: capture every due device configuration (read-only)."""
     from ..database.models_inm import InmDevice
@@ -227,6 +254,10 @@ def run_due_captures(db: Session, *, actor: str = "vault-scheduler") -> dict:
             import hashlib
             if latest is not None and latest.plaintext_sha256 == hashlib.sha256(content).hexdigest():
                 s.last_result = "UNCHANGED"
+            elif latest is not None and _same_configuration(latest, content, d.family):
+                # rc18 (CXAPI-07): only representation/metadata differs (line endings, trailing spaces, JSON key
+                # order): not a configuration change, no new version and no drift alert
+                s.last_result = "UNCHANGED (format only)"
             else:
                 X.seal_artifact(db, d, content, trigger="SCHEDULE", actor=actor,
                                 source="EMULATOR" if env == "EMULATED" else "DEVICE_READ")
@@ -647,3 +678,223 @@ def guided_restore(device_id: str, db: Session = Depends(get_db), user: User = D
 def outbox_status(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor"))):
     from ..infrastructure import outbox
     return outbox.stats(db)
+
+
+# ---- device-log retention (rc17) ---------------------------------------------------------------
+class LogRetentionInput(BaseModel):
+    enabled: bool
+    days: int | None = Field(default=None, ge=30, le=3650)
+    approval_reference: str = Field(default="", max_length=200)
+
+
+@router.get("/device-log-retention")
+def get_log_retention(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor"))):
+    from ..infrastructure import device_log_retention as R
+    return {**R.policy(db), "preview": R.preview(db)}
+
+
+@router.put("/device-log-retention")
+def put_log_retention(body: LogRetentionInput, request: Request, db: Session = Depends(get_db),
+                      user: User = Depends(require_role("admin"))):
+    from ..infrastructure import device_log_retention as R
+    try:
+        out = R.set_policy(db, enabled=body.enabled, days=body.days, approval_reference=body.approval_reference,
+                           actor=user.username, request=request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    db.commit()
+    return {**out, "preview": R.preview(db)}
+
+
+@router.post("/device-log-retention/apply")
+def apply_log_retention(request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..infrastructure import device_log_retention as R
+    out = R.apply(db, actor=user.username)
+    db.commit()
+    return out
+
+
+# ---- device-initiated diagnostics (rc17) -----------------------------------------------------------------
+class ActiveDiagnosticInput(BaseModel):
+    kind: str = Field(pattern="^(ping|traceroute|cable_test|packet_capture)$")
+    target: str = Field(default="", max_length=15)
+    vrf: str = Field(default="default", pattern="^(default|mgmt)$")
+    count: int = Field(default=4, ge=1, le=10)
+
+
+@router.post("/devices/{device_id}/active-diagnostics")
+def run_active_diagnostic(device_id: str, body: ActiveDiagnosticInput, request: Request, db: Session = Depends(get_db),
+                          user: User = Depends(require_any_role("admin", "operator"))):
+    """Fixed ping/traceroute templates from the device itself; no configuration change, no free-text CLI."""
+    from ..infrastructure.device_diagnostics import run_active
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    try:
+        result = run_active(db, d, body.kind, body.target, vrf=body.vrf, count=body.count)
+    except WriterError as exc:
+        audit(db, "device_active_diagnostic_failed", username=user.username, target=d.id, success=False, request=request,
+              detail=f"kind={body.kind} target={body.target} category={exc.category}")
+        db.commit()
+        code = {"UNSUPPORTED": 409, "PRECONDITION": 409, "INVALID": 422, "DEVICE_BUSY": 409, "TARGET_NOT_ALLOWED": 403}
+        raise HTTPException(code.get(exc.category, 502), f"{exc.category}: {exc}") from None
+    audit(db, "device_active_diagnostic", username=user.username, target=d.id, request=request,
+          detail=f"kind={body.kind} target={body.target} environment={result['environment']}")
+    return {"device_id": d.id, "device_writes": 0, **result}
+
+
+@router.get("/devices/{device_id}/probe")
+def device_probe_state(device_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    """Latest independent active probe and clock-offset measurement (never derived from collection counters)."""
+    from ..database.models import AppSetting
+    from ..infrastructure.device_probes import PROBE_KEY, clock_state, tolerance_s
+    d = real_device(db, device_id)
+    p = db.get(AppSetting, PROBE_KEY + d.id)
+    return {"device_id": d.id, "probe": p.value if p else {"reachable": None, "measured_at": None},
+            "clock": clock_state(db, d.id), "clock_tolerance_s": tolerance_s()}
+
+
+@router.post("/devices/probes/run")
+def run_device_probes(request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..infrastructure.device_probes import run
+    from ..infrastructure.runtime import telemetry_store
+    out = run(db, store=telemetry_store())
+    audit(db, "device_probes_run", username=user.username, target="devices", detail=str(out), request=request)
+    db.commit()
+    return out
+
+
+@router.get("/analytics/roaming-interference")
+def roaming_interference(hours: int = Query(default=24, ge=1, le=168), site_id: int | None = Query(default=None),
+                         db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    """Roaming patterns (poll-inferred events) and per-AP noise/retry interference correlation (measured only)."""
+    from datetime import timezone as _tz
+
+    from ..database.models import ClientEvent, ClientRecord
+    from ..database.models_inm import InmDevice
+    from ..domain import roaming_analytics as RA
+    from ..infrastructure.runtime import telemetry_store
+    scope = user_site_scope(db, user)
+    if site_id is not None and scope is not None and site_id not in scope:
+        raise HTTPException(404, "Site not found")
+    sites = {site_id} if site_id is not None else scope
+    since = datetime.now(_tz.utc) - timedelta(hours=hours)
+    q = select(ClientEvent).where(ClientEvent.ts >= since).limit(200_000)
+    cq = select(ClientRecord).where(ClientRecord.is_connected.is_(True))
+    if sites is not None:
+        q, cq = q.where(ClientEvent.site_id.in_(sites)), cq.where(ClientRecord.site_id.in_(sites))
+    events = [{"mac": e.mac, "ts": e.ts if e.ts.tzinfo else e.ts.replace(tzinfo=_tz.utc), "kind": e.kind,
+               "ap_from": e.ap_from, "ap_to": e.ap_to} for e in db.scalars(q)]
+    clients = [{"mac": c.mac, "ap_name": c.ap_name, "rssi_dbm": c.rssi_dbm, "connected_seconds": c.connected_seconds,
+                "is_connected": c.is_connected, "band": c.band} for c in db.scalars(cq)]
+    store = telemetry_store()
+    radios = []
+    dq = select(InmDevice).where(InmDevice.family == "access_point").limit(300)
+    if sites is not None:
+        dq = dq.where(InmDevice.legacy_site_id.in_(sites))
+    for d in db.scalars(dq):
+        if store is None:
+            break
+        series = {}
+        for m in ("noise_floor_dbm", "retry_percent", "util_5g_percent", "util_2g_percent"):
+            series[m] = [(datetime.fromisoformat(r["observed_at"]), r["value"]) for r in
+                         store.query(device_id=d.id, metric_name=m, since=since, limit=5000)
+                         if r.get("quality") == "OBSERVED" and r.get("value") is not None]
+        radios.append({"device_id": d.id, "hostname": d.hostname, "source_type": d.source_type} | RA.interference(series))
+    order = {"INTERFERENCE_SUSPECTED": 0, "NOISY": 1, "CLEAR": 2, "INSUFFICIENT_DATA": 3}
+    roam, sticky = RA.roaming(events, hours=hours), RA.sticky_candidates(clients)[:50]
+    if user.role not in ("admin", "operator"):          # same privacy rule as the client list
+        from ..security.privacy import mask_mac
+        for r in roam["excessive_roamers"]:
+            r["mac"] = mask_mac(r["mac"])
+        for c in sticky:
+            c["mac"] = mask_mac(c["mac"])
+    return {"hours": hours, "roaming": roam, "sticky_candidates": sticky,
+            "interference": sorted(radios, key=lambda r: order.get(r["state"], 9)),
+            "telemetry_store": store is not None,
+            "caveat": "Roams are inferred by comparing successive client polls; a roam that starts and ends between "
+                      "polls is invisible. Interference uses only measured noise/retry samples; missing samples are "
+                      "skipped, never treated as zero."}
+
+
+class LegacySshInput(BaseModel):
+    ip: str = Field(max_length=45)
+    reason: str = Field(min_length=10, max_length=300)
+    days: int = Field(ge=1, le=90)
+
+
+@router.get("/ssh-legacy-approvals")
+def list_ssh_legacy(db: Session = Depends(get_db), user: User = Depends(require_any_role("admin", "auditor"))):
+    from ..aruba import ssh_legacy
+    from ..database.models import AppSetting
+    return {"server_enabled": ssh_legacy.enabled(),
+            "approvals": [{"ip": r.key[len(ssh_legacy.KEY):]} | r.value for r in
+                          db.scalars(select(AppSetting).where(AppSetting.key.startswith(ssh_legacy.KEY)))]}
+
+
+@router.post("/ssh-legacy-approvals", status_code=201)
+def approve_ssh_legacy(body: LegacySshInput, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(require_role("admin"))):
+    import ipaddress
+
+    from ..aruba import ssh_legacy
+    try:
+        ip = str(ipaddress.ip_address(body.ip))
+        v = ssh_legacy.approve(db, ip, actor=user.username, reason=body.reason, days=body.days, request=request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    db.commit()
+    return {"ip": ip} | v
+
+
+@router.delete("/ssh-legacy-approvals/{ip}", status_code=204)
+def revoke_ssh_legacy(ip: str, request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..aruba import ssh_legacy
+    ssh_legacy.revoke(db, ip, actor=user.username, request=request)
+    db.commit()
+
+
+@router.get("/devices/{device_id}/ports/{port:path}/auth-clients")
+def port_auth_clients(device_id: str, port: str, db: Session = Depends(get_db), user: User = Depends(require_role("operator"))):
+    """802.1X / MAC-auth client status on a CX port (read-only). DEMO devices read the labelled emulator."""
+    from ..database.models_inm import InmDevice
+    d = db.get(InmDevice, device_id)
+    if d is None or d.family != "switch":
+        raise HTTPException(404, "Switch not found.")
+    try:
+        w, env = X.writer_for(db, d)
+        w.open()
+        try:
+            clients = w.port_access_clients(port)
+        finally:
+            w.close()
+    except WriterError as exc:
+        raise HTTPException(502, f"Could not read port authentication status: {exc}") from None
+    return {"device_id": d.id, "port": port, "environment": env, "clients": clients,
+            "read_at": now().isoformat()}
+
+
+@router.get("/devices/{device_id}/optics")
+def device_optics(device_id: str, days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db),
+                  user: User = Depends(require_role("viewer"))):
+    """Transceiver identification, per-lane DOM with manufacturer thresholds, state and Rx degradation trend."""
+    from ..infrastructure.optics import device_view
+    from ..infrastructure.runtime import telemetry_store
+    return device_view(db, device_id, telemetry_store(), days=days)
+
+
+@router.get("/optics")
+def fleet_optics(db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    from ..database.models import AppSetting
+    from ..database.models_inm import InmDevice
+    rows = []
+    for r in db.scalars(select(AppSetting).where(AppSetting.key.startswith("optics:"))):
+        d = db.get(InmDevice, r.key[len("optics:"):])
+        for port, p in (r.value.get("ports") or {}).items():
+            rows.append({"device_id": r.key[len("optics:"):], "hostname": d.hostname if d else None,
+                         "source_type": d.source_type if d else None, "port": port, "type": p.get("type"),
+                         "vendor_name": p.get("vendor_name"), "part_number": p.get("part_number"),
+                         "serial_number": p.get("serial_number"), "lane_count": p.get("lane_count"),
+                         "state": p["evaluation"]["state"], "threshold_source": p["evaluation"].get("threshold_source"),
+                         "observed_at": r.value.get("observed_at")})
+    order = {"CRITICAL": 0, "WARNING": 1, "NOT_MEASURED": 2, "UNSUPPORTED": 3, "OK": 4}
+    return sorted(rows, key=lambda x: (order.get(x["state"], 9), x["hostname"] or "", x["port"]))

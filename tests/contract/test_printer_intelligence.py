@@ -207,11 +207,32 @@ def test_saved_printer_profile_checks_only_selected_address(client, admin, monke
                            json={"name": "Office printers", "version": version, **secrets})
     assert response.status_code == 201, response.text
     profile = response.json()
-    assert set(profile) == {"id", "name", "version"}
+    v3_meta = {"auth_protocol", "priv_protocol", "security_level", "weak_protocols"} if version == "3" else set()
+    assert set(profile) == {"id", "name", "version"} | v3_meta          # protocol names only, never secrets
+    assert not any(str(v) in profile.values() for v in secrets.values())
     route = f"/api/printers/credential-profiles/{profile['id']}/test"
     with patch("backend.api.printers.read_printer", new_callable=AsyncMock) as read:
         read.return_value = {"hostname": "printer", "printer_mib": True}
         assert client.post(route, headers=admin, json={"management_ip": "10.103.45.21"}).status_code == 403
         read.assert_not_called()
         assert client.post(route, headers=admin, json={"management_ip": "10.103.44.21"}).status_code == 200
-        read.assert_awaited_once_with("10.103.44.21", version, *secrets.values())
+        options = {"auth_protocol": "SHA256", "priv_protocol": "AES128"} if version == "3" else {}
+        read.assert_awaited_once_with("10.103.44.21", version, *secrets.values(), **options)
+
+
+def test_snmpv3_profile_protocol_and_security_level_options(client, admin):
+    base = {"name": "HP legacy", "version": "3", "username": "reader", "auth_passphrase": "auth-pass-1"}
+    weak = client.post("/api/printers/credential-profiles", headers=admin,
+                       json={**base, "security_level": "authNoPriv", "auth_protocol": "MD5"})
+    assert weak.status_code == 201, weak.text
+    assert weak.json()["security_level"] == "authNoPriv" and weak.json()["weak_protocols"] == ["MD5"]
+    assert client.post("/api/printers/credential-profiles", headers=admin,
+                       json={**base, "security_level": "authNoPriv", "privacy_passphrase": "x" * 9}).status_code == 422
+    assert client.post("/api/printers/credential-profiles", headers=admin,
+                       json={**base, "privacy_passphrase": "short"}).status_code == 422
+    assert client.post("/api/printers/credential-profiles", headers=admin,
+                       json={**base, "privacy_passphrase": "priv-pass-1", "priv_protocol": "RC4"}).status_code == 422
+    strong = client.post("/api/printers/credential-profiles", headers=admin,
+                         json={**base, "name": "Kyocera", "privacy_passphrase": "priv-pass-1",
+                               "auth_protocol": "SHA512", "priv_protocol": "AES256"}).json()
+    assert strong["auth_protocol"] == "SHA512" and strong["priv_protocol"] == "AES256" and strong["weak_protocols"] == []

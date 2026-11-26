@@ -1,9 +1,10 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link } from "react-router";
 import { Area, AreaChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { COLORS, Donut, Gauge, PageHeader, TT } from "../components/viz";
-import { api } from "../services/api";
+import { api, getSession } from "../services/api";
 import { ops } from "../services/ops";
 import DashboardSwitcher from "../components/DashboardSwitcher";
 import FirmwareExperience from "../components/FirmwareExperience";
@@ -104,7 +105,52 @@ export default function ExecutiveDashboard() {
       {!sites.length && <p className="py-6 text-sm text-slate-500">No fresh connected-client observations to compare.</p>}
     </Card>
     {s && <FirmwareExperience summary={s} />}
+    {["admin", "auditor"].includes(getSession()?.role ?? "") && <SignedExports />}
     <p className="text-xs text-slate-500">Live refreshes are coalesced; polling provides a fallback.
       {s?.last_poll_at && ` Latest controller observation ${new Date(s.last_poll_at).toLocaleString()}.`}</p>
   </div>;
+}
+
+/** Signed, audited exports (GAP-T14): site-scoped CSV with masked identities, SHA-256 and a server signature.
+ *  The CSV and its signature record are downloaded separately; POST /v1/reports/exports/verify detects tampering. */
+function SignedExports() {
+  const [days, setDays] = useState(30);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [last, setLast] = useState<{ name: string; record: string } | null>(null);
+  const save = (name: string, text: string, type: string) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+  const run = async (kind: "inventory" | "audit" | "attribution", label: string) => {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const end = new Date(), start = new Date(end.getTime() - days * 86400000);
+      const r = await ops.exportReport({ kind, start: start.toISOString(), end: end.toISOString() });
+      const stamp = end.toISOString().slice(0, 10);
+      const name = `inm-${kind}-${stamp}.csv`;
+      save(name, r.body, "text/csv");
+      const record = JSON.stringify({ sha256: r.sha256, signature: r.signature, meta: r.meta }, null, 1);
+      setLast({ name: `inm-${kind}-${stamp}.signature.json`, record });
+      setMsg(`Signed ${label} export: ${r.row_count} row(s) · SHA-256 ${r.sha256.slice(0, 16)}… · identities ${String(r.meta.identities ?? "MASKED")} · scope ${String(r.meta.scope ?? "")}`);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  return <Card title="Signed exports">
+    <p className="text-sm text-slate-600">CSV exports are limited to your site scope, mask user identities, and carry a SHA-256 and a
+      server signature. Every export is audited.</p>
+    <div className="mt-2 flex flex-wrap items-end gap-2">
+      <label className="text-sm">Period (days)<input aria-label="Export period in days" className="ml-2 w-20 rounded border px-2 py-1" type="number" min={1} max={366}
+        value={days} onChange={e => setDays(Math.min(366, Math.max(1, Number(e.target.value) || 1)))} /></label>
+      <button className="inm-btn-secondary" disabled={busy} onClick={() => run("inventory", "inventory")}>Export inventory</button>
+      <button className="inm-btn-secondary" disabled={busy} onClick={() => run("audit", "audit-log")}>Export audit log</button>
+      <button className="inm-btn-secondary" disabled={busy} onClick={() => run("attribution", "attribution")}>Export change attribution</button>
+      {last && <button className="inm-btn-secondary" onClick={() => save(last.name, last.record, "application/json")}>Download signature record</button>}
+    </div>
+    <ErrorNote error={err} />
+    {msg && <p role="status" className="mt-2 text-sm text-emerald-800">{msg}</p>}
+  </Card>;
 }

@@ -26,10 +26,15 @@ CX_TYPED_OPS = ("switch.vlan.define", "switch.port.access_vlan", "switch.port.tr
                 "switch.port.admin_state", "switch.port.poe", "switch.lldp", "switch.lag.members",
                 "switch.central.disable", "switch.port.description", "switch.port.stp_bpdu_guard",
                 "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp", "switch.system.dns",
-                "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab")
+                "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab",
+                "switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy", "switch.vsf.member",
+                "switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting", "switch.port.auth_policy",
+                "switch.route.ospf")
 INSTANT_TYPED_OPS = ("ap.ssid.vlan", "ap.ssid.create", "ap.ssid.enterprise", "ap.radio.channel", "ap.radio.width",
                      "ap.radio.tx_power", "ap.client_match", "ap.band_steering", "ap.airtime_fairness",
-                     "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth")
+                     "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
+                     "ap.role.define", "ap.captive_portal.external", "ap.ssid.multi_auth",
+                     "ap.radius.server", "ap.ssid.auth_servers")
 
 
 @dataclass(frozen=True)
@@ -78,18 +83,21 @@ REGISTRY: tuple[AdapterSpec, ...] = (
                 "per switch; firmware older than 10.09 is refused (no CSRF / different request shapes).",
                 CX_TYPED_OPS),
     AdapterSpec("cisco_ios_xe_snmpv3", "Cisco", "switch", ("Catalyst 9200", "Catalyst 9300", "Catalyst 2960-X"),
-                ("SNMPv3 (authPriv)", "NETCONF (only where firmware provides)"), None, None,
-                {op: "SCAFFOLD" for op in OPERATIONS},
-                "UNCERTIFIED", "PLACEHOLDER — not implemented. Devices can be inventoried manually only.",
-                (), False),
+                ("SNMPv1/v2c/v3 (IF-MIB, ENTITY-MIB, LLDP-MIB; CISCO-PROCESS-MIB CPU vendor-unverified)",), None, None,
+                {**{op: "NOT_IMPLEMENTED" for op in OPERATIONS}, "probe_identity": "IMPLEMENTED", "get_capabilities": "IMPLEMENTED",
+                 "collect": "IMPLEMENTED"},
+                "UNCERTIFIED", "READ-ONLY adapter (rc17): SNMP monitoring with standard MIBs. No configuration writes; "
+                "NETCONF/RESTCONF configuration is not implemented.", (), True),
     AdapterSpec("unifi_controller", "Ubiquiti", "access_point", ("U6-Lite", "U6-Pro", "U7-Pro"),
-                ("UniFi Network controller API",), None, None,
-                {op: "SCAFFOLD" for op in OPERATIONS},
-                "UNCERTIFIED", "PLACEHOLDER — not implemented. Devices can be inventoried manually only.",
-                (), False),
-    AdapterSpec("generic_snmpv3", "Generic", "other", (), ("SNMPv3 (authPriv)",), None, None,
-                {op: "SCAFFOLD" for op in OPERATIONS},
-                "UNCERTIFIED", "PLACEHOLDER — not implemented. Manual inventory only.", (), False),
+                ("UniFi Network controller API (classic /api/login, /api/s/{site}/stat/device)",), None, None,
+                {**{op: "NOT_IMPLEMENTED" for op in OPERATIONS}, "probe_identity": "IMPLEMENTED", "get_capabilities": "IMPLEMENTED",
+                 "collect": "IMPLEMENTED"},
+                "UNCERTIFIED", "READ-ONLY adapter (rc17): controller-reported state, clients, CPU/memory. No configuration "
+                "writes. The controller API is not formally versioned; responses are validated.", (), True),
+    AdapterSpec("generic_snmpv3", "Generic", "other", (), ("SNMPv1/v2c/v3 (IF-MIB, ENTITY-MIB, LLDP-MIB)",), None, None,
+                {**{op: "NOT_IMPLEMENTED" for op in OPERATIONS}, "probe_identity": "IMPLEMENTED", "get_capabilities": "IMPLEMENTED",
+                 "collect": "IMPLEMENTED"},
+                "UNCERTIFIED", "READ-ONLY adapter (rc17): standards-based SNMP monitoring. No configuration writes.", (), True),
 )
 
 
@@ -99,13 +107,22 @@ def _model_tokens(model: str) -> set[str]:
     return set(re.findall(r"(?<![0-9])([0-9]{3,4})(?=[A-Za-z]*(?:[^0-9A-Za-z]|$))", model or ""))
 
 
+def _model_name(model: str | None) -> str:
+    return re.sub(r"[^0-9a-z]", "", (model or "").casefold())
+
+
 def resolve(vendor: str, family: str, model: str | None) -> AdapterSpec:
     v = (vendor or "").casefold()
     have = _model_tokens(model or "")
+    name = _model_name(model)
     for spec in REGISTRY:
         if spec.vendor.casefold() != v or spec.family != family:
             continue
         if not spec.models or have & {t for m in spec.models for t in _model_tokens(m)}:
+            return spec
+        # Model names without a 3-4 digit number (UniFi "U6-Pro" / controller "U6PRO") are matched by their
+        # normalised name. rc18 defect fix: before this, no UniFi model could ever select the UniFi adapter.
+        if not have and len(name) >= 3 and any(_model_name(m) == name for m in spec.models):
             return spec
     return REGISTRY[-1]
 

@@ -2,7 +2,8 @@ import { PageHeader } from "../components/viz";
 import GuidePanel from "../components/GuidePanel";
 import { useState } from "react";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
-import { DemoBadge, PlannedNotice, btnPrimary } from "../components/inm";
+import { Link } from "react-router";
+import { DemoBadge, btnPrimary } from "../components/inm";
 import { useLoad } from "../components/useLoad";
 import { getSession } from "../services/api";
 import { v1 } from "../services/inm";
@@ -52,9 +53,10 @@ export default function AiLearning() {
           {recs.data?.length === 0 && <li className="py-6 text-center text-sm text-slate-500">No recommendations yet. Run “Analyze now”.</li>}
         </ul>
       </Card>
-      <PlannedNotice phase={8} title="Model training, registry and evaluation">
-        Trained models, feature lineage, v1/v2 comparisons and accepted/rejected feedback arrive in Phase 8 after the ML quality review.
-      </PlannedNotice>
+      <Card title="Trained models">
+        <p className="text-sm text-slate-400">Model training, the versioned registry, holdout evaluation, drift and live-performance monitoring,
+          independent promotion and rollback are in the <Link className="text-sky-300 underline" to="/learning">AI learning centre</Link>.</p>
+      </Card>
     </div>
   );
 }

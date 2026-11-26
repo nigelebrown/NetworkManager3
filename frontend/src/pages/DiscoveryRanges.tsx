@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote } from "../components/ui";
 import { discoveryApi, type RangePlan, type RangeBatches } from "../services/discovery";
 

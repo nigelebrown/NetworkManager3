@@ -6,6 +6,7 @@ left PENDING for a human), and execute it through the certified change engine (b
 After the cooldown it measures the outcome; a degradation pauses the enrollment and executes a rollback plan.
 """
 from __future__ import annotations
+import logging
 
 import os
 import json
@@ -26,6 +27,8 @@ from ..domain import learning as L
 from ..domain import optimization_policy as P
 from . import change_executor as X
 from .phase_services import control
+
+_log = logging.getLogger(__name__)
 
 UTIL_TRIGGER = 70.0
 
@@ -85,8 +88,8 @@ def evaluate(db: Session, device: InmDevice, op: dict, *, actor: str, recommenda
         try:
             X._artifact_bytes(db,backup.id,device)
             verified_backup = True
-        except Exception:
-            pass
+        except Exception as _exc:
+            _log.warning("pre-change backup could not be verified; optimization stays blocked: %s", type(_exc).__name__, exc_info=True)
     sp = db.get(OptimizationSitePolicy, device.site_id) if device.site_id else None
     if sp is not None and op.get("op") == "ap.radio.channel" and not op.get("arm_managed"):
         allowed = sp.allowed_channels_5g if op.get("band", "5") == "5" else sp.allowed_channels_2g

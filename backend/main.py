@@ -5,6 +5,8 @@ Run (from project root, venv active):
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import logging
 import re
@@ -22,6 +24,7 @@ from sqlalchemy import select
 from .api import ai, auth, config, data, experience, firmware, sites, system, quick_devices, management_approvals, printers, discovery_ranges, onboarding_workflow, config_templates, phase4_monitoring
 from .api import collection, attribution, vault, change_control, replacement, learning, optimization, platform_ops, operations_center, production_ops, workflows, insights, notifications, port_groups
 from .api import ap_operations, incidents, guides, discovery_rules, printers_srs, intelligence
+from .api import cx_firmware, printer_purchasing, print_jobs, integrations, emergency_access
 from .config import ROOT_DIR, get_settings
 from .database.models import User
 from .database.session import assert_schema_current, create_schema, init_engine, session_scope
@@ -114,6 +117,9 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(J.safe(J.printer_jobs), "interval", seconds=30, max_instances=1, coalesce=True, id="printer_jobs")
         scheduler.add_job(J.safe(J.printer_daily), "interval", hours=24, max_instances=1, coalesce=True, id="printer_daily")
         scheduler.add_job(J.safe(J.predictive), "interval", hours=6, max_instances=1, coalesce=True, id="predictive")
+        scheduler.add_job(J.safe(J.ml_monitor), "interval", hours=24, max_instances=1, coalesce=True, id="ml_monitor")
+        scheduler.add_job(J.safe(J.ml_retrain), "interval", hours=24, max_instances=1, coalesce=True, id="ml_retrain")
+        scheduler.add_job(J.safe(J.syslog_bridge), "interval", seconds=60, max_instances=1, coalesce=True, id="syslog_bridge")
         scheduler.start()
 
     stop = asyncio.Event()
@@ -129,8 +135,8 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "nc", None) is not None:
         try:
             await app.state.nc.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("best-effort NATS close during shutdown: %s", type(_exc).__name__)
     if scheduler:
         scheduler.shutdown(wait=False)
 
@@ -235,9 +241,16 @@ def create_app() -> FastAPI:
 
     for r in (auth.router, system.router, sites.router, data.router, config.router, experience.router, ai.router, firmware.router, firmware.download_router, quick_devices.router, management_approvals.router, printers.router, printers_srs.router, intelligence.router, discovery_ranges.router, onboarding_workflow.router, config_templates.router, phase4_monitoring.router,
               collection.router, attribution.router, vault.router, change_control.router, replacement.router,
-              learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router, port_groups.router,
-              workflows.router, insights.router, notifications.router, ap_operations.router, incidents.router, guides.router, discovery_rules.router):
+              learning.router, optimization.router, platform_ops.router, operations_center.router, production_ops.router, port_groups.router, cx_firmware.router,
+              workflows.router, insights.router, notifications.router, ap_operations.router, incidents.router, guides.router, discovery_rules.router,
+              integrations.router, integrations.metrics_router, emergency_access.router):
         app.include_router(r)
+    # rc18 owner direction: purchasing and print-job/document inspection stay disabled and isolated until explicitly
+    # authorised; their APIs are not even mounted unless the server enables them.
+    if os.environ.get("INM_FEATURE_PURCHASING", "false").lower() == "true":
+        app.include_router(printer_purchasing.router)
+    if os.environ.get("INM_FEATURE_PRINT_JOBS", "false").lower() == "true":
+        app.include_router(print_jobs.router)
     app.include_router(api_v1.router)
     app.include_router(ws.router)
     app.add_middleware(RequestContextMiddleware)  # added last = outermost: runs before everything else

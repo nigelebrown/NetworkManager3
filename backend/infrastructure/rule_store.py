@@ -11,17 +11,30 @@ from ..domain.rule_catalog import BUILTIN, PRED_METRIC, SCHEMA, validate_params 
 
 
 def ensure(db: Session) -> None:
+    """Seed missing built-in rules. Concurrent first requests on a fresh database may both try to seed (rc18 defect:
+    the loser raised IntegrityError -> HTTP 500); each rule is inserted in its own savepoint and a duplicate means
+    another request seeded it first."""
+    from sqlalchemy.exc import IntegrityError
     have = {r for (r,) in db.execute(select(AiRuleDefinition.rule_id))}
     for b in BUILTIN:
         if b["rule_id"] in have:
             continue
-        db.add(AiRuleDefinition(rule_id=b["rule_id"], engine=b["engine"], title=b["title"], description=b["description"],
-                                inputs=b["inputs"], condition=b["condition"], output=b["output"], risk=b["risk"],
-                                precedence=b["precedence"], default_params=dict(b["params"]), params=dict(b["params"]),
-                                enabled=True, suppression_minutes=b["suppression"], version=1, updated_by="system"))
-        db.add(AiRuleVersion(rule_id=b["rule_id"], version=1, params=dict(b["params"]), enabled=True,
-                             suppression_minutes=b["suppression"], proposed_by="system", approved_by="system",
-                             note="built-in default"))
+        try:
+            with db.begin_nested():
+                _seed(db, b)
+        except IntegrityError:
+            continue                                 # seeded concurrently by another request: nothing to do
+    db.flush()
+
+
+def _seed(db: Session, b: dict) -> None:
+    db.add(AiRuleDefinition(rule_id=b["rule_id"], engine=b["engine"], title=b["title"], description=b["description"],
+                            inputs=b["inputs"], condition=b["condition"], output=b["output"], risk=b["risk"],
+                            precedence=b["precedence"], default_params=dict(b["params"]), params=dict(b["params"]),
+                            enabled=True, suppression_minutes=b["suppression"], version=1, updated_by="system"))
+    db.add(AiRuleVersion(rule_id=b["rule_id"], version=1, params=dict(b["params"]), enabled=True,
+                         suppression_minutes=b["suppression"], proposed_by="system", approved_by="system",
+                         note="built-in default"))
     db.flush()
 
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { useLoad } from "../components/useLoad";
 import { ErrorNote } from "../components/ui";
 import { ago, btn, inputCls } from "../components/viz";
@@ -515,7 +515,7 @@ export default function DeviceInventory() {
       </section>}
       {rows.length ? <div className="inm-tablewrap"><table className="inm-table"><thead><tr>
         {admin && <th scope="col"><input type="checkbox" aria-label="Select visible devices of this type"
-          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Cluster</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
+          checked={allVisibleSelected} disabled={busy || !eligible.length} onChange={toggleVisible} /></th>}<th>Device</th><th>Model / firmware</th><th>Site</th><th>Cluster</th><th>Groups</th><th>Management IP</th><th>Status</th><th>Source</th><th>Observed</th><th>Actions</th>
       </tr></thead><tbody>{rows.map(d=><tr key={d.id}>
         {admin && <td><input type="checkbox" aria-label={`Select ${d.hostname || d.serial_number}`}
           checked={selected.includes(d.id)} disabled={busy || d.source_type !== "REAL" ||
@@ -526,6 +526,7 @@ export default function DeviceInventory() {
         <td>{d.model ?? d.family}<div style={{fontSize:10,color:"#7b8a9d"}}>{d.firmware ?? "Not observed"}</div></td>
         <td>{d.site_id ? siteNames.get(d.site_id) ?? "Assigned site" : "Unassigned"}</td>
         <td>{d.family === "access_point" ? clusterLabel(d.cluster_id) : "—"}</td>
+        <td>{(d.groups ?? []).map(g => g.name).join(", ") || "—"}</td>
         <td>{d.management_addresses?.join(", ") || "Not reported"}</td>
         <td><span className={"inm-pill "+(d.status.toLowerCase()==="up"?"good":d.status.toLowerCase()==="down"?"bad":"warn")}>{d.status}</span></td>
         <td><span className={"inm-pill "+(d.source_type==="REAL"?"info":"warn")}>{d.source_type}</span></td>

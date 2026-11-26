@@ -1,5 +1,89 @@
 # NetworkManager3 — production acceptance and release gate
 
+## 1.3.0-rc18 verdict (25 November 2026)
+
+| Dimension | Verdict | Basis |
+|---|---|---|
+| **Production deployment** | **NO_GO** | No physical certification. rc18 is not installed on any CentOS server. No independent sign-off. The package is unsigned: the owner's key is required. Gate items 1–9 below are still unmet. |
+| **Software implementation** | **COMPLETE FOR INDEPENDENT REVIEW** | Every RC17-directive item is implemented and tested. All 121 remaining non-PASS register rows need hardware (69), external infrastructure (50), a vendor capability that does not exist (1) or owner authorisation (1). None is waiting for software (`docs/REGISTER_REVIEW_1.3.0_RC18.md`). Test results: `docs/TEST_RESULTS_1.3.0_RC18.md`. |
+| **Hardware certification** | **NOT STARTED** | The rc16, rc17 and rc18 hardware checklists are all NOT_RUN. |
+| **ML** | **NOT PRODUCTION-VALIDATED** | No model has been trained on real fleet telemetry. The statistical engine remains the engine of record. |
+| **Operational acceptance** | **NOT STARTED** | Owner, security and operations sign-off are still required. |
+
+rc18 weakened no safety gate. It **added** gates:
+
+- release signatures verified before install, update and rollback
+- the update/rollback quiesce gate
+- the high-risk deployment release approval
+- the onboarding lockout guard
+- sender-verified syslog attribution
+
+## 1.3.0-rc17 verdict (25 November 2026)
+
+| Dimension | Verdict | Basis |
+|---|---|---|
+| **Production deployment** | **NO_GO** | No physical certification, rc17 not installed or verified on any CentOS server, no independent sign-off, unsigned release. Gate items 1–9 below are still unmet. |
+| **Software readiness** | **READY FOR HARDWARE VALIDATION** (not "software development complete") | The master-directive work is implemented and developer-tested, with 13 software gaps listed in `docs/HANDOVER_1.3.0_RC17.md` §4. The final suite results are in `docs/TEST_RESULTS_1.3.0_RC17.md`. |
+| **Hardware certification** | **NOT STARTED** | `HARDWARE_VALIDATION_CHECKLIST_1.3.0_RC16.md` + `…_RC17.md`: all NOT_RUN. |
+| **Operational acceptance** | **NOT STARTED** | Owner, security and operations sign-off still required. |
+
+rc17 weakened no safety gate. These are all unchanged:
+
+- write lock
+- certification scope
+- independent approval
+- emergency stop
+- no blind replay
+- 20/40 MHz
+- per-device optimisation gates
+
+The new write operations are UNCERTIFIED until hardware evidence exists.
+
+The rc16 software gaps are resolved as follows:
+
+- **Group column:** UI built (browser test pending).
+- **Printer storage:** change-only + heartbeat, −92.5 % sample rows.
+- **Device-log retention:** policy-driven.
+
+
+## 1.3.0-rc16 verdict (25 November 2026)
+
+| Dimension | Verdict | Basis |
+|---|---|---|
+| **Production deployment** | **NO_GO** | No physical device certification, no CentOS install/restore evidence for this candidate, no signed independent acceptance, mandatory gate items 1–9 below unmet. |
+| **Software readiness** | **READY FOR HARDWARE VALIDATION** for the read-only monitoring, discovery/onboarding, port-group, printer-monitoring and governed-change paths. **Not "software complete"**: the remaining software gaps listed below are real. | 0 failing automated tests in this workspace; changed workflows browser-tested; migrations and dump/restore proven on PostgreSQL 16; mixed-load harness within provisional targets. |
+| **Hardware certification** | **NOT STARTED** | Every hardware row in `docs/HARDWARE_VALIDATION_CHECKLIST_1.3.0_RC16.md` is NOT_RUN. Emulator evidence does not certify hardware. |
+| **Operational acceptance** | **NOT STARTED** | Requires the owner, security and operations sign-off defined below. |
+
+### Why software readiness is justified for hardware validation
+
+- All existing suites pass on rc16 plus 12 new automated tests and 3 browser workflows (see `docs/TEST_RESULTS_1.3.0_RC16.md`).
+- Twelve defects found in the audit are fixed (`docs/RELEASE_1.3.0_RC16_CHANGELOG.md`), including three that produced
+  wrong data (false error spikes, >100 % utilisation, faults closed by a partial read), one that made SNMPv3 printers
+  undiscoverable unless they used SHA-256/AES-128, and one alert-churn defect.
+- No safety gate was weakened: write lock, certification scope, independent approval, emergency stop, no blind replay,
+  20/40 MHz policy and per-device optimization enrollment are untouched.
+
+### Remaining software gaps (must be tracked; none blocks read-only hardware validation)
+
+1. Group assignment from an imported group column (reference text only).
+2. Printer raw-sample retention/storage budget — owner decision (≈ 12.4 KB per printer poll; 365-day default; upper bound ≈ 435 GB/yr at 1,000 printers × 900 s).
+3. Device-log retention/disposal not automatic.
+4. Firmware: no vendor signature verification; no CX firmware transport; no automatic AP reboot/rollback.
+5. Not implemented: VSF provisioning, device-initiated ping/traceroute/cable test/packet capture, non-Aruba switch adapters, Instant automatic full restore.
+6. Partial: enterprise WLAN lifecycle, CX 802.1X/MAB provisioning, ACL/routing/QoS lifecycle, roaming/interference analytics.
+7. Frontend: single 1.27 MB bundle (no code splitting); react-router v6 advisory (not reachable today; upgrade to v7 recommended).
+8. Pages other than those changed in rc16 were not re-checked in a browser in this session.
+
+### Accepted risks recorded for the reviewers
+
+- `paramiko 3.5.1` (PYSEC-2026-2858: SHA-1 RSA allowed) is kept because older Instant APs require ssh-rsa/SHA-1.
+  Mitigation: host-key pinning, approved-target allowlist. Re-evaluate when the AP fleet firmware is confirmed.
+- `vite`/`esbuild` advisories affect the development server only; production serves the static build through nginx.
+
+---
+
+
 **Current verdict: NO_GO.** The software CI suite is useful evidence but does not establish physical AP-505,
 AP-535, CX 6100 or CX 6200 write/restore compatibility, production HA/DR resilience, external security
 assessment, or independent acceptance. The platform is **not** certified production-ready on these grounds.

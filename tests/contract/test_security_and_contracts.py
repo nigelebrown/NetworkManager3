@@ -203,13 +203,16 @@ def test_audit_export_is_csv_with_hashes(client, admin):
 
 
 # ------------------------------------------------------------------ contracts
-def test_later_phase_routes_return_explicit_501(client, admin):
-    """P1-12: no fake success for unbuilt capabilities."""
-    for method, path, phase in (("post", "/api/v1/discovery/jobs", 2), ("get", "/api/v1/discovery/jobs/x", 2),
-                                ("post", "/api/v1/changes", 6), ("post", "/api/v1/changes/1/approve", 6),
-                                ("post", "/api/v1/changes/1/execute", 6)):
+def test_retired_phase1_placeholders_point_to_live_routes(client, admin):
+    """P1-12 (rc17): never fake success, and never claim a built capability is missing. The Phase 1 placeholder
+    paths answer 410 MOVED with the live route; nothing is executed."""
+    for method, path, live_route in (("post", "/api/v1/discovery/jobs", "/api/v1/onboarding/discover"),
+                                     ("get", "/api/v1/discovery/jobs/x", "/api/v1/onboarding/discoveries/"),
+                                     ("post", "/api/v1/changes", "/api/v1/changes/plans"),
+                                     ("post", "/api/v1/changes/1/approve", "/api/v1/changes/plans/"),
+                                     ("post", "/api/v1/changes/1/execute", "/api/v1/changes/plans/")):
         r = getattr(client, method)(path, headers=admin)
-        assert r.status_code == 501 and r.json()["status"] == "NOT_IMPLEMENTED" and r.json()["phase"] == phase
+        assert r.status_code == 410 and r.json()["status"] == "MOVED" and live_route in r.json()["use"]
 
 
 def test_every_legacy_route_still_mounted(client):
@@ -378,5 +381,10 @@ def test_database_health_is_protected_and_reports_missing_measurements(client, a
     assert client.get(path).status_code == 401
     response = client.get(path, headers=admin)
     assert response.status_code == 200
-    assert response.json()["management"] == {"status": "UNAVAILABLE"}
-    assert response.json()["timeseries"] == {"status": "UNAVAILABLE"}
+    from backend.config import get_settings
+    if get_settings().database_url.startswith("sqlite"):
+        # SQLite exposes no server statistics: reported as UNAVAILABLE, never invented
+        assert response.json()["management"] == {"status": "UNAVAILABLE"}
+    else:                                  # PostgreSQL (INM_TEST_PG_ADMIN_URL): real measurements are reported
+        assert "connections" in response.json()["management"]
+    assert response.json()["timeseries"] == {"status": "UNAVAILABLE"}           # SQLite telemetry store in tests

@@ -5,11 +5,14 @@ This server exists only for the seconds of that transfer: nothing is written to 
 is refused, and it shuts down after the first completed transfer or the deadline.
 """
 from __future__ import annotations
+import logging
 
 import socket
 import struct
 import threading
 import time
+
+_log = logging.getLogger(__name__)
 
 RRQ, DATA, ACK, ERROR = 1, 3, 4, 5
 BLOCK = 512
@@ -41,8 +44,8 @@ class TftpOnce:
         self._stop.set()
         try:
             self._sock.close()
-        except OSError:
-            pass
+        except OSError as _exc:
+            _log.debug("best-effort closing the TFTP socket: %s", type(_exc).__name__)
 
     # -- internals --
     @staticmethod

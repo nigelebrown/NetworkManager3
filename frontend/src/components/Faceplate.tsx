@@ -3,7 +3,7 @@ import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "rec
 import { useLoad } from "./useLoad";
 import { TT } from "./viz";
 import { rem } from "../services/remediation";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { COLORS, Pill, ago } from "./viz";
 import type { Port, Ports } from "../services/ops";
 

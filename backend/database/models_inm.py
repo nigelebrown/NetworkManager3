@@ -165,7 +165,7 @@ class RecommendationRecord(Base):
     device_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     engine: Mapped[str] = mapped_column(String(16))  # RULE (Phase 1). ML only after Phase 8.
     rule_id: Mapped[str] = mapped_column(String(64))
-    rule_version: Mapped[str] = mapped_column(String(16))
+    rule_version: Mapped[str] = mapped_column(String(64))   # rc18 (0016): was 16; predictive versions are longer
     source_type: Mapped[str] = mapped_column(String(8))
     risk: Mapped[str] = mapped_column(String(12))
     title: Mapped[str] = mapped_column(String(200))

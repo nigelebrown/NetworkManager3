@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import DiagnosisPanel from "../components/DiagnosisPanel";
 import GuidePanel from "../components/GuidePanel";
 import { ErrorNote, fmtUptime } from "../components/ui";
@@ -69,6 +69,10 @@ function AutoOnboard({ onDone }: { onDone: () => void }) {
           </label>)}</div>
         {!available.length && <p>No enabled device credential profiles are available.</p>}
       </fieldset>
+      {policy.data?.lockout_guard && <p className="text-xs text-slate-600" data-testid="lockout-guard">Account lockout guard:
+        an account rejected {policy.data.lockout_guard.max_failures} time(s) within {policy.data.lockout_guard.window_minutes} minutes
+        (any device, any run) is not tried again until the window ends; a REST rejection is never retried over SSH.
+        {policy.data.lockout_guard.accounts.filter(a => a.held).length > 0 && <b> Held now: {policy.data.lockout_guard.accounts.filter(a => a.held).map(a => a.account).join(", ")}.</b>}</p>}
       <p className="text-xs text-slate-600">New SSH keys are recorded after a saved credential authenticates
         and a device read succeeds. A changed known key is listed for review.</p>
       <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={autoRest}

@@ -89,6 +89,11 @@ def test_monitor_tables_count_unique_over_the_air_neighbours_by_band():
     (None, "<134>Nov 14 2026 19:31:02 cx-core-1 hpe-restd: audit", ("cx-core-1", "HOST_FROM_HEADER")),
     ("19:31:02", "19:31:02 sw2 lldp: up", ("sw2", "TIME_AS_HOST_CORRECTED")),
     ("2026", "19:31:02 2027 x", ("2026", "YEAR_AS_HOST_UNRESOLVED")),
+    # rc18: year AFTER the time, as stored by the shipped Alloy RFC 3164 parser (verified with real packets)
+    ("2026", "10.103.5.20 stm[3442]: <501106> <NOTI> assoc", ("10.103.5.20", "YEAR_AS_HOST_CORRECTED")),
+    ("2026", "iap-b cli: config saved", ("iap-b", "YEAR_AS_HOST_CORRECTED")),
+    ("2026", "just some text", ("2026", "YEAR_AS_HOST_UNRESOLVED")),
+    ("iap-c", "iap-x cli[1]: not a year host", ("iap-c", None)),
 ])
 def test_syslog_year_as_host_resolution(host, line, expected):
     assert resolve_host(host, line) == expected

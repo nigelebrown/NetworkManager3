@@ -33,6 +33,7 @@ BAD_CX = "hostname switch\ntelnet server\nsnmp-server community public\nvlan 100
 @pytest.fixture
 def live(app_env, tmp_path):
     app_env.setenv("SIMS_MODE", "live")
+    app_env.setenv("INM_ALLOW_DEMO_DATA_IN_LIVE", "true")      # these lab tests mix demo fixtures with live mode
     app_env.setenv("SIMS_INM_PROFILE", "lab-readonly")
     app_env.setenv("INM_VAULT_DIR", str(tmp_path / "vault"))
     from backend.config import get_settings
@@ -58,7 +59,16 @@ def dev(c, h, serial, family="switch", model=None, ip=None, fw=None):
     return r.json()["id"]
 
 
-def test_live_mode_shows_no_demo_and_demo_toggle_round_trip(live, adm):
+def test_live_mode_refuses_demo_data_without_explicit_opt_in(live, adm, monkeypatch):
+    monkeypatch.delenv("INM_ALLOW_DEMO_DATA_IN_LIVE", raising=False)
+    r = live.post("/api/v1/demo-data/load", headers=adm)
+    assert r.status_code == 403 and "INM_ALLOW_DEMO_DATA_IN_LIVE" in r.json()["detail"]
+    assert live.get("/api/v1/demo-data", headers=adm).json()["demo_devices"] == 0
+    assert live.post("/api/v1/demo-data/remove", headers=adm).status_code == 200   # removal always allowed
+
+
+def test_live_mode_shows_no_demo_and_demo_toggle_round_trip(live, adm, monkeypatch):
+    monkeypatch.setenv("INM_ALLOW_DEMO_DATA_IN_LIVE", "true")      # lab/training server opt-in
     real = dev(live, adm, "LIVE-SW-1")
     assert live.get("/api/v1/demo-data", headers=adm).json()["loaded"] is False
     noc = live.get("/api/v1/noc/overview", headers=adm).json()
@@ -354,7 +364,8 @@ def test_adapters_reports_topology_and_printers(live, adm):
         db.get(InmDevice, did).vendor = "Cisco"
     a = live.get(f"/api/v1/devices/{did}/adapter", headers=adm).json()
     assert a["adapter"]["key"] == "cisco_ios_xe_snmpv3"
-    assert {o["status"] for o in a["operations"]} <= {"UNSUPPORTED", "DENIED_BY_CENTRAL_POLICY"}
+    assert {o["status"] for o in a["operations"]} <= {"UNSUPPORTED", "DENIED_BY_CENTRAL_POLICY", "AVAILABLE_READ_ONLY"}
+    assert next(o for o in a["operations"] if o["op"] == "apply_change")["status"] == "UNSUPPORTED"
     ex = live.post("/api/v1/reports/exports", headers=adm, json={
         "kind": "audit", "start": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         "end": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()}).json()
@@ -366,3 +377,32 @@ def test_adapters_reports_topology_and_printers(live, adm):
     assert live.post("/api/v1/printers/counter-check", headers=adm,
                      json={"previous": 4294967290, "current": 4}).json()["kind"] == "ROLLOVER"
     assert live.get("/api/v1/printers/mib-packs", headers=adm).json()["write_oids_permitted"] is False
+
+
+def test_site_batch_enrollment_one_approval_per_ap_records_no_inheritance(live, adm):
+    """Owner directive 2026-11-25: one independent approval arms every eligible AP present at request time."""
+    a1, a2, a3 = (dev(live, adm, f"LIVE-AP-B{i}", "access_point") for i in range(3))
+    appr = make_user(live, adm, "batch.appr", "approver")
+    site = live.get(f"/api/v1/devices/{a1}", headers=adm).json()["site_id"]
+    for ap in (a1, a2):
+        live.post(f"/api/v1/vault/devices/{ap}/artifacts", headers=adm, json={"content": "name ap\narm\n"})
+    exp = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+    tmpl = {"serial": "-", "mode": "SHADOW", "allowed_operation_types": ["ap.radio.channel"], "cooldown_seconds": 3600,
+            "max_actions_per_day": 1, "expires_at_utc": exp}
+    b = live.post("/api/v1/optimization/site-batches", headers=adm, json={"site_id": site, "template": tmpl})
+    assert b.status_code == 201, b.text
+    batch = b.json()
+    assert {m["device_id"] for m in batch["members"]} == {a1, a2, a3}
+    assert {m["immutable_serial"] for m in batch["members"]} == {"LIVE-AP-B0", "LIVE-AP-B1", "LIVE-AP-B2"}
+    assert live.post(f"/api/v1/optimization/site-batches/{batch['id']}/approve", headers=adm).status_code == 403  # self
+    out = live.post(f"/api/v1/optimization/site-batches/{batch['id']}/approve", headers=appr).json()
+    assert out["status"] == "PARTIALLY_APPROVED"
+    by = {r["device_id"]: r for r in out["results"]}
+    assert by[a1]["armed"] and by[a2]["armed"] and not by[a3]["armed"] and "Backup readiness" in by[a3]["reason"]
+    assert live.post(f"/api/v1/optimization/site-batches/{batch['id']}/approve", headers=appr).status_code == 409
+    # an AP added to the site later is NOT enrolled by the existing batch
+    late = dev(live, adm, "LIVE-AP-LATE", "access_point")
+    assert live.get(f"/api/v1/devices/{late}/optimization", headers=adm).json()["mode"] == "RECOMMEND_ONLY"
+    # disabling the batch revokes every member immediately
+    off = live.post(f"/api/v1/optimization/site-batches/{batch['id']}/disable", headers=adm).json()
+    assert off["status"] == "DISABLED" and all(m["status"] == "REVOKED" for m in off["members"] if m["device_id"] != a3)
