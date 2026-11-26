@@ -41,6 +41,7 @@ def _port():
 @pytest.fixture(scope="module")
 def servers(tmp_path_factory):
     import tempfile
+    Path("/run/sshd").mkdir(mode=0o755, exist_ok=True)
     d = Path(tempfile.mkdtemp(prefix="inm-ssh-test-"))          # pytest's tmp dirs are 0700: the login user needs x
     cli = d / "fake-cli"
     cli.write_text(CLI.format(py=sys.executable)); cli.chmod(0o755)
@@ -61,7 +62,9 @@ def servers(tmp_path_factory):
         cfg.write_text("\n".join([f"Port {port}", "ListenAddress 127.0.0.1", "PasswordAuthentication yes",
                                   "KbdInteractiveAuthentication no", "UsePAM no", "PermitRootLogin no",
                                   f"PidFile {d}/{name}.pid", f"AllowUsers {USER}", *extra]) + "\n")
-        procs.append(subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(cfg)], stderr=subprocess.DEVNULL))
+        stderr = (d / f"sshd_{name}.log").open("w")
+        procs.append(subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(cfg)], stderr=stderr))
+        stderr.close()
         ports[name] = port
     for port in ports.values():
         for _ in range(50):
@@ -69,6 +72,8 @@ def servers(tmp_path_factory):
                 socket.create_connection(("127.0.0.1", port), 0.2).close(); break
             except OSError:
                 time.sleep(0.1)
+        else:
+            pytest.fail("Isolated SSH server did not start: " + "; ".join(p.read_text() for p in d.glob("sshd_*.log")))
     yield ports, d
     for p in procs:
         p.terminate()

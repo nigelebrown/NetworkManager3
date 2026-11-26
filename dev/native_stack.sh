@@ -22,8 +22,8 @@ write_env() {
     cat > "$SECRETS" <<EOF
 MGMT_PW=$(gen)
 TS_PW=$(gen)
-INM_NATS_API_PASSWORD=$(gen)
-INM_NATS_WORKER_PASSWORD=$(gen)
+INM_NATS_API_PASSWORD=nats$(gen)
+INM_NATS_WORKER_PASSWORD=nats$(gen)
 SIMS_JWT_SECRET=$(gen 48)
 SIMS_FERNET_KEY=$("$PY" -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')
 SIMS_ADMIN_PASSWORD=$(gen 18)

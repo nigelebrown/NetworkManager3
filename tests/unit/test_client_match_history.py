@@ -63,7 +63,7 @@ def test_device_local_actions_are_not_inserted_in_a_utc_journey(client,admin,mon
     now=datetime.now(timezone.utc)
     with session_scope() as db:
         site=Site(name="Native actions",simulated=False);db.add(site);db.flush()
-        device=InmDevice(source_type="REAL",environment="production",vendor="Aruba",family="access_point",
+        device=InmDevice(source_type="REAL",environment="live",vendor="Aruba",family="access_point",
             model="AP-505",firmware="8.10.0.21",serial_number="NATIVE-LOCAL-1",hostname="AP",adapter="aruba_instant",
             mgmt_addresses=["10.9.8.10"],legacy_site_id=site.id)
         db.add(device);db.flush()

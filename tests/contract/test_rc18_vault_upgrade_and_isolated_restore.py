@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PREVIOUS = "f6f44ce"
+PREVIOUS = os.environ.get("INM_TEST_PREVIOUS_RELEASE", "420dabf55f3761884ddbf05553748dedb058fe73")
 
 OLD_SEALER = r"""
 import os, sys, json
