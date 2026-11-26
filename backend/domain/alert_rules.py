@@ -22,6 +22,8 @@ class AlertRule:
 CATALOGUE: tuple[AlertRule, ...] = (
     AlertRule("DEVICE_UNREACHABLE", "any", "consecutive_failures", "ge", 3, "critical", "Device not answering polls"),
     AlertRule("TELEMETRY_STALE", "any", "stale_minutes", "ge", 30, "minor", "Telemetry stale"),
+    AlertRule("PROBE_UNREACHABLE", "any", "probe_failures", "ge", 3, "critical", "Management service not answering active probe"),
+    AlertRule("CLOCK_DRIFT", "any", "clock_offset_abs_s", "gt", 120, "minor", "Device clock differs from server time"),
     AlertRule("CPU_HIGH", "any", "cpu_percent", "ge", 90, "major", "CPU high"),
     AlertRule("MEMORY_HIGH", "any", "memory_percent", "ge", 92, "major", "Memory high"),
     AlertRule("AP_5G_UTIL_HIGH", "access_point", "util_5g_percent", "ge", 85, "major", "5 GHz channel congested"),
