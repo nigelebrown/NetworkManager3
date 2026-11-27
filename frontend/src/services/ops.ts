@@ -75,7 +75,7 @@ export interface Timeline { device_id: string; attributions: Attribution[];
   log_events: { id: string; observed_at: string; severity: string; event_code: string | null; message: string;
     user: string | null; is_config_change: boolean; transport: string }[];
   coverage: { present: string[]; missing: string[]; complete: boolean } }
-export interface OptimizationWorkflow { id: string; device_id: string; status: string; detail: string; requester: string; backup_artifact_id: string | null; plan_id: string | null; enrollment_id: string | null; arm_observed_at?: string; findings: {id: string; severity: string; title: string; why: string; proposal?: Record<string, unknown> | null}[]; device_writes?: number | null; proposed_operation?: Record<string, unknown>; outcome?: Record<string, unknown>; guards?: {guard: string; pass: boolean}[] }
+export interface OptimizationWorkflow { id: string; device_id: string; status: string; detail: string; requester: string; backup_artifact_id: string | null; plan_id: string | null; plan?: {id: string; state: string; revision: number; requester: string; approver: string | null}; enrollment_id: string | null; arm_observed_at?: string; findings: {id: string; severity: string; title: string; why: string; proposal?: Record<string, unknown> | null}[]; device_writes?: number | null; proposed_operation?: Record<string, unknown>; outcome?: Record<string, unknown>; guards?: {guard: string; pass: boolean}[] }
 export interface OptState { workflow?: OptimizationWorkflow | null; device_id: string; mode: string; status: string; badge: string; display?: string;
   enrollment: Record<string, unknown> | null; global_write_lock: boolean; emergency_stop: boolean;
   native_vendor_optimization: string }
