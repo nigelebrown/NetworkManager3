@@ -13,7 +13,7 @@ import WirelessImpactPanel from "../components/WirelessImpactPanel";
 
 export default function Optimization() {
   const [device, setDevice] = useState<Device | undefined>();
-  const state = useLoad(() => device ? ops.optState(device.id) : Promise.resolve(null), [device?.id], 30000);
+  const state = useLoad(() => device ? ops.optState(device.id) : Promise.resolve(null), [device?.id], 5000);
   const control = useLoad(ops.optControl, [], 30000);
   const [mode, setMode] = useState("DEVICE_OPT_IN");
   const [diagnosing,setDiagnosing] = useState(false);
@@ -25,6 +25,8 @@ export default function Optimization() {
   const me = getSession();
   const selectedState = state.data?.device_id === device?.id ? state.data : null;
   const enr = selectedState?.enrollment as { id: string; status: string; requester_id: string } | null | undefined;
+  const workflow = selectedState?.workflow;
+  const workflowActive = !!workflow && ["QUEUED","WAIT_ARM","WAIT_ENROLLMENT","WAIT_CHANGE","MONITORING"].includes(workflow.status);
   return <div className="space-y-4">
     <PageHeader title="RF optimization — per-device opt-in" subtitle="Native Aruba ARM selects channels and power. This application uses its per-AP measurements to detect policy problems and persistent client-impacting degradation. Reviewed automatic interventions require an enabled feature and individual DEVICE_OPT_IN enrollment with independent approval, expiry, action limits and cooldown. It is never inherited from a site, model or template. Channel widths are limited to 20/40 MHz. Each automatic change runs through the same certified, backed-up, verified and rollback-protected execution as a manual change; degradation after a change triggers automatic rollback." />
     <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">AUTOMATIC OPTIMIZATION FEATURE: <b>{control.data?.automatic_optimization_feature ? "ENABLED (per-device opt-in only)" : "OFF (INM_AUTOMATIC_OPTIMIZATION=false)"}</b> · Global write lock: <b>{control.data?.global_write_lock ? "ON" : "OFF"}</b> ·
@@ -35,25 +37,48 @@ export default function Optimization() {
     <ClusterOptimization onChanged={() => { enrollments.reload(); state.reload(); }} />
     <Card title="Single device">
       <div className="max-w-md"><DevicePicker family="access_point" value={device?.id ?? ""} onChange={(_, d) => { setDevice(d); setDiagnosing(false); }} /></div>
-      {device && <div className="mt-3 flex flex-wrap gap-2"><button className={btn2} onClick={() => setDiagnosing(true)}>Analyze this AP — read-only</button>
-        <button className={btn2} disabled={state.loading} onClick={() => state.reload()}>Refresh enrollment status</button>
-        {me?.role === "admin" && <button className={btn2} disabled={runAct.busy || !selectedState} onClick={() => runAct.run(async () => {
-          const id = device.id;
-          const r = await rw.optimizerRunDevice(id);
-          await state.reload(); enrollments.reload();
-          return `${device.hostname || device.serial_number}: ` + Object.entries(r).filter(([k,v]) => k !== "device_id" && k !== "state" && v !== 0).map(([k,v]) => `${k.replaceAll("_", " ")}: ${v}`).join(" · ");
-        })}>Run optimizer for this AP only</button>}</div>}
-      <p className="mt-2 text-xs text-slate-500">Analysis works without enrollment approval. The optimizer can execute only previously authorized operations; all existing guards remain in force.</p>
+      {device && <div className="mt-3 flex flex-wrap gap-2">
+        {me?.role === "admin" && device.source_type === "REAL" && <>
+          <button className={btn} disabled={runAct.busy || !selectedState || workflowActive} onClick={() => runAct.run(async () => {
+            const job = await ops.optStart(device.id, device.serial_number, standing);
+            await state.reload(); enrollments.reload();
+            return job.detail;
+          })}>Optimize Now</button>
+          <button className={btn2} disabled={runAct.busy || !selectedState || workflowActive} onClick={() => runAct.run(async () => {
+            const job = await ops.optStart(device.id, device.serial_number, false, true);
+            await state.reload(); return job.detail;
+          })}>Analyze Now (read-only)</button>
+        </>}
+        <button className={btn2} onClick={() => setDiagnosing(true)}>View ARM measurements and findings</button>
+        <button className={btn2} disabled={state.loading} onClick={() => state.reload()}>Refresh progress</button>
+      </div>}
+      <p className="mt-2 text-xs text-slate-500">Optimize Now automatically verifies the AP, captures a backup, collects fresh measurements, requests required approvals, applies approved changes and monitors performance. Analysis alone never changes a device.</p>
       <Notice error={runAct.error} message={runAct.message} />
+      {workflow && <div className="mt-3 rounded-lg border border-slate-300 p-3 space-y-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2"><b>Optimization workflow</b><Pill value={workflow.status} tone={statusTone(workflow.status)} /></div>
+        <p>{workflow.detail}</p>
+        <ul className="space-y-1 text-xs">
+          <li>{workflow.backup_artifact_id ? "✓" : "○"} Verified identity and encrypted configuration backup</li>
+          <li>{workflow.arm_observed_at ? "✓" : "○"} Fresh ARM measurements and recommendations</li>
+          <li>{workflow.plan_id ? "✓" : "○"} Configuration change plan prepared (if needed)</li>
+          <li>{["MONITORING","COMPLETE","ROLLED_BACK"].includes(workflow.status) ? "✓" : "○"} Approved configuration applied and verified</li>
+          <li>{["COMPLETE","ROLLED_BACK"].includes(workflow.status) ? "✓" : "○"} Post-change client experience evaluated</li>
+        </ul>
+        {workflow.arm_observed_at && <p className="text-xs">Measured: {new Date(workflow.arm_observed_at).toLocaleString()}</p>}
+        {workflow.findings.map(f => <div key={f.id} className="rounded border p-2 text-xs"><b>{f.title}</b><p>{f.why}</p></div>)}
+        {workflow.proposed_operation && <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(workflow.proposed_operation, null, 2)}</pre>}
+        {workflow.plan_id && <a className="inm-link" href="/changes">Review exact change plan and approve if required</a>}
+        {workflow.guards?.filter(g => !g.pass).map(g => <div key={g.guard} className="text-xs text-red-700">Blocked: {g.guard.replaceAll("_"," ")}</div>)}
+      </div>}
       {selectedState && <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         <Pill value={selectedState.badge} tone={selectedState.badge === "AUTO OFF" ? "none" : "fair"} /><span>Mode <b>{selectedState.mode}</b></span><span>Status <Pill value={selectedState.status} tone={statusTone(selectedState.status)} /></span>
         {selectedState.display && <span className="text-amber-300">{selectedState.display}</span>}</div>}
-      {device && selectedState && !enr && me?.role === "admin" && <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      {device && selectedState && !enr && !workflowActive && me?.role === "admin" && <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
         <label>Mode <select aria-label="Enrollment mode" className="rounded bg-slate-950 px-2 py-1" value={mode} onChange={e => setMode(e.target.value)}>
           <option value="SHADOW">SHADOW — simulate only</option><option value="DEVICE_OPT_IN">DEVICE_OPT_IN — automatic changes</option></select></label>
         {mode === "DEVICE_OPT_IN" && <label className="flex items-center gap-1"><input type="checkbox" checked={standing} onChange={e => setStanding(e.target.checked)} />
           Standing approval (optimizer may apply within limits without a per-change approval)</label>}</div>}
-      {device && selectedState && !enr && me?.role === "admin" && <button className={`${btn} mt-3`} disabled={act.busy} onClick={() => act.run(async () => {
+      {device && selectedState && !enr && !workflowActive && me?.role === "admin" && <button className={`${btn} mt-3`} disabled={act.busy} onClick={() => act.run(async () => {
         await ops.optEnroll(device.id, { serial: device.serial_number, mode, standing_approval: mode === "DEVICE_OPT_IN" && standing, allowed_operation_types: ["ap.radio.channel", "ap.radio.tx_power"],
           value_constraints: { allowed_widths_mhz: [20, 40] }, cooldown_seconds: 7200, max_actions_per_day: 2,
           expires_at_utc: new Date(Date.now() + 30 * 86400e3).toISOString() });
