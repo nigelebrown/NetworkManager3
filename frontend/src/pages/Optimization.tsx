@@ -57,6 +57,7 @@ export default function Optimization() {
       {workflow && <div className="mt-3 rounded-lg border border-slate-300 p-3 space-y-2 text-sm">
         <div className="flex flex-wrap items-center gap-2"><b>Optimization workflow</b><Pill value={workflow.status} tone={statusTone(workflow.status)} /></div>
         <p>{workflow.detail}</p>
+        {workflow.approval_notification && ["WAIT_ENROLLMENT","WAIT_CHANGE"].includes(workflow.status) && <p className="text-xs">Approval notification: {workflow.approval_notification === "QUEUED" ? "Queued; delivery status in Notifications" : "In-app only; configure approval destination in Notifications"}</p>}
         <ul className="space-y-1 text-xs">
           <li>{workflow.backup_artifact_id ? "✓" : "○"} Verified identity and encrypted configuration backup</li>
           <li>{workflow.arm_observed_at ? "✓" : "○"} Fresh ARM measurements and recommendations</li>
