@@ -89,7 +89,13 @@ def _state(db: Session, d) -> dict:
     base["arm_observed_at"]=measurement.get("observed_at")
     base["last_analysis"]=_get(db,"optimizer-analysis:"+d.id)
     from ..infrastructure.optimization_workflow import state as workflow_state
-    base["workflow"]=workflow_state(db,d.id)
+    job=workflow_state(db,d.id)
+    if job and job.get("plan_id"):
+        from ..database.models_phases import ChangePlan
+        p=db.get(ChangePlan,job["plan_id"])
+        if p and p.device_id == d.id:
+            job["plan"]={"id":p.id,"state":p.state,"revision":p.revision,"requester":p.requester,"approver":p.approver}
+    base["workflow"]=job
     return dict(base, device=device_public(d), enrollment=_enr_public(e) if e else None,
                 global_write_lock=lock, emergency_stop=stop,
                 native_vendor_optimization="Not changed by this setting (e.g. Aruba ARM remains as configured on the device).")
@@ -194,6 +200,8 @@ def approve(enrollment_id: str, request: Request, db: Session = Depends(get_db),
     if e.status != "PENDING_APPROVAL":
         raise HTTPException(409, f"Enrollment is {e.status}.")
     d = real_device(db, e.device_id)
+    from .production_ops import _require_hardware_log_scope
+    _require_hardware_log_scope(db, user, d)
     if d.serial_number != e.immutable_serial or d.firmware != e.firmware_bound:
         e.status, e.status_reason = "PAUSED", "Device identity/firmware changed before approval"
         db.commit()
