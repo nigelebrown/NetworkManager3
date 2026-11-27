@@ -207,6 +207,10 @@ def run_optimizer(db: Session, *, actor: str = "optimizer", device_id: str | Non
                 if e.status != "ARMED":
                     out["skipped_not_armed"] += 1
                     continue
+                from .optimization_workflow import active as workflow_active
+                if workflow_active(db, did):
+                    out["waiting_existing_plan"] += 1
+                    continue
                 device=db.get(InmDevice,did)
                 if device is None:
                     out["skipped_missing_device"] += 1
