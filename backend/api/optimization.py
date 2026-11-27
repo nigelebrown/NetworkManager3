@@ -88,6 +88,8 @@ def _state(db: Session, d) -> dict:
     base["arm_state"]=measurement.get("state")
     base["arm_observed_at"]=measurement.get("observed_at")
     base["last_analysis"]=_get(db,"optimizer-analysis:"+d.id)
+    from ..infrastructure.optimization_workflow import state as workflow_state
+    base["workflow"]=workflow_state(db,d.id)
     return dict(base, device=device_public(d), enrollment=_enr_public(e) if e else None,
                 global_write_lock=lock, emergency_stop=stop,
                 native_vendor_optimization="Not changed by this setting (e.g. Aruba ARM remains as configured on the device).")
@@ -95,7 +97,10 @@ def _state(db: Session, d) -> dict:
 
 @router.get("/devices/{device_id}/optimization")
 def get_state(device_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
-    return _state(db, real_device(db, device_id))
+    from .production_ops import _require_hardware_log_scope
+    d = real_device(db, device_id)
+    _require_hardware_log_scope(db, user, d)
+    return _state(db, d)
 
 
 def _validated(body: EnrollInput, d) -> dict:
@@ -252,6 +257,47 @@ def run_device_now(device_id: str, request: Request, db: Session = Depends(get_d
     out = run_optimizer(db, actor=f"optimizer(run-now:{user.username})", device_id=d.id)
     audit(db, "optimizer_run_device", username=user.username, target=d.id, detail=str(out), request=request)
     return {"device_id": d.id, **out, "state": _state(db, d)}
+
+
+class OptimizeNowInput(BaseModel):
+    serial: str
+    standing_approval: bool = False
+    analyze_only: bool = False
+
+
+@router.post("/devices/{device_id}/optimization/start", status_code=202)
+def optimize_now(device_id: str, body: OptimizeNowInput, request: Request,
+                 db: Session = Depends(get_db), user: User = Depends(require_any_role("admin"))):
+    from datetime import timedelta
+    import uuid
+    from ..infrastructure import optimization_workflow as W, optimizer as O, change_executor as X
+    d = real_device(db, device_id)
+    if d.family != "access_point" or d.source_type != "REAL" or body.serial != d.serial_number:
+        raise HTTPException(422, "Select the exact registered physical AP.")
+    holder = uuid.uuid4().hex
+    key = W.PREFIX + d.id
+    if not X._lease(db, key, holder):
+        raise HTTPException(409, "Optimization workflow is processing; refresh progress.")
+    try:
+        old = W.state(db, d.id)
+        if old and old["status"] in W.ACTIVE:
+            return old
+        e = None if body.analyze_only else _current(db, d.id)
+        if not body.analyze_only and e is None and O.feature_enabled():
+            req = EnrollInput(serial=body.serial, mode="DEVICE_OPT_IN",
+                allowed_operation_types=["ap.radio.channel"], value_constraints={"allowed_widths_mhz":[20,40]},
+                standing_approval=body.standing_approval, cooldown_seconds=7200, max_actions_per_day=2,
+                expires_at_utc=now()+timedelta(days=30))
+            e = _create(db, d, _validated(req, d), user)
+            audit(db, "optimization_enrollment_requested", username=user.username, target=d.id,
+                  detail=f"enrollment={e.id}; explicit one-click request; independent approval required", request=request)
+        return W.begin(db, d, user, e)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        X._release(db, key, holder)
+        db.commit()
 
 
 class SitePolicyInput(BaseModel):
