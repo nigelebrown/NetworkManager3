@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from ..database.models import AppSetting, User
 from ..database.models_inm import InmDevice
 from ..database.models_phases import ChangePlan, OptimizationEnrollment, ConfigArtifact
@@ -34,6 +34,13 @@ def active(db, device_id):
 
 def save(db, job, status, detail, **fields):
     job = {**job, **fields, "status": status, "detail": detail, "updated_at": now().isoformat()}
+    if status == "BLOCKED" and job.get("plan_id"):
+        # Retire only our unexecuted plan. A running execution is recovered by the certified engine.
+        changed = db.execute(update(ChangePlan).where(ChangePlan.id == job["plan_id"],
+            ChangePlan.device_id == job["device_id"], ChangePlan.state.in_(("PENDING_APPROVAL", "APPROVED")))
+            .values(state="REJECTED", decision_note="Workflow stopped: " + str(detail)[:500], revision=ChangePlan.revision+1))
+        if changed.rowcount:
+            audit(db, "optimization_workflow_plan_retired", username=ACTOR, target=job["device_id"], detail="Stopped unexecuted workflow plan; no device writes.")
     AD._put(db, PREFIX + job["device_id"], job, ACTOR)
     db.commit()
     return job
@@ -77,6 +84,9 @@ def _backup(db, device):
         a = X.seal_artifact(db, device, content, trigger="MANUAL", actor=ACTOR,
                             source="DEVICE_READ" if env == "HARDWARE" else "EMULATOR")
         return a.id
+    except Exception:
+        db.rollback()
+        raise
     finally:
         X._release(db, device.id, holder)
         db.commit()
@@ -152,11 +162,18 @@ def advance(db, job):
     if job["status"] == "QUEUED":
         artifact_id = _backup(db, device)
         return _queue_arm(db, {**job, "backup_artifact_id": artifact_id}, device, "WAIT_ARM")
-    if job["status"] in {"WAIT_ARM", "WAIT_ENROLLMENT"}:
+    if job["status"] == "WAIT_ENROLLMENT":
+        if not e or e.status not in {"PENDING_APPROVAL", "ARMED"}:
+            return save(db, job, "BLOCKED", "Enrollment revoked, paused, expired or replaced.")
+        if O._utc(e.expires_at_utc) <= now():
+            return save(db, job, "BLOCKED", "Enrollment expired.")
+        if e.status == "PENDING_APPROVAL":
+            return job
+        # Approval can arrive hours later. Always collect a fresh measurement before planning.
+        return _queue_arm(db, job, device, "WAIT_ARM")
+    if job["status"] == "WAIT_ARM":
         m, error = _fresh_measurement(db, job, device)
         if error:
-            if job["status"] == "WAIT_ENROLLMENT" and e and e.status == "ARMED":
-                return _queue_arm(db, job, device, "WAIT_ARM")
             return save(db, job, "BLOCKED", error)
         if not m:
             if now() - datetime.fromisoformat(job["arm_requested_at"]) > timedelta(minutes=15):
@@ -174,8 +191,6 @@ def advance(db, job):
         if e.mode != "DEVICE_OPT_IN" or e.status not in {"PENDING_APPROVAL", "ARMED"}:
             return save(db, job, "BLOCKED", "Enrollment is not an active DEVICE_OPT_IN request.")
         if e.status == "PENDING_APPROVAL":
-            if job["status"] == "WAIT_ENROLLMENT":
-                return job
             return save(db, job, "WAIT_ENROLLMENT", "Backup and ARM analysis complete. Independent enrollment approval required.")
         if not _principal(db, e.independent_approver_id, {"admin", "approver"}):
             return save(db, job, "BLOCKED", "Enrollment approver is no longer authorized.")
@@ -203,18 +218,14 @@ def advance(db, job):
             return save(db, job, "BLOCKED", "Enrollment revoked, paused or replaced.")
         if not _principal(db, p.approver, {"admin", "approver"}) or p.approver.casefold() == p.requester.casefold():
             return save(db, job, "BLOCKED", "Independent approval no longer valid.")
-        if ARM.snapshot(db, device.id).get("freshness") != "FRESH":
-            if not job.get("approval_refresh_requested"):
-                return _queue_arm(db, {**job, "approval_refresh_requested": True}, device, "WAIT_CHANGE")
-            m, error = _fresh_measurement(db, job, device)
-            if not error and not m and now() - datetime.fromisoformat(job["arm_requested_at"]) < timedelta(minutes=15):
-                return job
-            if error or not m:
-                return save(db, job, "BLOCKED", error or "Fresh ARM measurements unavailable.")
-        if job.get("approval_refresh_requested"):
-            m, error = _fresh_measurement(db, job, device)
-            if error or not m:
-                return save(db, job, "BLOCKED", error or "Requested ARM refresh incomplete.")
+        # A new post-approval measurement is mandatory, even if the cached one is fresh.
+        if not job.get("approval_refresh_requested"):
+            return _queue_arm(db, {**job, "approval_refresh_requested": True}, device, "WAIT_CHANGE")
+        m, error = _fresh_measurement(db, job, device)
+        if not error and not m and now() - datetime.fromisoformat(job["arm_requested_at"]) < timedelta(minutes=15):
+            return job
+        if error or not m:
+            return save(db, job, "BLOCKED", error or "Fresh ARM measurements unavailable.")
         candidate = O.propose(db, device, e)
         if not candidate or [{k:v for k,v in candidate.items() if k != "reason"}] != p.operations:
             return save(db, job, "BLOCKED", "Live ARM evidence changed; a new reviewed plan is required.")
@@ -255,7 +266,11 @@ def tick(session_factory, limit=4):
             try:
                 job = AD._get(db, key)
                 if job and job["status"] in ACTIVE:
-                    advance(db, job)
+                    result = advance(db, job)
+                    if result is job:
+                        # Rotate waiting records so one approval does not starve other APs.
+                        db.execute(update(AppSetting).where(AppSetting.key == key).values(updated_at=now()))
+                        db.commit()
                     processed += 1
             except Exception as exc:
                 db.rollback()
