@@ -67,7 +67,10 @@ export default function Optimization() {
         {workflow.arm_observed_at && <p className="text-xs">Measured: {new Date(workflow.arm_observed_at).toLocaleString()}</p>}
         {workflow.findings.map(f => <div key={f.id} className="rounded border p-2 text-xs"><b>{f.title}</b><p>{f.why}</p></div>)}
         {workflow.proposed_operation && <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(workflow.proposed_operation, null, 2)}</pre>}
-        {workflow.plan_id && <a className="inm-link" href="/changes">Review exact change plan and approve if required</a>}
+        {workflow.plan?.state === "PENDING_APPROVAL" && me && ["admin","approver"].includes(me.role) && me.username.toLowerCase() !== workflow.plan.requester.toLowerCase() && <div className="flex gap-2">
+          <button className={btn} disabled={act.busy} onClick={() => act.run(async () => { const p = workflow.plan!; await ops.decideChange(p.id, "approve", p.revision, "Reviewed one-click ARM recommendation"); await state.reload(); return "Approved. The workflow will recheck evidence before applying."; })}>Approve recommended adjustment</button>
+          <button className={btnDanger} disabled={act.busy} onClick={() => act.run(async () => { const p = workflow.plan!; await ops.decideChange(p.id, "reject", p.revision, "Rejected one-click ARM recommendation"); await state.reload(); return "Rejected. No configuration change authorized."; })}>Reject adjustment</button></div>}
+        {workflow.plan_id && <a className="inm-link" href="/changes">View full change plan</a>}
         {workflow.guards?.filter(g => !g.pass).map(g => <div key={g.guard} className="text-xs text-red-700">Blocked: {g.guard.replaceAll("_"," ")}</div>)}
       </div>}
       {selectedState && <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
