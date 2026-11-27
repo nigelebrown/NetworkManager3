@@ -299,7 +299,7 @@ def optimize_now(device_id: str, body: OptimizeNowInput, request: Request,
             e = _create(db, d, _validated(req, d), user)
             audit(db, "optimization_enrollment_requested", username=user.username, target=d.id,
                   detail=f"enrollment={e.id}; explicit one-click request; independent approval required", request=request)
-        return W.begin(db, d, user, e)
+        return W.begin(db, d, user, e, analyze_only=body.analyze_only)
     except Exception:
         db.rollback()
         raise
