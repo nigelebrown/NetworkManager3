@@ -289,7 +289,13 @@ def test_selected_optimizer_counts_stale_measurements_as_evaluated(client,admin,
             expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
             independent_approver_id="reviewer",status="ARMED"))
         AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
-        # An unrelated armed record must not be selected even if ordered earlier.
+        # A dangling armed enrollment must not enter the selected-device batch.
+        db.add(OptimizationEnrollment(device_id="unrelated-ap",immutable_serial="OTHER-AP",
+            vendor_model="Aruba AP-505",firmware_bound=d.firmware,mode="DEVICE_OPT_IN",
+            allowed_operation_types=["ap.radio.channel"],value_constraints={},permitted_windows={},
+            impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED"))
         AD._put(db,"optimizer:cursor",{"offset":47},"test")
     original=O.propose
     def only_selected(db,device,enrollment):
@@ -300,7 +306,7 @@ def test_selected_optimizer_counts_stale_measurements_as_evaluated(client,admin,
     assert result.status_code==200,result.text
     data=result.json()
     assert data["device_id"]==did and data["selected_for_review"]==data["evaluated"]==1
-    assert data["insufficient_evidence"]==1 and data["executed"]==0
+    assert data["insufficient_evidence"]==1 and data["executed"]==0 and data["skipped_missing_device"]==0
     with session_scope() as db:
         assert AD._get(db,"optimizer:cursor")["offset"]==47
 
