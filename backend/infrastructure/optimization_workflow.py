@@ -46,18 +46,18 @@ def save(db, job, status, detail, **fields):
     return job
 
 
-def begin(db, device, user, enrollment=None):
+def begin(db, device, user, enrollment=None, *, analyze_only=False):
     """Caller holds the workflow lease and explicitly requested this exact device."""
     old = state(db, device.id)
     if old and old["status"] in ACTIVE:
         return old
     job = {"id": str(uuid.uuid4()), "device_id": device.id, "requester": user.username,
            "serial": device.serial_number, "firmware": device.firmware, "site_id": device.site_id,
-           "enrollment_id": enrollment.id if enrollment else None, "created_at": now().isoformat(),
+           "enrollment_id": enrollment.id if enrollment else None, "analyze_only": analyze_only, "created_at": now().isoformat(),
            "backup_artifact_id": None, "plan_id": None, "findings": [], "device_writes": 0}
     audit(db, "optimization_workflow_requested", username=user.username, target=device.id,
           detail="Explicit single-device request; preparation is read-only.")
-    return save(db, job, "QUEUED", "Waiting for worker to verify device and capture configuration.")
+    return save(db, job, "QUEUED", "Waiting for read-only ARM collection." if analyze_only else "Waiting for worker to verify device and capture configuration.")
 
 
 def _principal(db, name, roles):
@@ -160,7 +160,7 @@ def advance(db, job):
     if job["status"] != "MONITORING" and now() - datetime.fromisoformat(job["created_at"]) > timedelta(days=1):
         return save(db, job, "BLOCKED", "Optimization request expired; start a new request.")
     if job["status"] == "QUEUED":
-        artifact_id = _backup(db, device)
+        artifact_id = None if job.get("analyze_only") else _backup(db, device)
         return _queue_arm(db, {**job, "backup_artifact_id": artifact_id}, device, "WAIT_ARM")
     if job["status"] == "WAIT_ENROLLMENT":
         if not e or e.status not in {"PENDING_APPROVAL", "ARMED"}:
@@ -187,7 +187,7 @@ def advance(db, job):
             return save(db, job, "MANUAL_REVIEW" if any(f["severity"] in ("high", "medium") for f in findings) else "NO_CHANGE",
                         "No safe automatic adjustment supported by the measurements.")
         if not e:
-            return save(db, job, "ANALYSIS_ONLY", "Recommendations available; automatic optimization is not enrolled or enabled.")
+            return save(db, job, "ANALYSIS_ONLY", "Recommendations available; read-only analysis complete." if job.get("analyze_only") else "Recommendations available; automatic optimization is not enrolled or enabled.")
         if e.mode != "DEVICE_OPT_IN" or e.status not in {"PENDING_APPROVAL", "ARMED"}:
             return save(db, job, "BLOCKED", "Enrollment is not an active DEVICE_OPT_IN request.")
         if e.status == "PENDING_APPROVAL":
@@ -237,7 +237,7 @@ def advance(db, job):
                     "Configuration applied and readback verified; monitoring client experience." if result.get("outcome") == "APPLIED_VERIFIED" else (result.get("denial_reason") or result.get("outcome") or "Execution failed."),
                     execution_outcome=result.get("outcome"), device_writes=result.get("device_writes"))
     if job["status"] == "MONITORING":
-        if not e or e.last_action_id != p.id or e.status != "ARMED" or control(db).emergency_stop or not O.feature_enabled():
+        if not e or e.last_action_id != p.id or e.status != "ARMED" or O._utc(e.expires_at_utc) <= now() or not _principal(db, e.independent_approver_id, {"admin","approver"}) or control(db).emergency_stop or not O.feature_enabled():
             return save(db, job, "MANUAL_REVIEW", "Automatic monitoring/rollback authorization no longer active.")
         rolled_back = O._check_outcome(db, device, e, ACTOR)
         outcome = (p.rollback_plan or {}).get("outcome")
