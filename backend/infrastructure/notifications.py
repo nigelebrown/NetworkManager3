@@ -157,6 +157,21 @@ def enqueue_optimization_approval(db: Session, job: dict) -> str:
     return "QUEUED"
 
 
+def _approval_still_pending(db: Session, delivery: NotificationDelivery) -> bool:
+    from ..database.models import AppSetting
+    from ..database.models_phases import ChangePlan, OptimizationEnrollment
+    row = db.get(AppSetting, APPROVAL_CHANNEL_KEY)
+    if not row or row.value.get("channel_id") != delivery.channel_id:
+        return False
+    p = delivery.payload or {}
+    model = {"WAIT_ENROLLMENT": OptimizationEnrollment, "WAIT_CHANGE": ChangePlan}.get(p.get("approval_type"))
+    target = db.get(model, p["approval_id"]) if model and p.get("approval_id") else None
+    if not target or (target.state if model is ChangePlan else target.status) != "PENDING_APPROVAL":
+        return False
+    job = db.get(AppSetting, "opt-workflow:" + target.device_id)
+    return bool(job and job.value.get("id") == p.get("workflow_id") and job.value.get("status") == p.get("approval_type"))
+
+
 def _eligible(ch: NotificationChannel, a: InmAlert) -> bool:
     if a.suppressed or (a.source_type == "DEMO" and not ch.include_demo):
         return False
@@ -275,6 +290,12 @@ def deliver_due(db: Session, now: datetime, limit: int = 200) -> dict:
             continue
         d = db.get(NotificationDelivery, did)
         ch = db.get(NotificationChannel, d.channel_id)
+        if d.kind == "APPROVAL" and not _approval_still_pending(db, d):
+            d.state, d.last_error = "DEAD", "Approval no longer pending or destination changed; delivery suppressed."
+            d.claim_owner, d.claim_expires_at = None, None
+            out["dead"] += 1
+            db.commit()
+            continue
         try:
             if ch is None or not ch.enabled:
                 raise RuntimeError("channel removed or disabled")
