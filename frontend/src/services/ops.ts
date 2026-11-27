@@ -239,7 +239,8 @@ export const rw = {
   setRule: (rule: string, b: Record<string, unknown>) => request(`/v1/alert-rules/${enc(rule)}`, { method: "PUT", body: JSON.stringify(b) }),
   windows: () => request<{ id: string; site_id: string | null; device_id: string | null; starts_at: string; ends_at: string; reason: string; created_by: string }[]>("/v1/maintenance-windows"),
   addWindow: (b: Record<string, unknown>) => post("/v1/maintenance-windows", b),
-  optimizerRun: () => post<Record<string, number>>("/v1/optimization/run-now"),
+  optimizerRun: () => post<Record<string, number | string>>("/v1/optimization/run-now"),
+  optimizerRunDevice: (id: string) => post<Record<string, number | string | OptState>>(`/v1/devices/${enc(id)}/optimization/run-now`),
   sitePolicies: () => request<{ site_id: string; allowed_channels_5g: number[]; allowed_widths_mhz: number[]; min_tx_dbm: number; max_tx_dbm: number }[]>("/v1/optimization/site-policies"),
   setSitePolicy: (site: string, b: Record<string, unknown>) => request(`/v1/optimization/site-policies/${enc(site)}`, { method: "PUT", body: JSON.stringify(b) }),
 };
