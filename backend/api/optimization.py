@@ -191,9 +191,11 @@ def approve(enrollment_id: str, request: Request, db: Session = Depends(get_db),
     d = real_device(db, e.device_id)
     if d.serial_number != e.immutable_serial or d.firmware != e.firmware_bound:
         e.status, e.status_reason = "PAUSED", "Device identity/firmware changed before approval"
+        db.commit()
         raise HTTPException(409, "Device identity or firmware changed since request; re-request.")
     if utc(e.expires_at_utc) <= now():
-        e.status = "EXPIRED"
+        e.status, e.status_reason = "EXPIRED", "Enrollment request expired"
+        db.commit()
         raise HTTPException(409, "Enrollment request expired.")
     if not db.scalar(select(ConfigArtifact).where(ConfigArtifact.device_id == d.id).limit(1)):
         raise HTTPException(409, "Backup readiness not recorded: seal a vault artifact for this device first.")
@@ -237,6 +239,19 @@ def run_now(request: Request, db: Session = Depends(get_db), user: User = Depend
     out = run_optimizer(db, actor=f"optimizer(run-now:{user.username})")
     audit(db, "optimizer_run", username=user.username, detail=str(out), request=request)
     return out
+
+
+@router.post("/devices/{device_id}/optimization/run-now")
+def run_device_now(device_id: str, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_role("admin"))):
+    """Run only this AP through the existing optimizer and its unchanged write guards."""
+    from ..infrastructure.optimizer import run_optimizer
+    d = real_device(db, device_id)
+    if d.family != "access_point":
+        raise HTTPException(422, "Select an access point.")
+    out = run_optimizer(db, actor=f"optimizer(run-now:{user.username})", device_id=d.id)
+    audit(db, "optimizer_run_device", username=user.username, target=d.id, detail=str(out), request=request)
+    return {"device_id": d.id, **out, "state": _state(db, d)}
 
 
 class SitePolicyInput(BaseModel):
