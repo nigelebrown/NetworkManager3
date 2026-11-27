@@ -13,6 +13,7 @@ export default function Notifications() {
   const me = getSession();
   const admin = me?.role === "admin";
   const channels = useLoad(() => notify.channels(), [], 30000);
+  const approval = useLoad(() => admin ? notify.approvalChannel() : Promise.resolve(null), [admin], 30000);
   const [filter, setFilter] = useState("");
   const deliveries = useLoad(() => notify.deliveries(filter || undefined), [filter], 15000);
   const act = useAction();
@@ -53,6 +54,17 @@ export default function Notifications() {
       </div>}
       <div className="mt-2"><Notice error={act.error} message={act.message} /></div>
     </Card>
+    {admin && <Card title="RF optimization approval notifications">
+      <p className="text-sm">Choose an email or webhook destination specifically authorized for independent approvers. No destination means in-app approval only.</p>
+      <select aria-label="Optimization approval channel" className={inputCls} value={approval.data?.channel_id ?? ""} disabled={act.busy || approval.loading} onChange={e => {
+        const id = e.target.value || null;
+        void act.run(async () => { await notify.setApprovalChannel(id); await approval.reload(); return "Approval destination saved."; });
+      }}>
+        <option value="">In-app approval only</option>
+        {(channels.data ?? []).filter(c => c.enabled && (c.kind === "email" || c.kind === "webhook")).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+      <Notice error={approval.error || act.error} message={act.message} />
+    </Card>}
     <Card title="Deliveries">
       <div className="mb-2 flex gap-2 text-xs">{["", "PENDING", "SENDING", "SENT", "DEAD"].map(s => <button key={s} className={filter === s ? btn : btn2} onClick={() => setFilter(s)}>{s || "All"}</button>)}</div>
       <table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-400"><th>When</th><th>Channel</th><th>Kind</th><th>Alert</th><th>State</th><th>Attempts</th><th>Error</th><th /></tr></thead>
@@ -61,7 +73,7 @@ export default function Notifications() {
           <td className="text-xs">{d.severity ? `[${d.severity}] ` : ""}{d.message}</td>
           <td><Pill value={d.state} tone={d.state === "SENT" ? "good" : d.state === "DEAD" ? "poor" : "info"} /></td>
           <td>{d.attempts}</td><td className="text-xs text-rose-300">{d.last_error}</td>
-          <td>{d.state === "DEAD" && d.kind !== "TEST" && me && ["admin", "operator"].includes(me.role) &&
+          <td>{d.state === "DEAD" && d.kind !== "TEST" && me && (d.kind === "APPROVAL" ? admin : ["admin", "operator"].includes(me.role)) &&
             <button className={btn2} onClick={() => act.run(async () => { await notify.retry(d.id); deliveries.reload(); return "Queued for redelivery."; })}>Retry</button>}</td></tr>)}</tbody></table>
       {!deliveries.data?.length && <p className="text-sm text-slate-500">No deliveries yet.</p>}
     </Card>
