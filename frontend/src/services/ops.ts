@@ -75,7 +75,8 @@ export interface Timeline { device_id: string; attributions: Attribution[];
   log_events: { id: string; observed_at: string; severity: string; event_code: string | null; message: string;
     user: string | null; is_config_change: boolean; transport: string }[];
   coverage: { present: string[]; missing: string[]; complete: boolean } }
-export interface OptState { device_id: string; mode: string; status: string; badge: string; display?: string;
+export interface OptimizationWorkflow { id: string; device_id: string; status: string; detail: string; requester: string; backup_artifact_id: string | null; plan_id: string | null; enrollment_id: string | null; arm_observed_at?: string; findings: {id: string; severity: string; title: string; why: string; proposal?: Record<string, unknown> | null}[]; device_writes?: number | null; proposed_operation?: Record<string, unknown>; outcome?: Record<string, unknown>; guards?: {guard: string; pass: boolean}[] }
+export interface OptState { workflow?: OptimizationWorkflow | null; device_id: string; mode: string; status: string; badge: string; display?: string;
   enrollment: Record<string, unknown> | null; global_write_lock: boolean; emergency_stop: boolean;
   native_vendor_optimization: string }
 export interface LearningItem { id: string; created_at: string; device_id: string | null; title: string; why: string;
@@ -137,6 +138,7 @@ export const ops = {
   decideModel: (id: string, a: "promote" | "reject") => post<Model>(`/v1/ai/models/${enc(id)}/${a}`),
   shadow: (b: Record<string, unknown>) => post<{ timeline: { at: string; op: string; result: string }[]; stopped: boolean; device_writes: number }>("/v1/ai/evaluation/shadow", b),
   // optimization (recommend + shadow only)
+  optStart: (id: string, serial: string, standing_approval: boolean, analyze_only = false) => post<OptimizationWorkflow>(`/v1/devices/${enc(id)}/optimization/start`, {serial, standing_approval, analyze_only}),
   optState: (id: string) => request<OptState>(`/v1/devices/${enc(id)}/optimization`),
   optEnroll: (id: string, b: Record<string, unknown>) => post<Record<string, unknown>>(`/v1/devices/${enc(id)}/optimization/enroll`, b),
   optApprove: (eid: string) => post<Record<string, unknown>>(`/v1/optimization/enrollments/${enc(eid)}/approve`),
