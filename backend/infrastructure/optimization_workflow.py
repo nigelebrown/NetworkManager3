@@ -41,6 +41,9 @@ def save(db, job, status, detail, **fields):
             .values(state="REJECTED", decision_note="Workflow stopped: " + str(detail)[:500], revision=ChangePlan.revision+1))
         if changed.rowcount:
             audit(db, "optimization_workflow_plan_retired", username=ACTOR, target=job["device_id"], detail="Stopped unexecuted workflow plan; no device writes.")
+    if status == "WAIT_ENROLLMENT" or (status == "WAIT_CHANGE" and job.get("plan_id") and db.get(ChangePlan, job["plan_id"]).state == "PENDING_APPROVAL"):
+        from .notifications import enqueue_optimization_approval
+        job["approval_notification"] = enqueue_optimization_approval(db, job)
     AD._put(db, PREFIX + job["device_id"], job, ACTOR)
     db.commit()
     return job
