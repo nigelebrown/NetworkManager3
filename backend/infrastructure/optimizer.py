@@ -374,7 +374,7 @@ def _check_outcome(db: Session, device: InmDevice, e: OptimizationEnrollment, ac
         plan_hash=CC.plan_hash(device.id,operations,post.plaintext_sha256),
         expected_config_hash=post.plaintext_sha256,firmware_at_request=device.firmware,
         rollback_plan={"strategy":"EXACT_EXECUTION_JOURNAL","original_execution":execution.id},
-        source="AUTO_OPTIMIZER_ROLLBACK",requester="optimizer:"+e.requester_id,state="APPROVED",
+        source="AUTO_RF_ROLLBACK",requester="optimizer:"+e.requester_id,state="APPROVED",
         approver=e.independent_approver_id,approved_at=t,decision_note="Per-device degradation rollback policy")
     db.add(rb); db.flush()
     outcome=X.execute_plan(db,rb,actor=actor)
