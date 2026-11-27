@@ -258,3 +258,55 @@ def test_optimizer_does_not_report_missing_arm_data_as_healthy(client,admin,arm_
         AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
         result=O.run_optimizer(db,actor="test")
         assert result["insufficient_evidence"]==1 and result["no_adjustment_needed"]==0 and result["executed"]==0
+
+
+def test_selected_optimizer_reports_pending_enrollment_without_running_other_ap(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment
+    did,_ = arm_device
+    monkeypatch.setattr(O, "propose", lambda *args: pytest.fail("Pending enrollment cannot reach optimizer proposal"))
+    with session_scope() as db:
+        d = db.get(InmDevice,did)
+        db.add(OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            status="PENDING_APPROVAL"))
+    result = client.post(f"/api/v1/devices/{did}/optimization/run-now",headers=admin)
+    assert result.status_code == 200, result.text
+    data = result.json()
+    assert data["device_id"] == did and data["enrollment_status"] == "PENDING_APPROVAL"
+    assert data["selected_for_review"] == 0 and data["skipped_not_armed"] == 1 and data["executed"] == 0
+
+
+def test_selected_optimizer_counts_stale_measurements_as_evaluated(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment
+    did,_ = arm_device
+    with session_scope() as db:
+        d = db.get(InmDevice,did)
+        db.add(OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED"))
+        AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
+        # An unrelated armed record must not be selected even if ordered earlier.
+        AD._put(db,"optimizer:cursor",{"offset":47},"test")
+    original=O.propose
+    def only_selected(db,device,enrollment):
+        assert device.id == did
+        return original(db,device,enrollment)
+    monkeypatch.setattr(O,"propose",only_selected)
+    result=client.post(f"/api/v1/devices/{did}/optimization/run-now",headers=admin)
+    assert result.status_code==200,result.text
+    data=result.json()
+    assert data["device_id"]==did and data["selected_for_review"]==data["evaluated"]==1
+    assert data["insufficient_evidence"]==1 and data["executed"]==0
+    with session_scope() as db:
+        assert AD._get(db,"optimizer:cursor")["offset"]==47
+
+
+def test_empty_fleet_optimizer_explains_zero_result(client,admin,arm_device):
+    with session_scope() as db:
+        result=O.run_optimizer(db,actor="test")
+        assert result["selected_for_review"]==0 and result["evaluated"]==0
+        assert "No ARMED enrollments" in result["reason"]
