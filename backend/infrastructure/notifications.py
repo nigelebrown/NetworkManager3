@@ -133,6 +133,30 @@ def _enqueue(db: Session, ch: NotificationChannel, a: InmAlert | None, kind: str
     return True
 
 
+APPROVAL_CHANNEL_KEY = "optimization-approval-channel"
+
+
+def enqueue_optimization_approval(db: Session, job: dict) -> str:
+    """Explicit opt-in destination, minimal payload, durable deduplication; no direct send."""
+    from ..database.models import AppSetting
+    setting = db.get(AppSetting, APPROVAL_CHANNEL_KEY)
+    cid = (setting.value or {}).get("channel_id") if setting else None
+    ch = db.get(NotificationChannel, cid) if cid else None
+    if not ch or not ch.enabled or ch.kind not in ("email", "webhook"):
+        return "IN_APP_ONLY"
+    phase = job["status"]
+    target = job.get("enrollment_id") if phase == "WAIT_ENROLLMENT" else job.get("plan_id")
+    if not target:
+        return "IN_APP_ONLY"
+    payload = {"schema": "inm.optimization.approval/v1", "notification": "APPROVAL",
+               "severity": "info", "message": "An independent RF optimization approval is required. Sign in to NetworkManager3 to review.",
+               "workflow_id": job["id"], "approval_type": phase, "approval_id": target,
+               "alert_id": None}
+    _enqueue(db, ch, None, "APPROVAL", payload, datetime.now(timezone.utc),
+             f"opt:{job['id']}:{phase}:{ch.id}")
+    return "QUEUED"
+
+
 def _eligible(ch: NotificationChannel, a: InmAlert) -> bool:
     if a.suppressed or (a.source_type == "DEMO" and not ch.include_demo):
         return False
