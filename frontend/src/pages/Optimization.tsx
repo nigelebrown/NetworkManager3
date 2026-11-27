@@ -71,7 +71,7 @@ export default function Optimization() {
           <button className={btn} disabled={act.busy} onClick={() => act.run(async () => { const p = workflow.plan!; await ops.decideChange(p.id, "approve", p.revision, "Reviewed one-click ARM recommendation"); await state.reload(); return "Approved. The workflow will recheck evidence before applying."; })}>Approve recommended adjustment</button>
           <button className={btnDanger} disabled={act.busy} onClick={() => act.run(async () => { const p = workflow.plan!; await ops.decideChange(p.id, "reject", p.revision, "Rejected one-click ARM recommendation"); await state.reload(); return "Rejected. No configuration change authorized."; })}>Reject adjustment</button></div>}
         {workflow.plan_id && <a className="inm-link" href="/changes">View full change plan</a>}
-        {workflow.guards?.filter(g => !g.pass).map(g => <div key={g.guard} className="text-xs text-red-700">Blocked: {g.guard.replaceAll("_"," ")}</div>)}
+        {workflow.guards?.filter(g => !g.pass).map(g => <div key={g.guard} className="text-xs text-red-700">Blocked: {g.guard.replace(/_/g, " ")}</div>)}
       </div>}
       {selectedState && <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         <Pill value={selectedState.badge} tone={selectedState.badge === "AUTO OFF" ? "none" : "fair"} /><span>Mode <b>{selectedState.mode}</b></span><span>Status <Pill value={selectedState.status} tone={statusTone(selectedState.status)} /></span>
@@ -94,7 +94,7 @@ export default function Optimization() {
     {me?.role === "admin" && <Card title="Optimizer">
       <p className="mb-2 text-sm text-slate-400">The optimizer evaluates ARM measurements every 5 minutes. Healthy radios stay under native ARM control; static overrides can be returned to ARM through a reviewed change. Run now to evaluate enrolled APs.</p>
       <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { const r = await rw.optimizerRun(); enrollments.reload();
-        state.reload(); return Object.entries(r).filter(([,v]) => v !== 0).map(([k, v]) => `${k.replaceAll("_"," ")}: ${v}`).join(" · ") || "No devices evaluated."; })}>Run fleet optimizer (up to 50 APs)</button>
+        state.reload(); return Object.entries(r).filter(([,v]) => v !== 0).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(" · ") || "No devices evaluated."; })}>Run fleet optimizer (up to 50 APs)</button>
       {!!sites.data?.length && <table className="mt-3 w-full text-xs"><thead><tr className="text-left text-slate-400"><th>Site</th><th>5 GHz channels</th><th>Widths</th><th>TX dBm</th></tr></thead>
         <tbody>{sites.data.map(sp => <tr key={sp.site_id} className="border-t border-slate-800"><td className="font-mono">{sp.site_id.slice(0, 8)}</td>
           <td>{sp.allowed_channels_5g.join(", ")}</td><td>{sp.allowed_widths_mhz.join("/")} MHz</td><td>{sp.min_tx_dbm}–{sp.max_tx_dbm}</td></tr>)}</tbody></table>}
