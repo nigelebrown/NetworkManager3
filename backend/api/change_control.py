@@ -129,6 +129,9 @@ def submit(plan_id: str, request: Request, db: Session = Depends(get_db),
 def approve(plan_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
             user: User = Depends(require_any_role("approver", "admin"))):
     p = _plan(db, plan_id)
+    if (p.rollback_plan or {}).get("workflow_id"):
+        from .production_ops import _require_hardware_log_scope
+        _require_hardware_log_scope(db, user, real_device(db, p.device_id))
     try:
         CC.check_approval(requester=p.requester, approver=user.username, approver_role=user.role)
     except CC.PolicyViolation as exc:
@@ -146,6 +149,9 @@ def approve(plan_id: str, body: Decision, request: Request, db: Session = Depend
 def reject(plan_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
            user: User = Depends(require_any_role("approver", "admin"))):
     p = _plan(db, plan_id)
+    if (p.rollback_plan or {}).get("workflow_id"):
+        from .production_ops import _require_hardware_log_scope
+        _require_hardware_log_scope(db, user, real_device(db, p.device_id))
     if p.requester.casefold() == user.username.casefold():
         raise HTTPException(403, "Requester cannot decide their own plan.")
     _transition(db, p, body, "REJECTED", user)
