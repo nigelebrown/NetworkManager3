@@ -225,7 +225,7 @@ def reader_for(db: Session, device: InmDevice):
         client = client_for_site(site)
     except ArubaError as exc:
         raise WriterError("PRECONDITION", str(exc)) from None
-    reader = ArubaInstantWriter(Credentials(host=site.vc_host, username="", password=""), client=client,
+    reader = ArubaInstantWriter(Credentials(host=site.vc_host, username="", password="", extra={"ap_ip": ap_ip}), client=client,
                                 diagnostic_target=ap_ip)
     return reader, "HARDWARE"
 

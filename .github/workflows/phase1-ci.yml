@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # retain the previous release for upgrade/vault regressions
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

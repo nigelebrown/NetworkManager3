@@ -157,3 +157,8 @@ hardware campaign: `docs/HARDWARE_VALIDATION_CHECKLIST_1.3.0_RC16.md`; assumptio
 - printer settings beyond location
 
 Protocol assumptions for all new paths: `docs/PROTOCOL_ASSUMPTIONS_1.3.0_RC17.md`.
+
+
+## One-click selected AP optimization
+
+The Optimization screen now queues a durable per-AP workflow rather than running an unrelated fleet batch. Analyze Now requires no enrollment or backup and cannot produce a change plan. Optimize Now verifies hardware identity, seals a full backup, requests fresh ARM evidence, and reuses the current enrollment or requests a new explicit bounded enrollment when the feature is enabled. The worker waits for independent enrollment approval, re-collects ARM evidence, creates an exact reviewed change plan, and resumes after approval. Existing independent standing approval is honored only within its authorized operation and value limits. The worker rechecks live evidence after approval and uses the certified change engine for execution and exact-journal outcome recovery. No recommendation is invented if ARM measurements are missing or healthy. Workflow state, reasons, backup/plan IDs and findings are persisted; interrupted writes remain subject to the existing recovery journal. The fleet optimizer skips APs with active workflows. Approval notification is available as in-app workflow/enrollment status; external notification delivery is not added by this change. Physical validation and exact-commit CI are required before release.

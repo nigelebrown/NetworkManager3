@@ -27,6 +27,7 @@ for a in "$@"; do case $a in --quick) QUICK=1 ;; --no-browser) BROWSER=0 ;; --no
   --no-load) LOAD=0 ;; *) echo "unknown option $a"; exit 2 ;; esac; done
 export INM_PY=${INM_PY:-$ROOT/.venv/bin/python}
 PY=$INM_PY
+export PATH="$(dirname "$PY"):$PATH"  # shell-based verifier checks must use the same locked environment
 RUN="test-run-$(date -u +%Y%m%dT%H%M%SZ)"
 EV="$ROOT/evidence/$RUN"
 mkdir -p "$EV"

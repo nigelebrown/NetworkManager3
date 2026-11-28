@@ -169,33 +169,61 @@ def propose(db: Session, device: InmDevice, e: OptimizationEnrollment) -> dict |
     return None
 
 
-def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
+def run_optimizer(db: Session, *, actor: str = "optimizer", device_id: str | None = None) -> dict:
     out={"evaluated":0,"executed":0,"pending_approval":0,"denied":0,"rolled_back_degraded":0,
          "no_adjustment_needed":0,"insufficient_evidence":0,"manual_review_required":0,
-         "waiting_existing_plan":0,"shadow_evaluated":0,"failed":0}
+         "waiting_existing_plan":0,"shadow_evaluated":0,"failed":0,
+         "armed_enrollments":0,"selected_for_review":0,"skipped_not_armed":0,
+         "skipped_expired":0,"skipped_missing_device":0,"skipped_paused":0,"execution_failed":0}
     holder="optimizer-"+uuid.uuid4().hex
     if not X._lease(db,"optimizer-scheduler",holder,ttl=900):
         return {**out,"busy":1}
     try:
-        enrollments=list(db.scalars(select(OptimizationEnrollment).where(
-            OptimizationEnrollment.status=="ARMED").order_by(OptimizationEnrollment.created_at).limit(2000)))
         from .ap_autodiscovery import _get,_put
-        cursor=int((_get(db,"optimizer:cursor") or {}).get("offset",0))
-        if enrollments:
-            cursor=cursor%len(enrollments)
-            ordered=enrollments[cursor:]+enrollments[:cursor]
-            enrollments=ordered[:50]
-            _put(db,"optimizer:cursor",{"offset":cursor+len(enrollments)},actor)
-            db.commit()
+        if device_id is not None:
+            # Explicit target never advances the fleet cursor and never runs another AP.
+            current = current_enrollment(db, device_id)
+            if current is None or current.status != "ARMED":
+                out["skipped_not_armed"] = 1
+                return {**out, "enrollment_status": current.status if current else "NOT_ENROLLED"}
+            enrollments = [current]
+            out["armed_enrollments"] = 1
+        else:
+            enrollments=list(db.scalars(select(OptimizationEnrollment).where(
+                OptimizationEnrollment.status=="ARMED").order_by(OptimizationEnrollment.created_at, OptimizationEnrollment.id).limit(2000)))
+            out["armed_enrollments"] = len(enrollments)
+            cursor=int((_get(db,"optimizer:cursor") or {}).get("offset",0))
+            if enrollments:
+                cursor=cursor%len(enrollments)
+                ordered=enrollments[cursor:]+enrollments[:cursor]
+                enrollments=ordered[:50]
+                _put(db,"optimizer:cursor",{"offset":cursor+len(enrollments)},actor)
+                db.commit()
+        out["selected_for_review"] = len(enrollments)
+        if not enrollments:
+            return {**out, "reason": "No ARMED enrollments were eligible for this run."}
         for e in enrollments:
             did=e.device_id
             try:
                 X._renew_lease(db,"optimizer-scheduler",holder,ttl=900)
+                db.refresh(e)
+                if e.status != "ARMED":
+                    out["skipped_not_armed"] += 1
+                    continue
+                from .optimization_workflow import active as workflow_active
+                if workflow_active(db, did):
+                    out["waiting_existing_plan"] += 1
+                    continue
                 device=db.get(InmDevice,did)
                 if device is None:
+                    out["skipped_missing_device"] += 1
                     continue
                 if _utc(e.expires_at_utc)<=datetime.now(timezone.utc):
-                    e.status,e.status_reason="EXPIRED","EXPIRED"; continue
+                    e.status,e.status_reason="EXPIRED","EXPIRED"
+                    out["skipped_expired"] += 1
+                    db.commit()
+                    continue
+                out["evaluated"] += 1
                 op=propose(db,device,e)
                 if e.mode=="SHADOW":
                     from .ap_autodiscovery import _put
@@ -209,6 +237,7 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                     db.commit()
                     break
                 if e.status!="ARMED":
+                    out["skipped_paused"] += 1
                     continue
                 existing=db.scalar(select(ChangePlan).where(ChangePlan.device_id==device.id,
                     ChangePlan.source.in_(("AUTO_OPTIMIZER","ARM_DIAGNOSIS")),
@@ -226,7 +255,6 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                     else:
                         out["no_adjustment_needed"]+=1
                     continue
-                out["evaluated"]+=1
                 clean={k:v for k,v in op.items() if k!="reason"}
                 res,dec=evaluate(db,device,clean,actor=actor)
                 if res["decision"]!="ALLOW":
@@ -250,6 +278,7 @@ def run_optimizer(db: Session, *, actor: str = "optimizer") -> dict:
                     r=X.execute_plan(db,plan,actor=actor)
                     out["executed"]+=int(r.get("outcome")=="APPLIED_VERIFIED")
                     if r.get("outcome")!="APPLIED_VERIFIED":
+                        out["execution_failed"] += 1
                         e.status="PAUSED"
                         e.status_reason="OPTIMIZER_EXECUTION_"+str(r.get("outcome") or r.get("decision") or "FAILED")
                     db.commit()
@@ -348,7 +377,7 @@ def _check_outcome(db: Session, device: InmDevice, e: OptimizationEnrollment, ac
         plan_hash=CC.plan_hash(device.id,operations,post.plaintext_sha256),
         expected_config_hash=post.plaintext_sha256,firmware_at_request=device.firmware,
         rollback_plan={"strategy":"EXACT_EXECUTION_JOURNAL","original_execution":execution.id},
-        source="AUTO_OPTIMIZER_ROLLBACK",requester="optimizer:"+e.requester_id,state="APPROVED",
+        source="AUTO_RF_ROLLBACK",requester="optimizer:"+e.requester_id,state="APPROVED",
         approver=e.independent_approver_id,approved_at=t,decision_note="Per-device degradation rollback policy")
     db.add(rb); db.flush()
     outcome=X.execute_plan(db,rb,actor=actor)

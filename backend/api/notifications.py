@@ -66,6 +66,30 @@ def _check(db: Session, body: ChannelIn, self_id: str | None = None) -> None:
             raise HTTPException(422, "escalation channel not found (and cannot be the channel itself)")
 
 
+class OptimizationChannelInput(BaseModel):
+    channel_id: str | None = None
+
+
+@router.get("/optimization-approval-channel")
+def optimization_channel(db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..database.models import AppSetting
+    row = db.get(AppSetting, N.APPROVAL_CHANNEL_KEY)
+    return {"channel_id": row.value.get("channel_id") if row else None}
+
+
+@router.put("/optimization-approval-channel")
+def set_optimization_channel(body: OptimizationChannelInput, request: Request,
+                             db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    from ..infrastructure.ap_autodiscovery import _put
+    if body.channel_id:
+        c = db.get(NotificationChannel, body.channel_id)
+        if not c or not c.enabled or c.kind not in ("email", "webhook"):
+            raise HTTPException(422, "Select an enabled email or webhook channel for independent approvers.")
+    _put(db, N.APPROVAL_CHANNEL_KEY, {"channel_id": body.channel_id}, user.username)
+    audit(db, "optimization_notification_channel_changed", username=user.username, request=request)
+    return {"channel_id": body.channel_id}
+
+
 @router.get("/channels")
 def list_channels(db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
     return [_ch(c) for c in db.scalars(select(NotificationChannel).order_by(NotificationChannel.name))]
@@ -165,6 +189,8 @@ def deliveries(state: str | None = None, alert_id: str | None = None, limit: int
     from .workflows import _may_see_site
     filtered = []
     for d in db.scalars(q):
+        if d.kind == "APPROVAL" and user.role != "admin":
+            continue
         alert = db.get(InmAlert, d.alert_id) if d.alert_id else None
         if alert is not None and not _may_see_site(db, user, alert.site_id):
             continue
@@ -182,9 +208,13 @@ def retry_delivery(delivery_id: str, request: Request, db: Session = Depends(get
         raise HTTPException(409, "Only a DEAD alert notification can be retried.")
     from .workflows import _require_site
     alert = db.get(InmAlert, d.alert_id) if d.alert_id else None
-    if alert is None:
-        raise HTTPException(404, "Notification not found.")
-    _require_site(db, user, alert.site_id)
+    if d.kind == "APPROVAL":
+        if user.role != "admin":
+            raise HTTPException(404, "Notification not found.")
+    else:
+        if alert is None:
+            raise HTTPException(404, "Notification not found.")
+        _require_site(db, user, alert.site_id)
     d.state, d.attempts, d.next_attempt_at = "PENDING", 0, None
     audit(db, "notification_retry", username=user.username, target=d.id, request=request)
     return _dl(d)

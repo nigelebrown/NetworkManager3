@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # upgrade tests need the actual previously deployed release
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

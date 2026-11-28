@@ -1,13 +1,13 @@
 """Visit every menu entry and every view tab; check (1) sidebar never overlaps content/topbar/banners,
 (2) the active menu entry is unique, (3) no two menu entries point to the same route, (4) every view tab renders.
 Screenshots at 1440 and 1180 px wide plus a mobile pass."""
-import json, re, sys
+import json, os, re, sys
 from playwright.sync_api import sync_playwright
 
 URL = sys.argv[1]; PW = sys.argv[2]; OUT = sys.argv[3]
 res = {"overlaps": [], "multi_active": [], "errors": [], "visited": 0, "tabs": 0}
 with sync_playwright() as p:
-    b = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-sandbox"])
+    b = p.chromium.launch(executable_path=os.environ.get("INM_E2E_CHROME", "/usr/bin/google-chrome"), args=["--no-sandbox"])
     for width in (1440, 1180):
         pg = b.new_page(viewport={"width": width, "height": 900})
         pg.goto(URL + "/login"); pg.get_by_label("Username").fill("admin"); pg.get_by_label("Password").fill(PW)
