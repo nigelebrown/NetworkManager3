@@ -1,7 +1,7 @@
 """rc18 (register P5-DEP-01, P5-06): versioned vault records survive an upgrade, and a vault backup restores onto an
 isolated second instance.
 
-P5-DEP-01: the PREVIOUS release (rc17, commit f6f44ce, schema 0015) seals configuration artifacts with its own code;
+P5-DEP-01: the deployed PREVIOUS release (rc15, commit 420dabf, schema 0014) seals configuration artifacts with its own code;
 this release migrates that database to 0016 and verifies every artifact; a record written by a newer format is
 refused instead of guessed at.
 P5-06: the management database and vault objects are copied to a second, isolated instance; with the same vault key
@@ -10,6 +10,7 @@ key cannot open the copy (the key must be escrowed separately from backups)."""
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -35,7 +36,7 @@ with dbs.session_scope() as db:
     db.add(d); db.flush()
     for i in range(3):
         a = seal_artifact(db, d, json.dumps({"System": {"hostname": "vault-sw", "rev": i}}).encode(),
-                          trigger="MANUAL", actor="rc17-sealer", source="EMULATOR")
+                          trigger="MANUAL", actor="rc15-sealer", source="EMULATOR")
         out.append({"id": a.id, "format_version": a.manifest.get("format_version")})
     did = d.id
 print(json.dumps({"device": did, "artifacts": out}))
@@ -47,7 +48,7 @@ def _previous_release(tmp: Path) -> Path:
         data = subprocess.run(["git", "-C", str(ROOT), "archive", PREVIOUS], check=True, capture_output=True).stdout
     except (OSError, subprocess.CalledProcessError):
         pytest.skip(f"previous release {PREVIOUS} is not available in this checkout (shallow clone)")
-    dest = tmp / "rc17"
+    dest = tmp / "previous-release"
     with tarfile.open(fileobj=BytesIO(data)) as t:
         t.extractall(dest, filter="data")
     return dest
@@ -82,7 +83,7 @@ def test_previous_release_artifacts_verify_after_upgrade_and_restore_on_isolated
     assert r.returncode == 0, r.stderr[-2000:]
     sealed = json.loads(r.stdout.strip().splitlines()[-1])
     assert [x["format_version"] for x in sealed["artifacts"]] == [1, 1, 1]
-    # --- upgrade: this release migrates the rc17 database (0015 -> 0016) and opens every old record
+    # --- upgrade: this release migrates the deployed database (0014 -> 0016) and opens every old record
     with _client(app_env, a_db, a_vault) as c:
         h = login(c)
         for x in sealed["artifacts"]:
@@ -100,6 +101,9 @@ def test_previous_release_artifacts_verify_after_upgrade_and_restore_on_isolated
         for x in sealed["artifacts"]:
             assert c.post(f"/api/v1/vault/artifacts/{x['id']}/verify", headers=h).json()["integrity"] == "PASS"
         objs = sorted(p for p in b_vault.rglob("*") if p.is_file())
+        # Production vault objects are read-only. Deliberately grant owner write on this
+        # isolated copy before simulating corruption; root-only test runs hid this step.
+        objs[0].chmod(objs[0].stat().st_mode | stat.S_IWUSR)
         objs[0].write_bytes(objs[0].read_bytes()[:-3] + b"xyz")     # tamper one object in the COPY only
         results = [c.post(f"/api/v1/vault/artifacts/{x['id']}/verify", headers=h).json()["integrity"]
                    for x in sealed["artifacts"]]
