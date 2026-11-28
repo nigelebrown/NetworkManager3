@@ -106,6 +106,7 @@ def test_redesigned_dashboard_and_protected_workflow_navigation():
                                           "site_scope": "all"})
         assert created.status in (200, 201), created.text()
         first = page.request.post(URL + "/api/auth/login", data={"username": "printer.ops", "password": tmp_pw})
+        assert first.status == 200, f"Printer operator sign-in failed: HTTP {first.status}: {first.text()[:300]}"
         changed = page.request.post(URL + "/api/auth/change-password",
                                     headers={"Authorization": "Bearer " + first.json()["access_token"]},
                                     data={"current_password": tmp_pw, "new_password": op_pw})

@@ -20,6 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 
 from ..database.session import session_scope
 from ..security.deps import resolve_user, user_site_scope
@@ -105,6 +106,13 @@ class Hub:
 hub = Hub()
 
 
+def _session_identity(token: str):
+    # Pool checkout and SQL are blocking. Release the connection before returning identity data to ASGI.
+    with session_scope() as db:
+        user, payload = resolve_user(db, token)
+        return user.username, user.role, user_site_scope(db, user), float(payload["exp"]), user.must_change_password
+
+
 @router.websocket("/ws/v1/events")
 async def events(ws: WebSocket):
     await ws.accept()
@@ -116,12 +124,11 @@ async def events(ws: WebSocket):
         await ws.close(code=4401, reason="authentication required")
         return
     try:
-        with session_scope() as db:
-            user, payload = resolve_user(db, first["token"])
-            if user.must_change_password:
-                await ws.close(code=4403, reason="password change required")
-                return
-            conn = Conn(ws, user.username, user.role, user_site_scope(db, user), float(payload["exp"]))
+        username, role, scope, exp, must_change = await run_in_threadpool(_session_identity, first["token"])
+        if must_change:
+            await ws.close(code=4403, reason="password change required")
+            return
+        conn = Conn(ws, username, role, scope, exp)
     except Exception:
         await ws.close(code=4401, reason="invalid or expired session")
         return
@@ -156,6 +163,7 @@ async def events(ws: WebSocket):
     finally:
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         hub.clients.discard(conn)
 
 
