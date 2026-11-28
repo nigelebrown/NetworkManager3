@@ -443,6 +443,15 @@ class Worker:
                 log.warning("ARM measurement cycle failed: %s", type(exc).__name__)
             await self._sleep(5)
 
+    async def optimization_workflow_loop(self) -> None:
+        from backend.infrastructure import optimization_workflow as W
+        while not self.stop.is_set():
+            try:
+                self.stats["optimization_workflow"] = await asyncio.to_thread(W.tick, session_scope)
+            except Exception as exc:
+                log.warning("Optimization workflow cycle failed: %s", type(exc).__name__)
+            await self._sleep(5)
+
     async def device_log_collection_loop(self) -> None:
         from backend.infrastructure import device_log_collection as DLC
         while not self.stop.is_set():
@@ -571,7 +580,8 @@ class Worker:
                  asyncio.create_task(self.outbox_loop()), asyncio.create_task(self.discovery_loop()),
                  asyncio.create_task(self.notifications_loop()), asyncio.create_task(self.printer_loop()),
                  asyncio.create_task(self.automatic_onboarding_loop()), asyncio.create_task(self.arm_measurements_loop()),
-                 asyncio.create_task(self.device_log_collection_loop()), asyncio.create_task(self.wireless_impact_loop())]
+                 asyncio.create_task(self.device_log_collection_loop()), asyncio.create_task(self.wireless_impact_loop()),
+                 asyncio.create_task(self.optimization_workflow_loop())]
         await self.stop.wait()
         log.info("shutting down")
         # Threads running blocking DB calls cannot be cancelled; never let shutdown hang past the grace period.

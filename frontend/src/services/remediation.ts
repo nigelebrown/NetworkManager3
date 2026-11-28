@@ -79,6 +79,8 @@ export type NotifyDelivery = { id: string; channel_id: string; alert_id: string 
   next_attempt_at: string | null; sent_at: string | null; message: string | null; severity: string | null };
 
 export const notify = {
+  approvalChannel: () => request<{channel_id: string | null}>("/v1/notifications/optimization-approval-channel"),
+  setApprovalChannel: (channel_id: string | null) => request<{channel_id: string | null}>("/v1/notifications/optimization-approval-channel", {method:"PUT",body:JSON.stringify({channel_id})}),
   channels: () => request<NotifyChannel[]>("/v1/notifications/channels"),
   create: (b: Partial<NotifyChannel>) => post<NotifyChannel>("/v1/notifications/channels", b),
   remove: (id: string) => request<void>(`/v1/notifications/channels/${enc(id)}`, { method: "DELETE" }),

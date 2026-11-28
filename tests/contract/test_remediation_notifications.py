@@ -202,3 +202,40 @@ def test_feature_list_declares_notifications_live_and_unbuilt_features_not_imple
         assert f[k] == "IMPLEMENTED_UNCERTIFIED", k     # built, but never presented as hardware-certified
     assert f["vendors_cisco_unifi"] == "READ_ONLY" and f["print_jobs"] in ("OFF_BY_POLICY", "DISABLED_PENDING_AUTHORIZATION")
     assert f["predictive"] in ("NO_RUN", "VALIDATED", "PARTIALLY_VALIDATED", "EXPERIMENTAL", "INSUFFICIENT_HISTORY")
+
+
+def test_optimization_approval_notice_opt_in_dedup_and_stale_suppression(live, rx):
+    from backend.database.models_phases import ChangePlan
+    from backend.infrastructure.ap_autodiscovery import _put
+    adm = login(live)
+    selected = live.post("/api/v1/notifications/channels", headers=adm, json={
+        "name":"approval-only", "kind":"webhook", "target":rx.url}).json()
+    other = live.post("/api/v1/notifications/channels", headers=adm, json={
+        "name":"not-approved-for-workflow", "kind":"webhook", "target":rx.url}).json()
+    with session_scope() as db:
+        p = ChangePlan(device_id="test-ap", title="ARM adjustment", operations=[], capability_report=[],
+                       plan_hash="test", rollback_plan={}, requester="admin", state="PENDING_APPROVAL", source="AUTO_OPTIMIZER")
+        db.add(p); db.flush()
+        pid = p.id
+        job = {"id":"test-workflow", "device_id":"test-ap", "status":"WAIT_CHANGE", "plan_id":pid}
+        _put(db,"opt-workflow:test-ap",job,"test")
+        assert N.enqueue_optimization_approval(db,job) == "IN_APP_ONLY"
+    assert live.put("/api/v1/notifications/optimization-approval-channel", headers=adm,
+                    json={"channel_id":selected["id"]}).status_code == 200
+    with session_scope() as db:
+        assert N.enqueue_optimization_approval(db,job) == "QUEUED"
+        assert N.enqueue_optimization_approval(db,job) == "QUEUED"
+    _sweep(); _sweep()
+    assert len(rx.posts) == 1 and rx.posts[0]["kind"] == "APPROVAL"
+    assert rx.posts[0]["json"]["approval_id"] == pid
+    assert _deliveries(kind="APPROVAL")[0][3] == selected["id"]
+    assert not _deliveries(channel_id=other["id"])
+    with session_scope() as db:
+        p=db.get(ChangePlan,pid)
+        job={**job,"id":"second-workflow"}
+        _put(db,"opt-workflow:test-ap",job,"test")
+        N.enqueue_optimization_approval(db,job)
+        p.state="APPROVED"
+    _sweep()
+    assert len(rx.posts)==1
+    assert any(row[1]=="DEAD" for row in _deliveries(kind="APPROVAL"))
