@@ -36,7 +36,8 @@ reviewer = Depends(require_any_role("approver", "admin"))
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    from ..infrastructure.clock import now
+    return now()
 
 
 def _utc(t):
@@ -273,6 +274,8 @@ def run_predictions(db: Session, *, actor: str, now: datetime | None = None, sto
     per_rule_windows: dict[str, list] = {r: [] for r in rules}
     drift_flags = []
     pending_recs = []
+    ml_primary: set = set()
+    from ..ml import service as MLS
     for d in devices:
         for rid, rule in rules.items():
             metric = RC.PRED_METRIC[rid]
@@ -287,6 +290,17 @@ def run_predictions(db: Session, *, actor: str, now: datetime | None = None, sto
             dr = PR.drift(pts, now=now)
             if dr["state"] == "DRIFT":
                 drift_flags.append({"device_id": d.id, "metric": metric, **dr})
+            # rc18: a promoted, production-validated trained model is PRIMARY; otherwise it runs in SHADOW and
+            # the statistical engine stays the probability of record (fallback).
+            ml = MLS.infer(db, d, rid, pts, now=now, horizon=int(p["horizon_hours"]), threshold=float(p["threshold"]),
+                           metric=metric)
+            if ml and ml.get("used_for_prediction"):
+                f = dict(f) | {"probability": ml["probability"], "state": "AT_RISK" if ml["probability"] >= 0.5
+                               else "NO_RISK_EXPECTED", "confidence": ml["confidence"]["level"],
+                               "reason": f"trained model {ml['model']}"}
+                ml_primary.add((d.id, rid))
+            if ml:
+                f = dict(f) | {"features": (f.get("features") or {}) | {"ml": ml}}
             counts[f["state"]] += 1
             db.add(Prediction(run_id=run.id, device_id=d.id, metric=metric, threshold=float(p["threshold"]),
                               horizon_hours=int(p["horizon_hours"]), window_start=now,
@@ -306,13 +320,13 @@ def run_predictions(db: Session, *, actor: str, now: datetime | None = None, sto
                             else "EXPERIMENTAL" if "EXPERIMENTAL" in states else "INSUFFICIENT_HISTORY")
     surfaced = 0
     for d, rid, rule, metric, f in pending_recs:
-        if evaluation[rid]["state"] != "VALIDATED":
+        if evaluation[rid]["state"] != "VALIDATED" and (d.id, rid) not in ml_primary:
             continue   # an unvalidated model never becomes an operational recommendation
         _, outcome = RS.upsert(
             db, rule_id=rid, rule_version=f"{PR.MODEL_VERSION}+v{rule['version']}", engine="PREDICTIVE",
             title=f"{d.hostname or d.id[:8]}: {rule['title']} ({f['probability']:.0%})",
             explanation=f"{metric} is forecast to peak near {f['predicted_peak']} (threshold {rule['params']['threshold']}) "
-                        f"within {rule['params']['horizon_hours']} h. Model {PR.MODEL_VERSION}, backtest Brier skill "
+                        f"within {rule['params']['horizon_hours']} h. Model {(f['features'].get('ml') or {}).get('model') if (d.id, rid) in ml_primary else PR.MODEL_VERSION}, statistical backtest Brier skill "
                         f"{evaluation[rid]['brier_skill']} on {evaluation[rid]['windows']} windows.",
             evidence={"probability": f["probability"], "predicted_peak": f["predicted_peak"], "features": f["features"],
                       "validation": {k: evaluation[rid][k] for k in ("windows", "brier_skill", "precision", "recall")}},

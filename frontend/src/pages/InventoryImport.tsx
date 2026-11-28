@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import BulkDeviceImport from "../components/BulkDeviceImport";
 import { Card } from "../components/ui";
 import { PageHeader } from "../components/viz";

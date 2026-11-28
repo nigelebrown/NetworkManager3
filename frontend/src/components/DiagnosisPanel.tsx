@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { getSession } from "../services/api";
 import { Pill } from "./viz";
 import { wl, type Diagnosis } from "../services/wireless";

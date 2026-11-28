@@ -103,7 +103,7 @@ def _covers(host: str, cn: str | None, dns: list[str], ips: list[str]) -> bool:
         ipaddress.ip_address(host)
         return host in ips
     except ValueError:
-        pass
+        pass  # host is a name, not an address: match DNS SANs below
     h = host.lower()
     for n in dns + ([cn] if cn else []):
         n = n.lower()

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 # Metric families an adapter may be asked to read, per device family.
 METRIC_FAMILIES: dict[str, tuple[str, ...]] = {
     "access_point": ("system", "radios", "clients", "rf_quality"),
-    "switch": ("system", "interfaces", "poe", "lldp"),
+    "switch": ("system", "interfaces", "poe", "lldp", "optics"),
 }
 MIN_INTERVAL_S = 60          # protect device CPU / REST session limits
 MAX_INTERVAL_S = 24 * 3600

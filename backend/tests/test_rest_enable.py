@@ -241,21 +241,22 @@ def test_modern_ssh_server_uses_modern_algorithms():
     assert info["legacy_algorithms"] is False and info["fingerprint"] == ssh.fingerprint(key)
 
 
-def test_legacy_only_ssh_server_falls_back_to_ssh_rsa():
-    """Server offers ONLY ssh-rsa + SHA-1 kex (real handshake). SIMS retries with the legacy set and still
-    reports the host-key fingerprint so the user can pin it."""
+def test_legacy_only_ssh_server_is_refused_without_approval():
+    """rc18: a server offering only legacy algorithms (real handshake) is REFUSED by default — no silent downgrade to
+    ssh-rsa / SHA-1. Approved legacy devices use backend/aruba/ssh_legacy.py (tested in tests/unit/test_ssh_policy.py)."""
     import paramiko
     from backend.aruba import ssh
+    from backend.aruba.errors import ArubaSshError
     key = paramiko.RSAKey.generate(2048)
     ls, port = _serve_once(("ssh-rsa",), ("diffie-hellman-group14-sha1",), key)
     try:
-        info = ssh.scan_host_key("127.0.0.1", port, timeout=6)
+        with pytest.raises(ArubaSshError, match="does not negotiate by default"):
+            ssh.scan_host_key("127.0.0.1", port, timeout=6)
     finally:
         ls.close()
-    assert info["legacy_algorithms"] is True and info["fingerprint"] == ssh.fingerprint(key)
 
 
-def test_legacy_fallback_still_enforces_pinned_fingerprint(monkeypatch):
+def test_legacy_refusal_happens_before_any_credential_is_sent(monkeypatch):
     import paramiko
     from backend.aruba import ssh
     from backend.aruba.errors import ArubaSshError
@@ -265,20 +266,20 @@ def test_legacy_fallback_still_enforces_pinned_fingerprint(monkeypatch):
     key = paramiko.RSAKey.generate(2048)
     ls, port = _serve_once(("ssh-rsa",), ("diffie-hellman-group14-sha1",), key)
     try:
-        with pytest.raises(ArubaSshError, match="does not match the fingerprint"):
+        with pytest.raises(ArubaSshError, match="legacy SSH"):
             ssh.enable_rest_api("127.0.0.1", "admin", "pw", "SHA256:wrong", port=port, timeout=6)
     finally:
         ls.close()
         get_settings.cache_clear()
 
 
-def test_server_accepting_neither_gives_manual_steps():
+def test_server_accepting_neither_is_refused_with_guidance():
     import paramiko
     from backend.aruba import ssh
     from backend.aruba.errors import ArubaSshError
     ls, port = _serve_once(None, ("sntrup761x25519-sha512@openssh.com",), paramiko.RSAKey.generate(2048))  # kex we never support
     try:
-        with pytest.raises(ArubaSshError, match="HostKeyAlgorithms=\\+ssh-rsa"):
+        with pytest.raises(ArubaSshError, match="Prefer upgrading the device firmware"):
             ssh.scan_host_key("127.0.0.1", port, timeout=6)
     finally:
         ls.close()

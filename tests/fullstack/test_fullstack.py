@@ -341,6 +341,97 @@ def test_10_device_syslog_flows_through_alloy_into_loki(c):
     evidence("syslog_alloy", {"marker": marker, "streams": [r["stream"] for r in res]})
 
 
+def test_10b_year_in_header_syslog_through_alloy(c):
+    """PF-T03 (rc18): real RFC 3164 packets with the year in the header, over UDP and TCP, through the shipped Alloy
+    pipeline. Year AFTER the time: Loki gets the real host and YEAR_AS_HOST_CORRECTED; no app tag: the year stays
+    and is marked UNRESOLVED (never guessed); an ordinary packet is untouched; year BEFORE the time is rejected by
+    this Alloy release's parser and is COUNTED (loki_source_syslog_parsing_errors_total), never silently lost."""
+    def parse_errors():
+        body = httpx.get("http://127.0.0.1:12345/metrics", timeout=5).text
+        return sum(float(x.rsplit(" ", 1)[1]) for x in body.splitlines()
+                   if x.startswith("loki_source_syslog_parsing_errors_total"))
+    now = datetime.now(timezone.utc)
+    day = f"{now:%b} {now.day:2d}"
+    errors_before = parse_errors()
+    cases = {}
+
+    def send(proto, line):
+        if proto == "udp":
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.sendto(line.encode(), ("127.0.0.1", 1515))
+        else:
+            with socket.create_connection(("127.0.0.1", 1515), timeout=5) as s:
+                s.sendall(line.encode() + b"\n")
+    for proto in ("udp", "tcp"):
+        m = f"inm-yr-{proto}-{uuid.uuid4().hex[:8]}"
+        send(proto, f"<134>{day} {now:%H:%M:%S %Y} 10.103.5.20 stm[3442]: <501106> assoc {m}")
+        cases[m] = ("10.103.5.20", "YEAR_AS_HOST_CORRECTED")
+    m = f"inm-notag-{uuid.uuid4().hex[:8]}"
+    send("udp", f"<134>{day} {now:%H:%M:%S %Y} free text without a tag {m}")
+    cases[m] = (f"{now:%Y}", "YEAR_AS_HOST_UNRESOLVED")
+    m = f"inm-bsd-{uuid.uuid4().hex[:8]}"
+    send("udp", f"<134>{day} {now:%H:%M:%S} cx-fs-02 hpe-restd[77]: ordinary {m}")
+    cases[m] = ("cx-fs-02", None)
+    send("udp", f"<134>{day} {now:%Y %H:%M:%S} iap-a cli[1]: year before time {uuid.uuid4().hex[:8]}")
+
+    def streams(marker):
+        q = httpx.get(f"{LOKI}/loki/api/v1/query_range", params={"query": f'{{source="syslog"}} |= "{marker}"',
+                      "start": str(int((time.time() - 600) * 1e9)), "end": str(int(time.time() * 1e9))}).json()
+        return [r["stream"] for r in q["data"]["result"]] or None
+    seen = {}
+    for marker, (host, correction) in cases.items():
+        st = wait(lambda: streams(marker), 60, 2, f"syslog {marker}")[0]
+        assert st["host"] == host and st.get("host_correction") == correction, (marker, st)
+        seen[marker] = st
+    wait(lambda: parse_errors() >= errors_before + 1 or None, 30, 1, "parse error counted for year-before-time")
+    evidence("syslog_year_in_header", {"streams": seen, "parse_errors_before": errors_before,
+                                       "parse_errors_after": parse_errors()})
+
+
+def test_10c_device_syslog_reaches_device_timeline_and_attribution(c):
+    """rc18 (P3-01 / INTEG-P3-03 / GAP-T03): a CX configuration-change syslog packet sent FROM the switch's
+    management address goes through the shipped Alloy pipeline into Loki (with the sender `source_ip` label), the
+    worker's syslog bridge stores it on that device's timeline and attributes it - VERIFIED with a matching named AAA
+    session. The same message from another sender carrying the switch's hostname is kept but never attributed."""
+    did, serial, hostname = sql(MGMT, "SELECT id, serial_number, hostname FROM inm_devices WHERE "
+                                      "mgmt_addresses::text LIKE %s AND lifecycle <> 'merged' LIMIT 1", "%10.250.0.24%")[0]
+    now = datetime.now(timezone.utc)
+    assert c.post("/v1/aaa/sessions", json={"device_serial": serial, "username": "fsnetops", "source": "TACACS+",
+                                            "start_at": (now - timedelta(minutes=5)).isoformat(),
+                                            "end_at": (now + timedelta(minutes=30)).isoformat()}).status_code == 201
+    day = f"{now:%b} {now.day:2d}"
+    marker, spoof = f"inm-attr-{uuid.uuid4().hex[:8]}", f"inm-spoof-{uuid.uuid4().hex[:8]}"
+    for src, m in (("10.250.0.24", marker), ("127.0.0.1", spoof)):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.bind((src, 0))
+            s.sendto(f"<190>{day} {now:%H:%M:%S} {hostname} hpe-config[77]: Event|6801|LOG_INFO|AMM|-|User fsnetops "
+                     f"configuration change committed {m}".encode(), ("127.0.0.1", 1515))
+
+    def labels(m):
+        q = httpx.get(f"{LOKI}/loki/api/v1/query_range", params={"query": f'{{source="syslog"}} |= "{m}"',
+                      "start": str(int((time.time() - 600) * 1e9)), "end": str(int(time.time() * 1e9))}).json()
+        return [r["stream"] for r in q["data"]["result"]] or None
+    assert wait(lambda: labels(marker), 60, 2, "attributable syslog in Loki")[0]["source_ip"] == "10.250.0.24"
+    assert wait(lambda: labels(spoof), 60, 2, "spoofed syslog in Loki")[0]["source_ip"] == "127.0.0.1"
+    # run the worker's scheduled job now instead of waiting for its 5-minute cycle (same code, same database)
+    py = os.environ.get("INM_PY", str(ROOT / ".venv/bin/python"))
+    job = ("from backend.infrastructure import scheduled_jobs as J; import json; "
+           "print(json.dumps(J.syslog_bridge(), default=str))")
+    r = subprocess.run(["bash", "-c", f'source /tmp/inm-stack/env.sh && SIMS_ROLE=worker "{py}" -c "{job}"'],
+                       cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
+    tl = c.get(f"/v1/devices/{did}/change-timeline").json()
+    mine = [e for e in tl["log_events"] if marker in e["message"]]
+    spoofed = [e for e in tl["log_events"] if spoof in e["message"]]
+    assert len(mine) == 1 and mine[0]["is_config_change"] and mine[0]["user"] == "fsnetops"
+    assert len(spoofed) == 1                                      # kept for the timeline (matched by hostname)
+    by_event = {a["log_event_id"]: a for a in tl["attributions"]}
+    assert by_event[mine[0]["id"]]["level"] == "VERIFIED" and by_event[mine[0]["id"]]["actor"] == "fsnetops"
+    assert spoofed[0]["id"] not in by_event                       # a hostname is not proof of origin
+    evidence("syslog_bridge_attribution", {"job": r.stdout.strip().splitlines()[-1], "event": mine[0],
+                                           "attribution": by_event[mine[0]["id"]], "spoofed": spoofed[0]})
+
+
 def test_11_alert_notification_delivered_once_by_the_worker_with_persisted_values(c):
     """E2E-20: the worker's notification loop delivers the per-port alert from test_08 to a real webhook; the
     payload equals the alert the API serves, the delivery row is SENT, and further sweeps do not resend it."""

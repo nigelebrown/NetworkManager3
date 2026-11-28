@@ -41,6 +41,7 @@ export interface Trace {
 }
 export interface Capability { operation: string; status: string; evidence: string | null }
 export interface Device {
+  groups?: { id: string; name: string }[];
   id: string; source_type: "DEMO" | "REAL"; environment: string; vendor: string; family: "access_point" | "switch";
   model: string | null; serial_number: string; hostname: string | null; firmware: string | null; status: string; adapter: string;
   site_id: string | null; cluster_id: string | null; legacy_site_id: number | null; legacy_ap_id?: number | null;
@@ -88,10 +89,11 @@ export const v1 = {
       "/v1/quick-devices", { method: "POST", body: JSON.stringify(body) }),
   bulkQuickDevices: (devices: { family: "access_point" | "switch"; site_name: string;
     hostname: string; serial_number: string; model: string; firmware?: string | null;
-    management_ip?: string | null; status?: string; metrics?: Record<string, number> }[]) =>
+    management_ip?: string | null; status?: string; metrics?: Record<string, number> }[], mode: "atomic" | "partial" = "atomic") =>
     request<{ count: number; added: number; updated: number; device_writes: "LOCKED"; results: {
       id: string; hostname: string; serial_number: string; action: "ADDED" | "UPDATED"
-    }[] }>("/v1/quick-devices/bulk", { method: "POST", body: JSON.stringify({ devices }) }),
+    }[]; rejected?: { index: number; serial_number: string; reason: string }[] }>("/v1/quick-devices/bulk",
+      { method: "POST", body: JSON.stringify({ devices, mode }) }),
   probeQuickDevice: (body: { family: "access_point" | "switch"; site_name: string; hostname: string; serial_number: string;
     model: string; management_ip: string; username: string; password: string }) =>
     request<{ id: string; evidence: string; hostname: string; device_writes: string }>(

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote } from "./ui";
 import { useLoad } from "./useLoad";
 import { request, getSession } from "../services/api";

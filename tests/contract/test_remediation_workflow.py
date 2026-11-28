@@ -207,6 +207,13 @@ def test_multi_device_deployment_with_progress_and_stop_on_failure(demo):
     for p in st["plans"]:
         plan = next(x for x in c.get("/api/v1/changes/plans", headers=adm).json() if x["id"] == p["plan_id"])
         c.post(f"/api/v1/changes/plans/{plan['id']}/approve", headers=appr, json={"expected_revision": plan["revision"]})
+    # rc18 (P6-10): this batch is high risk -> execution needs a separate reviewer's release of the current impact
+    st2 = c.get(f"/api/v1/deployments/{batch}", headers=adm).json()
+    assert st2["impact"]["risk"] == "HIGH" and [r["code"] for r in st2["impact"]["reasons"]] == ["MULTI_SITE"]
+    assert c.post(f"/api/v1/deployments/{batch}/execute", headers=adm, json={}).status_code == 409
+    rev = make_user(c, adm, "wf.release", "approver")
+    assert c.post(f"/api/v1/deployments/{batch}/release-approval", headers=rev, json={
+        "digest": st2["impact"]["digest"], "note": "Impact and rollback reviewed for the switch batch"}).status_code == 200
     # the second device will reject a write -> automatic rollback there, and the batch stops
     order = [p["device_id"] for p in st["plans"]]
     X._EMULATORS[order[1]].fail_path = "/system/vrfs/mgmt/ntp_associations"

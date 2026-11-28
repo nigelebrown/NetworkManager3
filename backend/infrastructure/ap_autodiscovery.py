@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlalchemy import select
@@ -142,6 +143,62 @@ def approve_fingerprints(db: Session, items: list[dict], actor: str) -> list[dic
         out.append({"ip": ip, "approved": True})
     db.flush()
     return out
+
+
+# ------------------------------------------------------------------ account lockout guard (RC16-T12)
+AUTH_LEDGER = "onboarding-auth-failures"
+
+
+def _auth_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("INM_ONBOARDING_MAX_AUTH_FAILURES", "2")))
+    except ValueError:
+        return 2
+
+
+def _auth_window() -> timedelta:
+    try:
+        return timedelta(minutes=max(1, int(os.environ.get("INM_ONBOARDING_AUTH_FAILURE_WINDOW_MINUTES", "30"))))
+    except ValueError:
+        return timedelta(minutes=30)
+
+
+def _auth_failures(db: Session, username: str) -> list[dict]:
+    """Rejected logins for this account name inside the window, across every host and run.
+
+    Keyed by account name, not profile or host: an AAA-backed (RADIUS/TACACS+) account is shared by every device,
+    so failures on different clusters add up on the AAA server's lockout counter."""
+    ledger = _get(db, AUTH_LEDGER) or {}
+    cutoff = _now() - _auth_window()
+    out = []
+    for f in ledger.get((username or "").casefold(), []):
+        try:
+            if datetime.fromisoformat(f["at"]) >= cutoff:
+                out.append(f)
+        except (KeyError, TypeError, ValueError):
+            log.warning("ignoring malformed onboarding auth-failure entry")
+    return out
+
+
+def _record_auth_failure(db: Session, username: str, ip: str, transport: str, actor: str) -> int:
+    from ..security.deps import audit
+    ledger = _get(db, AUTH_LEDGER) or {}
+    key = (username or "").casefold()
+    kept = _auth_failures(db, username) + [{"at": _now().isoformat(), "host": ip, "transport": transport}]
+    ledger[key] = kept[-20:]
+    _put(db, AUTH_LEDGER, ledger, actor)
+    audit(db, "onboarding_auth_rejected", username=actor, target=ip,
+          detail=f"account={username} transport={transport} failures_in_window={len(kept)}/{_auth_cap()}")
+    return len(kept)
+
+
+def auth_guard_status(db: Session) -> dict:
+    """Accounts currently held back from automatic onboarding (no secret material)."""
+    ledger = _get(db, AUTH_LEDGER) or {}
+    cap = _auth_cap()
+    held = {u: len(_auth_failures(db, u)) for u in ledger}
+    return {"max_failures": cap, "window_minutes": int(_auth_window().total_seconds() // 60),
+            "accounts": [{"account": u, "failures": n, "held": n >= cap} for u, n in sorted(held.items()) if n]}
 
 
 # ------------------------------------------------------------------ discovery
@@ -265,7 +322,15 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
             continue
         members, transport, used, rest_state, last = None, None, None, None, "UNREACHABLE"
         observed_key = None
+        capped: list[str] = []
+        attempted = 0
         for p in profiles:
+            # RC16-T12: never push a shared/AAA account towards lockout - once it has been rejected the configured
+            # number of times inside the window (any host, any run) it is not offered again until the window ends.
+            if len(_auth_failures(db, p.username)) >= _auth_cap():
+                capped.append(p.name)
+                continue
+            attempted += 1
             pw = decrypt_secret(p.password_enc)
             try:
                 members, transport = rest_members(ip, p.username, pw)
@@ -274,6 +339,11 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
             except Exception as exc:
                 last = _classify_rest_error(exc)
                 rest_state = last
+            if last == "AUTH_REJECTED":
+                # REST and SSH share the Instant management user database: the same password over SSH would only
+                # add a second failure to the account's lockout counter.
+                _record_auth_failure(db, p.username, ip, "rest", actor)
+                continue
             fp = pinned_fingerprint(db, ip)
             first_use = False
             if auto_trust_new_hosts:
@@ -311,7 +381,18 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
                     used = p
                     break
                 except Exception as exc:
-                    last = "SSH_" + type(exc).__name__
+                    from ..aruba.errors import ArubaAuthError
+                    if isinstance(exc, ArubaAuthError):
+                        last = "AUTH_REJECTED"
+                        _record_auth_failure(db, p.username, ip, "ssh", actor)
+                    else:
+                        last = "SSH_" + type(exc).__name__
+        if members is None and capped and not attempted:
+            results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip, "result": "AUTH_ATTEMPTS_CAPPED",
+                            "detail": f"Held back to avoid account lockout: {', '.join(capped)} rejected "
+                                      f"{_auth_cap()} time(s) within {int(_auth_window().total_seconds() // 60)} "
+                                      "minutes. Correct the saved credential or wait for the window to end."})
+            continue
         if members is None:
             pending = db.get(AppSetting, f"ssh-hostkey-pending:{ip}") is not None
             need_key = not pinned_fingerprint(db, ip) and (last == "REST_DISABLED" or pending)
@@ -319,6 +400,8 @@ def discover(db: Session, actor: str, *, device_ids: list[str] | None = None, au
                       "over SSH and (if permitted) enable REST.") if need_key else (
                 "No answer on REST (4343) or SSH (22). Check the AP is powered, its IP is correct and the management "
                 "VLAN is routed.") if last == "UNREACHABLE" else None
+            if capped:
+                detail = ((detail + " ") if detail else "") + ("Not tried to avoid account lockout: " + ", ".join(capped) + ".")
             results.append({"device_id": d.id, "hostname": d.hostname, "ip": ip,
                             "result": "NEEDS_HOSTKEY_APPROVAL" if need_key else last, "detail": detail})
             continue

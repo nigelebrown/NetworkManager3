@@ -5,6 +5,7 @@ downloads untrusted MIB code. Credentials live only in the request call stack.
 The device must be within the configured private management scope.
 """
 from __future__ import annotations
+import logging
 
 import asyncio
 import ipaddress
@@ -13,6 +14,8 @@ from typing import Any
 
 from ..config import get_settings
 
+_log = logging.getLogger(__name__)
+
 SYS_NAME = "1.3.6.1.2.1.1.5.0"
 SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 SYS_OBJECT = "1.3.6.1.2.1.1.2.0"
@@ -20,6 +23,45 @@ MARKER_LIFE = "1.3.6.1.2.1.43.10.2.1.4"
 MARKER_UNIT = "1.3.6.1.2.1.43.10.2.1.3"
 PRINTER_SERIAL = "1.3.6.1.2.1.43.5.1.1.17"
 # RFC 3805's prtMarkerCounterUnit must be checked before labelling a count.
+
+# SNMPv3 USM protocol names accepted in saved printer profiles. Profiles created before 1.3.0-rc16 carry no
+# protocol fields and keep the original SHA-256/AES-128 behaviour. MD5/DES remain selectable because many
+# deployed printers only offer them, but they are reported as WEAK so administrators can plan replacement.
+AUTH_PROTOCOLS = {"SHA256": "USM_AUTH_HMAC192_SHA256", "SHA": "USM_AUTH_HMAC96_SHA",
+                  "SHA224": "USM_AUTH_HMAC128_SHA224", "SHA384": "USM_AUTH_HMAC256_SHA384",
+                  "SHA512": "USM_AUTH_HMAC384_SHA512", "MD5": "USM_AUTH_HMAC96_MD5"}
+PRIV_PROTOCOLS = {"AES128": "USM_PRIV_CFB128_AES", "AES192": "USM_PRIV_CFB192_AES",
+                  "AES256": "USM_PRIV_CFB256_AES", "DES": "USM_PRIV_CBC56_DES", "3DES": "USM_PRIV_CBC168_3DES",
+                  "NONE": "USM_PRIV_NONE"}
+WEAK_PROTOCOLS = {"MD5", "DES"}
+DEFAULT_AUTH, DEFAULT_PRIV = "SHA256", "AES128"
+
+
+def usm_options(value: dict | None) -> dict[str, str]:
+    """Protocol selection stored beside (never inside) the encrypted secret of a saved profile."""
+    value = value or {}
+    auth = str(value.get("auth_protocol") or DEFAULT_AUTH).upper()
+    priv = str(value.get("priv_protocol") or DEFAULT_PRIV).upper()
+    if auth not in AUTH_PROTOCOLS or priv not in PRIV_PROTOCOLS:
+        raise ValueError("Unsupported SNMPv3 protocol in saved profile")
+    return {"auth_protocol": auth, "priv_protocol": priv}
+
+
+def build_auth_data(version: str, identity: str, auth_key: str = "", privacy_key: str = "", *,
+                    auth_protocol: str = DEFAULT_AUTH, priv_protocol: str = DEFAULT_PRIV):
+    """pysnmp authentication object for v1/v2c community or v3 USM (authPriv or authNoPriv)."""
+    import pysnmp.hlapi.v3arch.asyncio as hl
+    if version == "3":
+        auth_protocol, priv_protocol = auth_protocol.upper(), priv_protocol.upper()
+        if auth_protocol not in AUTH_PROTOCOLS or priv_protocol not in PRIV_PROTOCOLS:
+            raise ValueError("Unsupported SNMPv3 protocol")
+        kwargs = {"authKey": auth_key, "authProtocol": getattr(hl, AUTH_PROTOCOLS[auth_protocol])}
+        if priv_protocol != "NONE":
+            kwargs |= {"privKey": privacy_key, "privProtocol": getattr(hl, PRIV_PROTOCOLS[priv_protocol])}
+        return hl.UsmUserData(identity, **kwargs)
+    if version in ("1", "2c"):
+        return hl.CommunityData(identity, mpModel=0 if version == "1" else 1)
+    raise ValueError("Unsupported SNMP version")
 
 
 def permitted_target(host: str, ranges: str | None = None) -> bool:
@@ -76,25 +118,17 @@ async def read_snmpv3(host: str, username: str, auth_key: str, privacy_key: str)
     return await read_printer(host, "3", username, auth_key, privacy_key)
 
 
-async def read_printer(host: str, version: str, identity: str, auth_key: str = "", privacy_key: str = "") -> dict[str, Any]:
+async def read_printer(host: str, version: str, identity: str, auth_key: str = "", privacy_key: str = "", *,
+                       auth_protocol: str = DEFAULT_AUTH, priv_protocol: str = DEFAULT_PRIV) -> dict[str, Any]:
     from pysnmp.hlapi.v3arch.asyncio import (
-        CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget,
-        UsmUserData, get_cmd, next_cmd,
-        USM_AUTH_HMAC192_SHA256, USM_PRIV_CFB128_AES,
+        ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, get_cmd, next_cmd,
     )
 
     if not permitted_target(host):
         raise ValueError("Target outside authorized read-only management ranges")
+    auth = build_auth_data(version, identity, auth_key, privacy_key,
+                           auth_protocol=auth_protocol, priv_protocol=priv_protocol)
     engine = SnmpEngine()
-    if version == "3":
-        auth = UsmUserData(
-            identity, authKey=auth_key, privKey=privacy_key,
-            authProtocol=USM_AUTH_HMAC192_SHA256, privProtocol=USM_PRIV_CFB128_AES,
-        )
-    elif version in ("1", "2c"):
-        auth = CommunityData(identity, mpModel=0 if version == "1" else 1)
-    else:
-        raise ValueError("Unsupported SNMP version")
     source = "SNMPV" + version.upper()
     try:
         transport = await UdpTransportTarget.create((host, 161), timeout=3, retries=1)
@@ -148,8 +182,8 @@ async def read_printer(host: str, version: str, identity: str, auth_key: str = "
         if marker:
             try:
                 serial = await asyncio.wait_for(get_one(PRINTER_SERIAL + "." + marker[0].split(".")[1]), timeout=1)
-            except TimeoutError:
-                pass
+            except TimeoutError as _exc:
+                _log.warning("printer serial not returned within 1 s; recorded as missing: %s", type(_exc).__name__, exc_info=True)
         serial = (serial or "").strip()
         if len(serial) > 100 or not serial.isprintable() or serial.casefold() in {"unknown", "n/a", "none"}:
             serial = ""

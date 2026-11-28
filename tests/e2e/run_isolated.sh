@@ -11,10 +11,10 @@ mkdir -p evidence/e2e-gui
 rc=0
 for suite in tests/e2e/test_gui_workflow.py tests/e2e/test_live_operations.py; do
   bash tests/fullstack/stack.sh down >/dev/null 2>&1 || true
-  rm -rf /tmp/inm-stack/pg /tmp/inm-stack/nats /tmp/inm-e2e/loki /tmp/inm-stack/vault
+  rm -rf /tmp/inm-stack/pg /tmp/inm-stack/nats /tmp/inm-stack/loki /tmp/inm-stack/vault
   bash tests/fullstack/stack.sh up >/dev/null
   name=$(basename "$suite" .py)
-  .venv/bin/python -m pytest -q "$suite" -p no:cacheprovider -W ignore -rs 2>&1 | tee "evidence/e2e-gui/$name.log" | tail -3 || rc=1
+  "${INM_PY:-.venv/bin/python}" -m pytest -q "$suite" -p no:cacheprovider -W ignore -rs 2>&1 | tee "evidence/e2e-gui/$name.log" | tail -3 || rc=1
   grep -qE "[0-9]+ passed" "evidence/e2e-gui/$name.log" && ! grep -qE "[0-9]+ failed|error" "evidence/e2e-gui/$name.log" || rc=1
 done
 bash tests/fullstack/stack.sh down >/dev/null 2>&1 || true

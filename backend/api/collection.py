@@ -32,6 +32,8 @@ class PlanInput(BaseModel):
     window_start_hour: int | None = None
     window_end_hour: int | None = None
     max_concurrency: int = 1
+    # SNMP adapters (generic/Cisco, rc17): id of a saved SNMP credential profile (any version / USM protocol).
+    snmp_profile_id: str | None = Field(default=None, max_length=64)
 
 
 def _spec(body: PlanInput, family: str) -> C.PlanSpec:
@@ -66,7 +68,10 @@ def preview_plan(body: PlanInput, db: Session = Depends(get_db), user: User = De
     caps = {c.operation: c.status for c in db.scalars(
         select(DeviceCapability).where(DeviceCapability.device_id == d.id))}
     warnings = []
-    if not binding:
+    snmp = adapter.key in ("generic_snmpv3", "cisco_ios_xe_snmpv3")
+    if snmp and not body.snmp_profile_id:
+        warnings.append("Select a saved SNMP credential profile for this device; polls will fail AUTH_REJECTED.")
+    elif not snmp and not binding:
         warnings.append("No saved credential profile is bound to this device; polls will fail AUTH_REJECTED.")
     if not d.mgmt_addresses:
         warnings.append("No management address recorded; polls will fail TARGET_NOT_ALLOWED.")
@@ -88,8 +93,16 @@ def create_plan(body: PlanInput, request: Request, db: Session = Depends(get_db)
     if db.scalar(select(CollectionPlan).where(CollectionPlan.device_id == d.id)):
         raise HTTPException(409, "This device already has a collection plan; pause or edit it.")
     binding = db.get(OnboardingDeviceCredential, d.id)
-    p = CollectionPlan(device_id=d.id, site_id=d.site_id, adapter_key=resolve(d.vendor, d.family, d.model).key,
-                       credential_profile_id=binding.credential_id if binding else None,
+    adapter = resolve(d.vendor, d.family, d.model).key
+    profile_id = binding.credential_id if binding else None
+    if adapter in ("generic_snmpv3", "cisco_ios_xe_snmpv3"):
+        from ..database.models import AppSetting
+        from ..printers.service import PROFILE_PREFIX
+        if body.snmp_profile_id and db.get(AppSetting, PROFILE_PREFIX + body.snmp_profile_id) is None:
+            raise HTTPException(422, "SNMP credential profile not found.")
+        profile_id = body.snmp_profile_id
+    p = CollectionPlan(device_id=d.id, site_id=d.site_id, adapter_key=adapter,
+                       credential_profile_id=profile_id,
                        metric_families=list(spec.metric_families), interval_seconds=spec.interval_seconds,
                        window_start_hour=spec.window_start_hour, window_end_hour=spec.window_end_hour,
                        max_concurrency=spec.max_concurrency, state="ACTIVE", next_due_at=now(),

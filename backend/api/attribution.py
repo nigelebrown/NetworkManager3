@@ -80,25 +80,13 @@ def ingest_syslog(body: SyslogBatch, request: Request, db: Session = Depends(get
         ev = A.normalize(line, source_ip=body.source_ip, device_serial=device.serial_number if device else None,
                          vendor=device.vendor if device else "unknown", received_at=received,
                          transport=body.transport)
-        if db.scalar(select(DeviceLogEvent.id).where(DeviceLogEvent.raw_hash == ev.raw_hash)):
+        from ..infrastructure.syslog_bridge import store_event
+        outcome, was_attributed = store_event(db, device, ev)
+        if outcome == "DUPLICATE":
             dup += 1
             continue
-        row = DeviceLogEvent(device_id=device.id if device else None, device_serial=ev.device_serial,
-                             source_ip=ev.source_ip, vendor=ev.vendor, event_code=ev.event_code,
-                             severity=ev.severity, message=ev.message, username=ev.user,
-                             is_config_change=ev.is_config_change, observed_at=ev.observed_at,
-                             parser_version=ev.parser_version, transport_quality=ev.transport_quality,
-                             raw_hash=ev.raw_hash)
-        db.add(row); db.flush()
         stored += 1
-        if ev.is_config_change and device is not None:
-            res = A.attribute(device_serial=device.serial_number, change_at=ev.observed_at,
-                              device_event_user=ev.user, sessions=_sessions(db, device.serial_number))
-            db.add(ChangeAttribution(device_id=device.id, log_event_id=row.id, change_at=ev.observed_at,
-                                     level=res["level"], actor=res["actor"], change_type=res["change_type"],
-                                     evidence=res["evidence"], candidates=res["candidates"],
-                                     created_by="attribution-engine"))
-            attributed += 1
+        attributed += int(was_attributed)
     audit(db, "syslog_batch_ingested", username=user.username, target=device.id if device else body.source_ip,
           detail=f"stored={stored} duplicate={dup} config_changes={attributed} parser={A.PARSER_VERSION}",
           request=request)

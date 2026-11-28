@@ -152,12 +152,29 @@ def _switch(db, d, actor, options, probe=None):
     _permit_probe(ip)
     profiles = AD._candidate_profiles(db, d, options.get("credential_ids"))
     result = {"device_id": d.id, "hostname": d.hostname, "ip": str(ip), "result": "NO_CREDENTIAL"}
+    capped: list[str] = []
     for profile in profiles:
+        # RC16-T12: an account rejected the configured number of times (any host, any run) is held back.
+        if len(AD._auth_failures(db, profile.username)) >= AD._auth_cap():
+            capped.append(profile.name)
+            result = {**result, "result": "AUTH_ATTEMPTS_CAPPED",
+                      "detail": "Held back to avoid account lockout: " + ", ".join(capped)}
+            continue
         try:
             try:
                 observed = (probe or _probe)(profile, ip)
-            except Exception:
-                if not _bootstrap_switch(db, d, profile, actor, options):
+            except Exception as exc:
+                if _auth_rejected(exc):
+                    # The same password over SSH (REST bootstrap) would only add a second lockout-counter failure.
+                    AD._record_auth_failure(db, profile.username, str(ip), "rest", actor)
+                    raise
+                try:
+                    bootstrapped = _bootstrap_switch(db, d, profile, actor, options)
+                except Exception as bexc:
+                    if _auth_rejected(bexc):
+                        AD._record_auth_failure(db, profile.username, str(ip), "ssh", actor)
+                    raise
+                if not bootstrapped:
                     raise
                 observed = (probe or _probe)(profile, ip)
             actual = observed.get("serial_number")
@@ -181,8 +198,15 @@ def _switch(db, d, actor, options, probe=None):
             return {**result, "result": "SWITCH_MONITORING_ENABLED", "credential_id": profile.id}
         except Exception as exc:
             result["result"] = "AUTH_OR_CONNECTION_FAILED"
-            result["detail"] = type(exc).__name__
+            result["detail"] = type(exc).__name__ + (f"; not tried to avoid account lockout: {', '.join(capped)}"
+                                                     if capped else "")
     return result
+
+
+def _auth_rejected(exc: Exception) -> bool:
+    from ..aruba.errors import ArubaAuthError
+    from .writers import WriterError
+    return isinstance(exc, ArubaAuthError) or (isinstance(exc, WriterError) and exc.category == "AUTH_REJECTED")
 
 
 def process_device(db, d, actor, options):

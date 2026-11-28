@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { ErrorNote } from "../components/ui";
 import { api, getSession, setSession } from "../services/api";
 

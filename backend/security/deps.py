@@ -62,6 +62,13 @@ def get_current_user(
 ) -> User:
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    from .api_tokens import PREFIX as _PAT, resolve as _resolve_pat
+    if creds.credentials.startswith(_PAT):
+        user = _resolve_pat(db, creds.credentials, request)
+        set_actor(Actor(user.username + "[api-token]", user.role, session_hash(creds.credentials[:16])))
+        set_scope(user_site_scope(db, user))
+        request.state.token_payload = {"api_token": creds.credentials[:16]}
+        return user
     user, payload = resolve_user(db, creds.credentials)
     set_actor(Actor(user.username, user.role, session_hash(payload.get("jti"))))
     set_scope(user_site_scope(db, user))

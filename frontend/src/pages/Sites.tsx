@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { FormEvent, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Badge, Card, ErrorNote, SimBadge, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import ConfirmDialog from "../components/ConfirmDialog";

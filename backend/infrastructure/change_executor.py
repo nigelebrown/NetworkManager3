@@ -14,6 +14,7 @@ The ONLY code path that writes device configuration. Order of operations for an 
   8. success: save, post-change backup (POST_CHANGE), APPLICATION attribution, audit
 """
 from __future__ import annotations
+import logging
 
 import hashlib
 import json
@@ -36,6 +37,8 @@ from ..domain import vault as V
 from ..domain.adapters import resolve
 from .phase_services import LocalObjectStore, control, vault_master_key
 from .writers import Credentials, WriterError
+
+_log = logging.getLogger(__name__)
 
 _EMULATORS: dict[str, object] = {}   # DEMO device id -> emulator (process-local, labelled EMULATED)
 
@@ -222,7 +225,7 @@ def reader_for(db: Session, device: InmDevice):
         client = client_for_site(site)
     except ArubaError as exc:
         raise WriterError("PRECONDITION", str(exc)) from None
-    reader = ArubaInstantWriter(Credentials(host=site.vc_host, username="", password=""), client=client,
+    reader = ArubaInstantWriter(Credentials(host=site.vc_host, username="", password="", extra={"ap_ip": ap_ip}), client=client,
                                 diagnostic_target=ap_ip)
     return reader, "HARDWARE"
 
@@ -255,7 +258,7 @@ def _norm(cfg: bytes, family: str) -> str:
         try:
             return hashlib.sha256(json.dumps(json.loads(cfg), sort_keys=True).encode()).hexdigest()
         except ValueError:
-            pass
+            pass  # not JSON: compare as text configuration below
     # Text configs (Instant): compare the set of effective lines; CLI edits may reorder lines in a block.
     return hashlib.sha256(b"\n".join(sorted(x.strip() for x in cfg.splitlines() if x.strip()))).hexdigest()
 
@@ -340,10 +343,15 @@ def _with_secret(db: Session, op: dict) -> dict:
         return op
     from ..database.models_onboarding import OnboardingCredential
     from ..security.crypto import decrypt_secret
-    prof = db.get(OnboardingCredential, op["secret_ref"])
-    if prof is None or not prof.enabled:
-        raise WriterError("PRECONDITION", "secret_ref does not name an enabled credential profile.")
-    return {**op, "_secret": decrypt_secret(prof.password_enc)}
+    def resolve(ref: str) -> str:
+        prof = db.get(OnboardingCredential, ref)
+        if prof is None or not prof.enabled:
+            raise WriterError("PRECONDITION", "secret_ref does not name an enabled credential profile.")
+        return decrypt_secret(prof.password_enc)
+    out = {**op, "_secret": resolve(op["secret_ref"])}
+    if op.get("previous_secret_ref"):                 # rc18: secret rotation keeps the old secret for rollback
+        out["_previous_secret"] = resolve(op["previous_secret_ref"])
+    return out
 
 
 def _journal_open(db: Session, execution_id: str, plan_id: str, device_id: str, env: str, strategy: str,
@@ -561,8 +569,8 @@ def execute_plan(db: Session, plan: ChangePlan, *, actor: str, writer=None, env:
         try:
             if writer is not None:
                 writer.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            _log.debug("best-effort closing the change writer: %s", type(_exc).__name__)
         _release(db, device.id, holder)
     ex.steps, ex.outcome, ex.finished_at = steps, outcome, datetime.now(timezone.utc)
     plan.state = {"APPLIED_VERIFIED": "APPLIED_VERIFIED", "ROLLED_BACK": "FAILED_ROLLED_BACK",
@@ -602,7 +610,28 @@ TEST_OPS = {
     ] + [{"op": "switch.vlan.voice", "vlan": t.get("test_vlan", 4090), "value": "enabled", "acknowledge_voice_change": True}]
       + ([{"op": "switch.port.auth_dot1x" if method == "dot1x" else "switch.port.auth_mab", "port": t["test_auth_port"], "method": method, "value": "enabled", "acknowledge_auth_change": True}
           for method in ("dot1x", "mac-auth")] if t.get("test_auth_port") else [])
-      + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else []),
+      + ([{"op": "switch.lag.members", "lag": "lag250", "value": t["lag_ports"]}] if t.get("lag_ports") else [])
+      + [{"op": "switch.acl.define", "name": "INM-CERT",
+          "entries": [{"seq": 10, "action": "permit", "protocol": "any", "src": "any", "dst": "any",
+                       "comment": "INM certification"}]},
+         # Each certification op is rolled back before the next, so attaching would need the ACL above to persist;
+         # the campaign certifies the detach form here, the attach form is covered by HW-CX-14 on hardware.
+         {"op": "switch.acl.apply", "port": t["test_port"], "value": None},
+         {"op": "switch.route.static", "prefix": t.get("test_route", "198.51.100.0/24"),
+          "next_hop": t.get("test_next_hop", "192.0.2.1")},
+         {"op": "switch.qos.dscp_policy", "name": "INM-CERT-QOS", "protocol": "udp", "dst_port": 5004, "dscp": 46,
+          "ports": [t["test_port"]]}]
+      + [{"op": "switch.aaa.radius_server", "address": t.get("test_radius", "192.0.2.80"), "timeout": 5, "retries": 1,
+          "_secret": "cert-" + __import__("secrets").token_hex(8)},
+         {"op": "switch.aaa.accounting", "accounting_mode": "start-stop", "interim_update_interval": 15}]
+      + ([{"op": "switch.port.auth_policy", "action": "modify", "port": t["test_auth_port"], "method": "dot1x",
+           "reauth_enable": True, "reauth_period": 3600, "acknowledge_auth_change": True}] if t.get("test_auth_port") else [])
+      + ([{"op": "switch.route.ospf", "model_family": "CX 6200", "router_id": t.get("test_router_id", "10.255.255.1"),
+           "interfaces": [t["test_ospf_interface"]], "acknowledge_routing_change": True}]
+         if t.get("test_ospf_interface") else [])
+      + ([{"op": "switch.vsf.member", "model_family": "CX 6200", "member": t["vsf_member"],
+           "member_type": t["vsf_member_type"], "links": t["vsf_links"], "acknowledge_stack_change": True}]
+         if t.get("vsf_member") else []),
     "access_point": lambda t: [
         {"op": "ap.client_match", "value": "disabled"}, {"op": "ap.band_steering", "value": "balance-bands"},
         {"op": "ap.airtime_fairness", "value": "fair-access"}, {"op": "ap.radio.width", "value": 20},

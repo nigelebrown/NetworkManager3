@@ -37,6 +37,14 @@ def demo_status(db: Session = Depends(get_db), user: User = Depends(require_role
 
 @router.post("/demo-data/load")
 def demo_load(request: Request, db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    import os
+    from ..config import get_settings
+    if get_settings().mode != "demo" and os.environ.get("INM_ALLOW_DEMO_DATA_IN_LIVE", "false").lower() != "true":
+        audit(db, "demo_dataset_load_refused", username=user.username, success=False, request=request,
+              detail="live mode; INM_ALLOW_DEMO_DATA_IN_LIVE is not true")
+        db.commit()
+        raise HTTPException(403, "Demo data cannot be loaded on a live installation. A lab/training server can allow it "
+                                 "with INM_ALLOW_DEMO_DATA_IN_LIVE=true. Removing demo data is always allowed.")
     counts = demo_dataset.load(db, actor=user.username, store=telemetry_store())
     audit(db, "demo_dataset_loaded", username=user.username, detail=str(counts), request=request)
     return {"status": demo_dataset.status(db), "created": counts}

@@ -1,0 +1,606 @@
+{
+ "description": "Frozen client poll history (anonymised shape of a SIMS 1.x export, 2026-09-01); inputs only, no scores",
+ "captured_at": "2026-09-01T08:00:00+00:00",
+ "rows": [
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:00",
+   "ap": "ap-0",
+   "snr_db": null,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": null,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:01",
+   "ap": "ap-1",
+   "snr_db": 35.8,
+   "rssi_dbm": null,
+   "speed_mbps": 433,
+   "disconnects": 4,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:02",
+   "ap": "ap-2",
+   "snr_db": 26.6,
+   "rssi_dbm": null,
+   "speed_mbps": 24,
+   "disconnects": 6,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:03",
+   "ap": "ap-3",
+   "snr_db": 14.5,
+   "rssi_dbm": -78.0,
+   "speed_mbps": 72,
+   "disconnects": 6,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:04",
+   "ap": "ap-0",
+   "snr_db": 18.5,
+   "rssi_dbm": null,
+   "speed_mbps": 54,
+   "disconnects": 1,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:05",
+   "ap": "ap-1",
+   "snr_db": 30.4,
+   "rssi_dbm": null,
+   "speed_mbps": 6,
+   "disconnects": 1,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:06",
+   "ap": "ap-2",
+   "snr_db": 40.3,
+   "rssi_dbm": -76.0,
+   "speed_mbps": 173,
+   "disconnects": 0,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:07",
+   "ap": "ap-3",
+   "snr_db": 21.0,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 0,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:08",
+   "ap": "ap-0",
+   "snr_db": 24.7,
+   "rssi_dbm": null,
+   "speed_mbps": 433,
+   "disconnects": 1,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 0,
+   "client": "aa:bb:cc:00:00:09",
+   "ap": "ap-1",
+   "snr_db": 18.7,
+   "rssi_dbm": -59.0,
+   "speed_mbps": 144,
+   "disconnects": null,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0a",
+   "ap": "ap-2",
+   "snr_db": 14.2,
+   "rssi_dbm": null,
+   "speed_mbps": 72,
+   "disconnects": 6,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0b",
+   "ap": "ap-3",
+   "snr_db": null,
+   "rssi_dbm": -81.0,
+   "speed_mbps": 72,
+   "disconnects": 2,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0c",
+   "ap": "ap-0",
+   "snr_db": 19.2,
+   "rssi_dbm": -63.0,
+   "speed_mbps": 12,
+   "disconnects": 0,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0d",
+   "ap": "ap-1",
+   "snr_db": null,
+   "rssi_dbm": null,
+   "speed_mbps": 173,
+   "disconnects": 6,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0e",
+   "ap": "ap-2",
+   "snr_db": 13.9,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 2,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:0f",
+   "ap": "ap-3",
+   "snr_db": 12.6,
+   "rssi_dbm": -68.0,
+   "speed_mbps": 72,
+   "disconnects": 8,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:10",
+   "ap": "ap-0",
+   "snr_db": 37.4,
+   "rssi_dbm": null,
+   "speed_mbps": 72,
+   "disconnects": 4,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:11",
+   "ap": "ap-1",
+   "snr_db": 41.5,
+   "rssi_dbm": null,
+   "speed_mbps": 300,
+   "disconnects": 4,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:12",
+   "ap": "ap-2",
+   "snr_db": 7.1,
+   "rssi_dbm": -81.0,
+   "speed_mbps": 300,
+   "disconnects": null,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 1,
+   "client": "aa:bb:cc:00:00:13",
+   "ap": "ap-3",
+   "snr_db": 32.1,
+   "rssi_dbm": null,
+   "speed_mbps": 6,
+   "disconnects": 8,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:14",
+   "ap": "ap-0",
+   "snr_db": 33.5,
+   "rssi_dbm": null,
+   "speed_mbps": 173,
+   "disconnects": 4,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:15",
+   "ap": "ap-1",
+   "snr_db": 13.0,
+   "rssi_dbm": -70.0,
+   "speed_mbps": null,
+   "disconnects": 4,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:16",
+   "ap": "ap-2",
+   "snr_db": null,
+   "rssi_dbm": -82.0,
+   "speed_mbps": 24,
+   "disconnects": 7,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:17",
+   "ap": "ap-3",
+   "snr_db": 25.3,
+   "rssi_dbm": null,
+   "speed_mbps": 72,
+   "disconnects": 8,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:18",
+   "ap": "ap-0",
+   "snr_db": 35.8,
+   "rssi_dbm": -55.0,
+   "speed_mbps": 54,
+   "disconnects": 0,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:19",
+   "ap": "ap-1",
+   "snr_db": 26.2,
+   "rssi_dbm": null,
+   "speed_mbps": 144,
+   "disconnects": 7,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:1a",
+   "ap": "ap-2",
+   "snr_db": null,
+   "rssi_dbm": null,
+   "speed_mbps": 12,
+   "disconnects": 8,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:1b",
+   "ap": "ap-3",
+   "snr_db": 7.7,
+   "rssi_dbm": -70.0,
+   "speed_mbps": 173,
+   "disconnects": null,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:1c",
+   "ap": "ap-0",
+   "snr_db": 14.2,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 3,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 2,
+   "client": "aa:bb:cc:00:00:1d",
+   "ap": "ap-1",
+   "snr_db": 20.7,
+   "rssi_dbm": null,
+   "speed_mbps": 433,
+   "disconnects": 7,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:1e",
+   "ap": "ap-2",
+   "snr_db": 29.8,
+   "rssi_dbm": -91.0,
+   "speed_mbps": 173,
+   "disconnects": 2,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:1f",
+   "ap": "ap-3",
+   "snr_db": 5.8,
+   "rssi_dbm": null,
+   "speed_mbps": 866,
+   "disconnects": 5,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:20",
+   "ap": "ap-0",
+   "snr_db": 9.2,
+   "rssi_dbm": null,
+   "speed_mbps": 54,
+   "disconnects": 4,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:21",
+   "ap": "ap-1",
+   "snr_db": null,
+   "rssi_dbm": -74.0,
+   "speed_mbps": 72,
+   "disconnects": 3,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:22",
+   "ap": "ap-2",
+   "snr_db": 19.4,
+   "rssi_dbm": null,
+   "speed_mbps": 144,
+   "disconnects": 5,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:23",
+   "ap": "ap-3",
+   "snr_db": 12.6,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 2,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:24",
+   "ap": "ap-0",
+   "snr_db": 40.1,
+   "rssi_dbm": -59.0,
+   "speed_mbps": 54,
+   "disconnects": null,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:25",
+   "ap": "ap-1",
+   "snr_db": 27.8,
+   "rssi_dbm": null,
+   "speed_mbps": 173,
+   "disconnects": 4,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:26",
+   "ap": "ap-2",
+   "snr_db": 15.7,
+   "rssi_dbm": null,
+   "speed_mbps": 866,
+   "disconnects": 5,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 3,
+   "client": "aa:bb:cc:00:00:27",
+   "ap": "ap-3",
+   "snr_db": null,
+   "rssi_dbm": null,
+   "speed_mbps": 144,
+   "disconnects": 7,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:28",
+   "ap": "ap-0",
+   "snr_db": 16.6,
+   "rssi_dbm": null,
+   "speed_mbps": 72,
+   "disconnects": 3,
+   "observed_minutes": 45
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:29",
+   "ap": "ap-1",
+   "snr_db": 26.1,
+   "rssi_dbm": null,
+   "speed_mbps": 24,
+   "disconnects": 0,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2a",
+   "ap": "ap-2",
+   "snr_db": 14.1,
+   "rssi_dbm": -59.0,
+   "speed_mbps": null,
+   "disconnects": 1,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2b",
+   "ap": "ap-3",
+   "snr_db": 37.4,
+   "rssi_dbm": null,
+   "speed_mbps": 433,
+   "disconnects": 5,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2c",
+   "ap": "ap-0",
+   "snr_db": null,
+   "rssi_dbm": -70.0,
+   "speed_mbps": 24,
+   "disconnects": 0,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2d",
+   "ap": "ap-1",
+   "snr_db": 37.0,
+   "rssi_dbm": -58.0,
+   "speed_mbps": 24,
+   "disconnects": null,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2e",
+   "ap": "ap-2",
+   "snr_db": 20.3,
+   "rssi_dbm": null,
+   "speed_mbps": 54,
+   "disconnects": 2,
+   "observed_minutes": 240
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:2f",
+   "ap": "ap-3",
+   "snr_db": 27.1,
+   "rssi_dbm": null,
+   "speed_mbps": 144,
+   "disconnects": 6,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:30",
+   "ap": "ap-0",
+   "snr_db": 26.6,
+   "rssi_dbm": -68.0,
+   "speed_mbps": 72,
+   "disconnects": 5,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 4,
+   "client": "aa:bb:cc:00:00:31",
+   "ap": "ap-1",
+   "snr_db": 10.0,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 8,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:32",
+   "ap": "ap-2",
+   "snr_db": 7.2,
+   "rssi_dbm": null,
+   "speed_mbps": 173,
+   "disconnects": 5,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:33",
+   "ap": "ap-3",
+   "snr_db": 22.2,
+   "rssi_dbm": -60.0,
+   "speed_mbps": 173,
+   "disconnects": 5,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:34",
+   "ap": "ap-0",
+   "snr_db": null,
+   "rssi_dbm": null,
+   "speed_mbps": 12,
+   "disconnects": 3,
+   "observed_minutes": 30
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:35",
+   "ap": "ap-1",
+   "snr_db": 35.7,
+   "rssi_dbm": null,
+   "speed_mbps": 54,
+   "disconnects": 2,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:36",
+   "ap": "ap-2",
+   "snr_db": 18.9,
+   "rssi_dbm": -73.0,
+   "speed_mbps": 54,
+   "disconnects": null,
+   "observed_minutes": 29
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:37",
+   "ap": "ap-3",
+   "snr_db": null,
+   "rssi_dbm": -57.0,
+   "speed_mbps": 866,
+   "disconnects": 2,
+   "observed_minutes": 1440
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:38",
+   "ap": "ap-0",
+   "snr_db": 39.6,
+   "rssi_dbm": null,
+   "speed_mbps": null,
+   "disconnects": 4,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:39",
+   "ap": "ap-1",
+   "snr_db": 38.1,
+   "rssi_dbm": -65.0,
+   "speed_mbps": 144,
+   "disconnects": 8,
+   "observed_minutes": 5
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:3a",
+   "ap": "ap-2",
+   "snr_db": 24.5,
+   "rssi_dbm": null,
+   "speed_mbps": 433,
+   "disconnects": 2,
+   "observed_minutes": 20
+  },
+  {
+   "poll": 5,
+   "client": "aa:bb:cc:00:00:3b",
+   "ap": "ap-3",
+   "snr_db": 12.9,
+   "rssi_dbm": null,
+   "speed_mbps": 12,
+   "disconnects": 1,
+   "observed_minutes": 1440
+  }
+ ]
+}

@@ -32,6 +32,13 @@ trap 'rc=$?; if [[ $rc -ne 0 ]]; then warn "install FAILED (exit $rc). Transcrip
 # ---------------------------------------------------------------- PRECHECK
 log "PRECHECK"
 FAIL=0
+# Release authenticity before any content of this checkout/package is built or executed as root.
+if git -C "$ROOT" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]] || die "the checkout at $ROOT has local modifications: refusing" 3
+  INM_MODE="$MODE" verify_release_ref HEAD || die "INSTALL REFUSED: this checkout failed release signature verification. Nothing was installed." 3
+else
+  INM_MODE="$MODE" verify_release_dir "$ROOT" || die "INSTALL REFUSED: this package failed release signature verification. Nothing was installed." 3
+fi
 preflight
 [[ $FAIL -eq 0 ]] || die "preflight failed: fix the [FAIL] items above. Nothing was installed or changed." 3
 if [[ -f "$ENV_FILE" ]]; then

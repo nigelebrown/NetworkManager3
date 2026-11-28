@@ -15,7 +15,8 @@ psycopg[binary]>=3.2
 nats-py>=2.9
 python-multipart
 
-paramiko>=3.4,<4  # 4+ dropped ssh-rsa/SHA-1, which older Instant APs still need
+paramiko>=5.1,<6  # modern algorithms only (rsa-sha2, ed25519, ecdsa, curve25519); legacy ssh-rsa/SHA-1 devices
+                   # go through backend/aruba/ssh_legacy.py ONLY when explicitly approved per device (rc18)
 
 alembic>=1.13,<2
 

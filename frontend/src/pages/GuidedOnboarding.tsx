@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { Card } from "../components/ui";
+import { Link, useSearchParams } from "react-router";
+import { Card, ErrorNote } from "../components/ui";
 import DeviceRestBootstrap from "../components/DeviceRestBootstrap";
 import { useLoad } from "../components/useLoad";
 import { Notice, PageHeader, Pill, ago, btn, btn2, btnDanger, inputCls, statusTone, useAction } from "../components/viz";
@@ -23,16 +23,27 @@ export default function GuidedOnboarding() {
   const act = useAction();
   const list = useLoad(() => wf.list(), [], 15000, ["workflows"]);
   const [w, setW] = useState<Workflow | null>(null);
-  const load = async () => { if (id) setW(await wf.get(id)); };
-  useEffect(() => { setW(null); load().catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // A failed load (e.g. 429 request limit, network) is shown as an error - never as "no workflow" or the start page.
+  const load = async () => { if (id) { try { setW(await wf.get(id)); setLoadError(null); } catch (e) { setLoadError(e instanceof Error ? e.message : String(e)); } } };
+  useEffect(() => { setW(null); setLoadError(null); void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
   // live discovery progress
   useEffect(() => {
     if (!w?.discovery || !["QUEUED", "SCANNING"].includes(w.discovery.status)) return;
-    const t = setInterval(() => load().catch(() => {}), 2000);
+    const t = setInterval(() => void load(), 2000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w?.discovery?.status, id]);
   const run = (fn: () => Promise<Workflow | void>, ok: string) => act.run(async () => { const r = await fn(); if (r) setW(r); return ok; });
+
+  if (id && !w) return <div className="space-y-4">
+    <PageHeader eyebrow="Sites & inventory" title="Add & configure devices" subtitle="Loading the saved workflow." />
+    {loadError ? <Card title="The workflow could not be loaded">
+      <ErrorNote error={loadError} />
+      <div className="mt-2 flex gap-2"><button className={btn} onClick={() => void load()}>Retry</button>
+        <button className={btn2} onClick={() => setParams({})}>All workflows</button></div>
+    </Card> : <p className="text-sm text-slate-500">Loading workflow…</p>}
+  </div>;
 
   if (!id || !w) return <div className="space-y-4">
     <PageHeader eyebrow="Sites & inventory" title="Add & configure devices" subtitle="One guided workflow: site → credentials → discovery → import & backup → templates → preview → independent approval → apply with readback → monitoring. Progress is saved; you can leave and resume." />
@@ -48,7 +59,7 @@ export default function GuidedOnboarding() {
         </td><td>{x.site}</td>
         <td><Pill value={LABEL[x.step] ?? x.step} tone="info" /></td><td><Pill value={x.state} tone={statusTone(x.state === "DONE" ? "PASS" : x.state)} /></td>
         <td className="text-xs text-slate-500">{x.devices} device(s) · {ago(x.updated_at)}</td></tr>)}</tbody></table>
-      {!list.data?.length && <p className="text-sm text-slate-500">No workflows yet.</p>}
+      {list.error ? <ErrorNote error={list.error} /> : list.data && !list.data.length && <p className="text-sm text-slate-500">No workflows yet.</p>}
     </Card>
     <div className="flex flex-wrap gap-3"><Link className={btn2} to="/onboarding/manual">Add a device manually</Link>
       {me?.role === "admin" && <Link className={btn} to="/onboarding/import">Import Aruba inventory CSV</Link>}</div>
@@ -66,6 +77,7 @@ export default function GuidedOnboarding() {
       </li>)}
     </ol>
     <Notice error={act.error} message={act.message} />
+    {loadError && <ErrorNote error={`Refreshing this workflow failed: ${loadError}`} />}
     {w.state !== "CANCELLED" && <>
       {cur <= 1 && <CredentialStep w={w} run={run} />}
       {cur >= 2 && cur <= 3 && <DiscoverStep w={w} run={run} reload={load} />}
@@ -260,6 +272,12 @@ function ApproveApplyStep({ w, run, me, reload }: { w: Workflow; run: Run; me: R
         ? "Hardware writes were denied. Monitoring can proceed without applying configuration; plans remain pending."
         : "Configuration completes only after each device is verified. No unapproved hardware writes."}</span>
     </div>
+    {(w.outcome.monitoring as { configuration_pending?: boolean } | undefined)?.configuration_pending && <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2" data-testid="monitoring-pending">
+      <div className="text-sm font-semibold text-amber-900">Monitored — {w.plans.filter(p => p.state !== "APPLIED_VERIFIED").length} change plan(s) not applied (approve, certify or unlock, then apply)</div>
+      <p className="text-xs text-amber-900">Read-only monitoring runs while configuration stays pending. The plans keep their approvals and are re-evaluated after certification or unlocking.</p>
+      <DeviceTable w={w} />
+      <button className={`${btn2} mt-2`} onClick={() => run(() => wf.monitor(w.id), "Read-only monitoring polled again. Configuration is NOT applied.")}>Poll again</button>
+    </div>}
     {w.outcome.execution && <ul className="mt-2 text-xs">{(w.outcome.execution as { plan_id: string; decision: string; outcome: string | null; denial_reason: string | null }[]).map(r =>
       <li key={r.plan_id} className={r.outcome === "APPLIED_VERIFIED" ? "text-emerald-300" : "text-amber-300"}>{r.plan_id.slice(0, 8)}: {r.outcome ?? `${r.decision} — ${r.denial_reason}`}</li>)}</ul>}
     <Notice error={act.error} message={act.message} />

@@ -20,6 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 
 from ..database.session import session_scope
 from ..security.deps import resolve_user, user_site_scope
@@ -98,11 +99,18 @@ class Hub:
         self.clients.discard(c)
         try:
             await c.ws.close(code=code, reason=reason)
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("best-effort closing a dropped WebSocket: %s", type(_exc).__name__)
 
 
 hub = Hub()
+
+
+def _session_identity(token: str):
+    # Pool checkout and SQL are blocking. Release the connection before returning identity data to ASGI.
+    with session_scope() as db:
+        user, payload = resolve_user(db, token)
+        return user.username, user.role, user_site_scope(db, user), float(payload["exp"]), user.must_change_password
 
 
 @router.websocket("/ws/v1/events")
@@ -116,12 +124,11 @@ async def events(ws: WebSocket):
         await ws.close(code=4401, reason="authentication required")
         return
     try:
-        with session_scope() as db:
-            user, payload = resolve_user(db, first["token"])
-            if user.must_change_password:
-                await ws.close(code=4403, reason="password change required")
-                return
-            conn = Conn(ws, user.username, user.role, user_site_scope(db, user), float(payload["exp"]))
+        username, role, scope, exp, must_change = await run_in_threadpool(_session_identity, first["token"])
+        if must_change:
+            await ws.close(code=4403, reason="password change required")
+            return
+        conn = Conn(ws, username, role, scope, exp)
     except Exception:
         await ws.close(code=4401, reason="invalid or expired session")
         return
@@ -152,10 +159,11 @@ async def events(ws: WebSocket):
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     except WebSocketDisconnect:
-        pass
+        pass  # client disconnected: normal end of the session
     finally:
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         hub.clients.discard(conn)
 
 
@@ -193,7 +201,7 @@ async def run_ui_subscriber(stop: asyncio.Event) -> None:
             if nc:
                 try:
                     await nc.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    log.debug("best-effort NATS close after a bus error: %s", type(_exc).__name__)
         if not stop.is_set():
             await asyncio.sleep(3)

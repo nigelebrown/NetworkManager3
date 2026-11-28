@@ -60,8 +60,15 @@ def _device_capabilities(db: Session, d) -> dict:
     certs = certification_map(db, d)
     posture = write_posture()
     rows = []
+    model = (d.model or "").upper()
     for op in spec.typed_operations:
         cert = certs.get(op, "UNCERTIFIED")
+        # rc18 (2.11): per-model capability detection; the two CX families are not assumed identical.
+        if op == "switch.route.ospf" and "6200" not in model:
+            rows.append({"operation": op, "software": "UNSUPPORTED_BY_MODEL", "certification": "UNSUPPORTED",
+                         "executable_now": False,
+                         "reason": "CX 6100 supports static routing only; OSPF needs a CX 6200 (Access OSPF)."})
+            continue
         if cert != "CERTIFIED_WRITE":
             why = f"Not certified for {model_family(d.model)} firmware {firmware_train(d.firmware)} ({env})."
         elif env == "HARDWARE" and posture["hardware_writes"] == "LOCKED":
@@ -72,6 +79,10 @@ def _device_capabilities(db: Session, d) -> dict:
                      "executable_now": cert == "CERTIFIED_WRITE" and (env != "HARDWARE" or
                                                                       posture["hardware_writes"] == "ENABLED"),
                      "reason": why})
+    if spec.key.startswith("aruba_cx"):
+        rows.append({"operation": "switch.route.bgp", "software": "UNSUPPORTED_BY_MODEL", "certification": "UNSUPPORTED",
+                     "executable_now": False,
+                     "reason": "BGP is not available on CX 6100 or CX 6200 platforms; it is not offered."})
     if spec.family == "access_point":
         rows.append({"operation": "config.restore", "software": "GUIDED", "certification": "UNSUPPORTED",
                      "executable_now": False,
@@ -157,28 +168,38 @@ def export(body: ExportInput, request: Request, db: Session = Depends(get_db),
     if not start < end or end - start > timedelta(days=366):
         raise HTTPException(422, "Range must be ordered and at most 366 days.")
     reveal = body.reveal_identities and user.role == "admin"
+    # rc18 (INTEG-P11-04): exports honour the requester's site scope. A site-restricted auditor gets only the
+    # devices of the sites granted to them, and only audit rows about those devices (or written by them).
+    from .workflows import _authorized_sites
+    allowed = _authorized_sites(db, user)                      # None = all sites
+    visible = None if allowed is None else {d.id for d in db.scalars(select(InmDevice).where(
+        InmDevice.site_id.in_(allowed or {"-"})))}
+    scope = "all-sites" if allowed is None else f"sites:{len(allowed)}:{','.join(sorted(allowed)) or 'none'}"[:200]
     if body.kind == "audit":
         cols = ["ts", "username", "action", "target", "success", "detail"]
         rows = [{"ts": iso(a.ts), "username": R.mask_user(a.username, reveal), "action": a.action,
                  "target": a.target, "success": a.success, "detail": a.detail}
                 for a in db.scalars(select(AuditLog).where(AuditLog.ts >= start, AuditLog.ts < end)
-                                    .order_by(AuditLog.id).limit(50000))]
+                                    .order_by(AuditLog.id).limit(50000))
+                if visible is None or a.target in visible or a.username == user.username]
     elif body.kind == "inventory":
         cols = ["id", "source_type", "vendor", "family", "model", "serial_number", "hostname", "firmware", "status"]
-        rows = [{c: getattr(d, c) for c in cols} for d in db.scalars(select(InmDevice).where(InmDevice.source_type == "REAL"))]
+        rows = [{c: getattr(d, c) for c in cols} for d in db.scalars(select(InmDevice).where(InmDevice.source_type == "REAL"))
+                if visible is None or d.id in visible]
     else:
         cols = ["change_at", "device_id", "level", "actor", "change_type", "supersedes_id"]
         rows = [{"change_at": iso(a.change_at), "device_id": a.device_id, "level": a.level,
                  "actor": R.mask_user(a.actor, reveal), "change_type": a.change_type, "supersedes_id": a.supersedes_id}
                 for a in db.scalars(select(ChangeAttribution).where(ChangeAttribution.change_at >= start,
-                                                                    ChangeAttribution.change_at < end))]
+                                                                    ChangeAttribution.change_at < end))
+                if visible is None or a.device_id in visible]
     export_id = str(uuid.uuid4())
-    meta = {"export_id": export_id, "kind": body.kind, "requested_by": user.username, "scope": "all-sites",
+    meta = {"export_id": export_id, "kind": body.kind, "requested_by": user.username, "scope": scope,
             "range_utc": [iso(start), iso(end)], "identities": "REVEALED" if reveal else "MASKED",
             "classification": "INTERNAL", "generation_sha": os.environ.get("INM_GIT_COMMIT", "unknown"),
             "generated_at": iso(now())}
     ex = R.build_export(rows=rows, columns=cols, meta=meta, signing_key=report_signing_key())
-    db.add(ReportExport(id=export_id, kind=body.kind, requested_by=user.username, scope="all-sites",
+    db.add(ReportExport(id=export_id, kind=body.kind, requested_by=user.username, scope=scope[:200],
                         range_start=start, range_end=end, sha256=ex["sha256"], signature=ex["signature"],
                         row_count=ex["row_count"], meta=meta))
     audit(db, "report_exported", username=user.username, target=export_id,

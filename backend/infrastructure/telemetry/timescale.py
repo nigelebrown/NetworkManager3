@@ -106,7 +106,8 @@ class TimescaleTelemetryStore:
         elif url.startswith("sqlite"):
             self.engine = create_engine(url)
         else:
-            self.engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+            self.engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5,
+                                        connect_args={"options": "-c timezone=UTC"})   # UTC whatever the server TZ
 
     # ---- schema ------------------------------------------------------------------------
     @property

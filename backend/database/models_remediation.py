@@ -109,6 +109,12 @@ class NotificationChannel(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(_TS, default=utcnow)
+    # rc18 (0016) integrations: non-secret settings (SMTP host/port/TLS/user, webhook auth mode, heartbeat
+    # interval) and Fernet-encrypted credentials (SMTP password, webhook bearer/HMAC secret). Never returned.
+    config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_test_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    last_test_ok: Mapped[bool | None] = mapped_column(nullable=True)
 
 
 class NotificationDelivery(Base):
@@ -119,7 +125,7 @@ class NotificationDelivery(Base):
     dedupe_key: Mapped[str] = mapped_column(String(160), unique=True)
     channel_id: Mapped[str] = mapped_column(String(36), index=True)
     alert_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    kind: Mapped[str] = mapped_column(String(12))                      # OPENED | ESCALATED | RESOLVED | TEST
+    kind: Mapped[str] = mapped_column(String(24))   # OPENED | ESCALATED | RESOLVED | TEST | EVENT | HEARTBEAT | printer_report
     payload: Mapped[dict] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(10), default="PENDING", index=True)   # PENDING | SENDING | SENT | DEAD
     claim_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)

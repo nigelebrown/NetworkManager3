@@ -18,8 +18,10 @@ Every write is followed by a readback; any mismatch raises so the executor rolls
 HARDWARE CERTIFICATION is recorded per model/firmware by the certification workflow, not assumed here.
 """
 from __future__ import annotations
+import logging
 
 import json
+from pathlib import Path
 import re
 import time
 from urllib.parse import quote
@@ -27,6 +29,8 @@ from urllib.parse import quote
 import httpx
 
 from . import Credentials, WriterError
+
+_log = logging.getLogger(__name__)
 
 # Default/preferred REST train. The session negotiates the real one per switch (E2E-09): it logs in on the
 # preferred version and, if the switch does not serve it, reads GET /rest and picks the newest supported version.
@@ -204,8 +208,8 @@ class CxSession:
         try:
             if self._open:
                 self._http.post(self.prefix + "/logout", headers=self._headers())
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as _exc:
+            _log.debug("best-effort CX REST logout: %s", type(_exc).__name__)
         finally:
             self._open = False
             self._http.close()
@@ -216,6 +220,11 @@ class CxSession:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+RC17_OPS = ("switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy", "switch.vsf.member")
+RC18_OPS = ("switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting", "switch.port.auth_policy",
+            "switch.route.ospf")
 
 
 def read_cx_system(request, attributes: str) -> dict:
@@ -239,14 +248,28 @@ class ArubaCxWriter:
                   "switch.port.admin_state", "switch.port.poe", "switch.lldp", "switch.lag.members",
                   "switch.central.disable", "switch.port.description", "switch.port.stp_bpdu_guard",
                   "switch.port.storm_control", "switch.port.qos_trust", "switch.system.ntp", "switch.system.dns",
-                  "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab")
+                  "switch.system.syslog", "config.restore", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab",
+                  "switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy", "switch.vsf.member",
+                  "switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting", "switch.port.auth_policy",
+                  "switch.route.ospf")
 
     def __init__(self, creds: Credentials, *, verify: bool | str = True, timeout: float = 15.0,
                  transport: httpx.BaseTransport | None = None):
         self.creds = creds
         self._restore_checkpoints: dict[str, bytes] = {}
+        self._session_args = {"verify": verify, "timeout": timeout, "transport": transport}
         self.session = CxSession(creds.host, creds.username, creds.password, verify=verify, timeout=timeout,
                                  transport=transport, api_version=(creds.extra or {}).get("api_version"))
+
+    def reconnect(self) -> None:
+        """Fresh session after a reboot (the old HTTP client cannot be reused). Read-only until a caller writes."""
+        try:
+            self.session.close()
+        except Exception as _exc:  # noqa: BLE001 — the old connection died with the reboot
+            _log.debug("best-effort closing a session that died with the reboot: %s", type(_exc).__name__)
+        self.session = CxSession(self.creds.host, self.creds.username, self.creds.password, **self._session_args,
+                                 api_version=(self.creds.extra or {}).get("api_version"))
+        self.session.open()
 
     @property
     def prefix(self) -> str:
@@ -307,6 +330,30 @@ class ArubaCxWriter:
         d = read_cx_system(self._req, "platform_name,software_version,hostname")
         return {"model": d.get("platform_name"), "firmware": d.get("software_version"), "hostname": d.get("hostname"),
                 "serial_number": d.get("serial_number"), **self.protocol()}
+
+    def firmware_upload(self, path, *, image: str = "secondary", filename: str | None = None) -> dict:
+        """Upload an image to the NON-booted slot (documented AOS-CX REST: PUT /firmware?image=<slot> with a
+        multipart 'fileupload'). Never reboots. The switch itself validates the image signature on upload."""
+        if image not in ("primary", "secondary"):
+            raise WriterError("INVALID", "Image slot must be primary or secondary.")
+        status = self.firmware_status()
+        if status.get("booted_image") == image:
+            raise WriterError("PRECONDITION", f"Refusing to overwrite the booted {image} image.")
+        with open(path, "rb") as fh:
+            self._req("PUT", "/firmware", params={"image": image}, files={"fileupload": (filename or Path(path).name, fh)},
+                      timeout=600.0)
+        return self.firmware_status()
+
+    def firmware_boot(self, image: str) -> None:
+        """Reboot into the given slot (documented: POST /boot?image=<slot>). A dropped connection afterwards is
+        expected; callers verify by reading /firmware again, never by re-sending the boot request."""
+        if image not in ("primary", "secondary"):
+            raise WriterError("INVALID", "Image slot must be primary or secondary.")
+        try:
+            self._req("POST", "/boot", params={"image": image})
+        except WriterError as exc:
+            if exc.category != "CONNECTION_LOST":
+                raise
 
     def firmware_status(self) -> dict:
         """Documented AOS-CX REST singleton, read-only; never stage or reboot."""
@@ -383,8 +430,8 @@ class ArubaCxWriter:
                 mw = ps.get("measured_power") if "measured_power" in ps else ps.get("power_drawn")
                 p["poe_w"] = round(mw / 1000.0, 1) if isinstance(mw, (int, float)) and mw > 100 else mw
                 p["poe_status"] = ps.get("detection_status") or ps.get("status")
-            except WriterError:
-                pass
+            except WriterError as _exc:
+                _log.debug("PoE status unavailable on %s (shown as not measured): %s", p["name"], type(_exc).__name__)
             try:
                 nb = self._req("GET", f"/system/interfaces/{q}/lldp_neighbors", params={"depth": 2}).json() or {}
                 for n in (nb.values() if isinstance(nb, dict) else []):
@@ -394,8 +441,8 @@ class ArubaCxWriter:
                                      "port": info.get("port_description") or n.get("port_id"),
                                      "capabilities": info.get("chassis_capability_enabled")}
                         break
-            except WriterError:
-                pass
+            except WriterError as _exc:
+                _log.debug("LLDP neighbour unavailable on %s (shown as not measured): %s", p["name"], type(_exc).__name__)
         import os
         if os.environ.get("INM_CX_OPTICAL_DOM", "false").lower() == "true":
             from ..device_diagnostics import parse_optical_dom
@@ -561,12 +608,363 @@ class ArubaCxWriter:
             return [{"method": "PUT", "path": f"/system/interfaces/{lag}",
                      "json": {"name": lag, "type": "lag", "admin": "up", "lacp": op.get("lacp", "active"),
                               "interfaces": members}}]
+        if k in RC17_OPS:
+            return self._render_rc17(op)
+        if k in RC18_OPS:
+            return self._render_rc18(op)
         raise WriterError("UNSUPPORTED", f"{k} is not supported by {self.key}")
+
+    # ---- rc17: ACLs, static routes, DSCP QoS policy, VSF member provisioning --------------------------------
+    # Request shapes follow the AOS-CX 10.x REST object model (acls "{name},{list_type}" with cfg_aces, vrfs/*/
+    # static_routes + static_nexthops, classes/policies with cfg_entries, vsf_members/*/links). Exact attribute
+    # names must be confirmed against the device's own Swagger (/api/) before certification — see
+    # docs/PROTOCOL_ASSUMPTIONS (A-CX-09..13). A device that rejects a body returns DEVICE_REJECTED; nothing is guessed.
+    def _ref(self, path: str) -> str:
+        return f"{self.prefix}{path}"
+
+    @staticmethod
+    def _cx_ip(v: str) -> str:
+        import ipaddress
+        if v == "any":
+            return "any"
+        n = ipaddress.IPv4Network(v)
+        return f"{n.network_address}/{n.netmask}"
+
+    def _render_rc17(self, op: dict) -> list[dict]:
+        from urllib.parse import quote
+        k = op["op"]
+        if k == "switch.acl.define":
+            aces = {}
+            for e in op["entries"]:
+                ace = {"action": e["action"], "src_ip": self._cx_ip(e.get("src", "any")),
+                       "dst_ip": self._cx_ip(e.get("dst", "any"))}
+                if e.get("protocol", "any") != "any":
+                    ace["protocol"] = {"tcp": 6, "udp": 17, "icmp": 1}[e["protocol"]]
+                if e.get("dst_port") is not None:
+                    ace["dst_l4_port_min"] = ace["dst_l4_port_max"] = e["dst_port"]
+                if e.get("comment"):
+                    ace["comment"] = str(e["comment"])[:64]
+                aces[str(e["seq"])] = ace
+            return [{"method": "PUT", "path": f"/system/acls/{op['name']},ipv4",
+                     "json": {"name": op["name"], "list_type": "ipv4", "cfg_aces": aces}}]
+        if k == "switch.acl.apply":
+            ref = self._ref(f"/system/acls/{op['value']},ipv4") if op.get("value") else None
+            return [{"method": "PATCH", "path": f"/system/interfaces/{_port(op['port'])}", "json": {"aclv4_in_cfg": ref}}]
+        if k == "switch.route.static":
+            base = "/system/vrfs/default/static_routes"
+            route = f"{base}/{quote(op['prefix'], safe='')}"
+            return [{"method": "POST", "path": base, "create_if_missing": route,
+                     "json": {"prefix": op["prefix"], "address_family": "ipv4", "type": "forward",
+                              "vrf": self._ref("/system/vrfs/default")}},
+                    {"method": "POST", "path": f"{route}/static_nexthops",
+                     "json": {"id": 0, "ip_address": op["next_hop"], "distance": op.get("distance", 1), "type": "nexthop"}}]
+        if k == "switch.qos.dscp_policy":
+            name = op["name"]
+            calls = [{"method": "PUT", "path": f"/system/classes/{name},ipv4",
+                      "json": {"name": name, "type": "ipv4", "cfg_entries": {"10": {
+                          "type": "match", "protocol": {"tcp": 6, "udp": 17}[op["protocol"]],
+                          "dst_l4_port_min": op["dst_port"], "dst_l4_port_max": op["dst_port"]}}}},
+                     {"method": "PUT", "path": f"/system/policies/{name}",
+                      "json": {"name": name, "cfg_entries": {"10": {"class": self._ref(f"/system/classes/{name},ipv4"),
+                                                                   "action_set": {"dscp": op["dscp"]}}}}}]
+            calls += [{"method": "PATCH", "path": f"/system/interfaces/{_port(p)}",
+                       "json": {"policy_in_cfg": self._ref(f"/system/policies/{name}")}} for p in op.get("ports", [])]
+            return calls
+        if k == "switch.vsf.member":
+            n = int(op["member"])
+            calls = [{"method": "PUT", "path": f"/system/vsf_members/{n}", "json": {"id": n, "type": op["member_type"]}}]
+            for link, ports in sorted(op["links"].items()):
+                calls.append({"method": "PUT", "path": f"/system/vsf_members/{n}/links/{link}",
+                              "json": {"id": int(link), "interfaces": [self._ref(f"/system/interfaces/{_port(p)}") for p in ports]}})
+            return calls
+        raise WriterError("UNSUPPORTED", f"{k} is not supported by {self.key}")
+
+    def _readback_rc17(self, op: dict) -> tuple[bool, dict]:
+        from urllib.parse import quote
+        k = op["op"]
+
+        def get(path, **params):
+            try:
+                return self._req("GET", path, params=params or None).json()
+            except WriterError as exc:
+                if "HTTP 404" in str(exc):
+                    return None
+                raise
+        if k == "switch.acl.define":
+            d = get(f"/system/acls/{op['name']},ipv4", depth=2) or {}
+            got = d.get("cfg_aces") or {}
+            want = self._render_rc17(op)[0]["json"]["cfg_aces"]
+            ok = {s: {x: a.get(x) for x in want[s]} for s, a in got.items() if s in want} == want and set(got) == set(want)
+            return ok, {"entries": len(got), "sequences": sorted(got, key=int)}
+        if k == "switch.acl.apply":
+            d = get(f"/system/interfaces/{_port(op['port'])}") or {}
+            ref = d.get("aclv4_in_cfg")
+            ok = (ref is None) if not op.get("value") else str(ref or "").endswith(f"/system/acls/{op['value']},ipv4")
+            return ok, {"aclv4_in_cfg": ref}
+        if k == "switch.route.static":
+            hops = get(f"/system/vrfs/default/static_routes/{quote(op['prefix'], safe='')}/static_nexthops", depth=2) or {}
+            got = sorted(str(h.get("ip_address")) for h in hops.values() if isinstance(h, dict))
+            return op["next_hop"] in got, {"prefix": op["prefix"], "next_hops": got}
+        if k == "switch.qos.dscp_policy":
+            pol = get(f"/system/policies/{op['name']}", depth=2) or {}
+            dscp = ((pol.get("cfg_entries") or {}).get("10") or {}).get("action_set", {}).get("dscp")
+            applied = [p for p in op.get("ports", []) if str((get(f"/system/interfaces/{_port(p)}") or {})
+                                                            .get("policy_in_cfg") or "").endswith(f"/system/policies/{op['name']}")]
+            return dscp == op["dscp"] and len(applied) == len(op.get("ports", [])), {"dscp": dscp, "applied_ports": applied}
+        if k == "switch.vsf.member":
+            n = int(op["member"])
+            m = get(f"/system/vsf_members/{n}", depth=1) or {}
+            links = {l: sorted(str(x).rsplit("/", 1)[-1].replace("%2F", "/") for x in (get(f"/system/vsf_members/{n}/links/{l}") or {}).get("interfaces") or [])
+                     for l in op["links"]}
+            ok = m.get("type") == op["member_type"] and all(links[l] == sorted(op["links"][l]) for l in op["links"])
+            return ok, {"member": n, "type": m.get("type"), "links": links}
+        raise WriterError("UNSUPPORTED", k)
+
+    # ---- rc18: RADIUS / AAA lifecycle, port authentication policy, single-area OSPF (6200) ------------------------
+    # Documented AOS-CX 10.x resources (developer.arubanetworks.com/aoscx): radius_servers keyed
+    # "{address},{port},{port_type}" under a VRF; aaa_server_groups keyed by group_name with membership and priority
+    # held on each server's `server_group` map; aaa_accounting_attributes keyed by session_type "port-access";
+    # port_access_auth_configurations keyed by authentication_method; ospf_routers keyed by instance_tag.
+    @staticmethod
+    def _srv_path(r: dict) -> str:
+        return f"/system/vrfs/{r['vrf']}/radius_servers/{r['address']},{r['port']},{r['port_type']}"
+
+    _SRV_FIELDS = ("timeout", "retries", "accounting_udp_port", "auth_type", "tracking_enable")
+    _AUTH_FIELDS = ("auth_enable", "reauth_enable", "cached_reauth_enable", "reauth_period", "quiet_period",
+                    "max_retries", "max_requests", "eapol_timeout", "discovery_period", "radius_server_group")
+
+    @staticmethod
+    def _norm18(op: dict) -> dict:
+        """Validate + fill documented defaults (vrf, port, port_type...) for any caller, keeping the resolved secret."""
+        from ...domain import change_control as CC
+        secret = op.get("_secret")
+        clean = {k: v for k, v in op.items() if k != "_secret"}
+        if clean.get("op") == "switch.aaa.radius_server" and not clean.get("secret_ref") and \
+                clean.get("action", "create") == "create":
+            clean["secret_ref"] = "resolved" if secret else "unresolved"   # apply still refuses without _secret
+        try:
+            out = CC.validate_operation(clean, family="switch")
+        except CC.PolicyViolation as exc:
+            raise WriterError("INVALID", str(exc)) from None
+        return out | ({"_secret": secret} if secret else {})
+
+    def _render_rc18(self, op: dict) -> list[dict]:
+        op = self._norm18(op)
+        k, action = op["op"], op.get("action", "create")
+        if k == "switch.aaa.radius_server":
+            body = {f: op[f] for f in self._SRV_FIELDS if f in op}
+            if op.get("_secret"):
+                body["passkey"] = op["_secret"]
+            elif action == "create" or op.get("secret_ref"):
+                body["passkey"] = "********"          # render preview only; apply refuses a masked secret
+            if action == "create":
+                return [{"method": "POST", "path": f"/system/vrfs/{op['vrf']}/radius_servers",
+                         "json": {"address": op["address"], "port": op["port"], "port_type": op["port_type"],
+                                  "vrf": self._ref(f"/system/vrfs/{op['vrf']}"), **body}}]
+            if action == "modify":
+                return [{"method": "PATCH", "path": self._srv_path(op), "json": body}]
+            return [{"method": "DELETE", "path": self._srv_path(op), "json": None}]
+        if k == "switch.aaa.server_group":
+            gpath = f"/system/aaa_server_groups/{op['group_name']}"
+            if action == "delete":
+                return [{"method": "GROUP_MEMBERS", "path": gpath, "json": {"servers": []}},
+                        {"method": "DELETE", "path": gpath, "json": None}]
+            first = ({"method": "POST", "path": "/system/aaa_server_groups",
+                      "json": {"group_name": op["group_name"], "group_type": "radius",
+                               "load_balancing_mode": op["load_balancing_mode"]}} if action == "create" else
+                     {"method": "PATCH", "path": gpath, "json": {"load_balancing_mode": op["load_balancing_mode"]}})
+            return [first, {"method": "GROUP_MEMBERS", "path": gpath, "json": {"servers": op["servers"]}}]
+        if k == "switch.aaa.accounting":
+            path = "/system/aaa_accounting_attributes/port-access"
+            if op["accounting_mode"] == "disabled":
+                return [{"method": "DELETE", "path": path, "json": None, "missing_ok": True}]
+            body = {"session_type": "port-access", "accounting_mode": op["accounting_mode"]}
+            if op["accounting_mode"] == "start-stop":
+                body["interim_update_enable"] = "interim_update_interval" in op
+                if "interim_update_interval" in op:
+                    body["interim_update_interval"] = op["interim_update_interval"]
+            return [{"method": "UPSERT", "path": path, "collection": "/system/aaa_accounting_attributes", "json": body}]
+        if k == "switch.port.auth_policy":
+            base = f"/system/interfaces/{_port(op['port'])}/port_access_auth_configurations"
+            body = {f: op[f] for f in self._AUTH_FIELDS if f in op}
+            if "radius_server_group" in body:
+                body["radius_server_group"] = self._ref(f"/system/aaa_server_groups/{body['radius_server_group']}")
+            if action == "create":
+                return [{"method": "POST", "path": base, "json": {"authentication_method": op["method"], **body}}]
+            if action == "modify":
+                return [{"method": "PATCH", "path": f"{base}/{op['method']}", "json": body}]
+            return [{"method": "DELETE", "path": f"{base}/{op['method']}", "json": None}]
+        if k == "switch.route.ospf":
+            base = f"/system/vrfs/{op['vrf']}/ospf_routers"
+            rpath = f"{base}/{op['instance_tag']}"
+            if op.get("action") == "delete":
+                return [{"method": "DELETE", "path": rpath, "json": None}]
+            router = {"admin_router_id": op["router_id"], "maximum_paths": op["maximum_paths"],
+                      "passive_interface_default": op["passive_interface_default"], "redistribute": op["redistribute"],
+                      "active_interfaces": [self._ref(f"/system/interfaces/{i if re.fullmatch(r'vlan[0-9]{1,4}', i) else _port(i)}")
+                                            for i in op["interfaces"]]}
+            calls = [{"method": "POST", "path": base, "json": {"instance_tag": op["instance_tag"], **router}}
+                     if op.get("action") == "create" else {"method": "PATCH", "path": rpath, "json": router}]
+            calls.append({"method": "UPSERT", "path": f"{rpath}/areas/{op['area']}", "collection": f"{rpath}/areas",
+                          "json": {"area_id": op["area"], "area_type": op["area_type"]}})
+            return calls
+        raise WriterError("UNSUPPORTED", f"{k} is not supported by {self.key}")
+
+    def _get_or_none(self, path: str, **params):
+        try:
+            return self._req("GET", path, params=params or None).json()
+        except WriterError as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            raise
+
+    def _set_group_members(self, gpath: str, servers: list[dict]) -> None:
+        """Membership + priority live on each RADIUS server's `server_group` map. Read-modify-write so the server's
+        other memberships (e.g. the built-in 'radius' family group) are preserved; priority 1 = primary."""
+        gref = self._ref(gpath)
+        wanted = {self._srv_path(r): i + 1 for i, r in enumerate(servers)}
+        for vrf in ("default", "mgmt"):
+            current = self._get_or_none(f"/system/vrfs/{vrf}/radius_servers", depth=1) or {}
+            for key, srv in current.items():
+                path = f"/system/vrfs/{vrf}/radius_servers/{key}"
+                if gref in (srv.get("server_group") or {}) and path not in wanted:
+                    groups = {g: v for g, v in srv["server_group"].items() if g != gref}
+                    self._req("PATCH", path, json={"server_group": groups})
+        for path, prio in wanted.items():
+            srv = self._get_or_none(path, depth=1)
+            if srv is None:
+                raise WriterError("PRECONDITION", f"RADIUS server {path.rsplit('/', 1)[-1]} does not exist; create it first.")
+            groups = dict(srv.get("server_group") or {})
+            groups[gref] = prio
+            self._req("PATCH", path, json={"server_group": groups})
+
+    def _apply_rc18(self, op: dict) -> list[dict]:
+        op = self._norm18(op)
+        k = op["op"]
+        if k == "switch.route.ospf":
+            platform = str(read_cx_system(self._req, "platform_name").get("platform_name") or "")
+            if "6200" not in platform:
+                raise WriterError("UNSUPPORTED", f"OSPF is not available on {platform or 'this platform'} "
+                                                 "(CX 6100: static routing only).")
+        if k == "switch.aaa.radius_server" and op.get("action", "create") != "delete":
+            if (op.get("action") == "create" or op.get("secret_ref")) and not op.get("_secret"):
+                raise WriterError("PRECONDITION", "The RADIUS shared secret could not be resolved from secret_ref.")
+        sent = []
+        for call in self._render_rc18(op):
+            m = call["method"]
+            if m == "GROUP_MEMBERS":
+                self._set_group_members(call["path"], call["json"]["servers"])
+            elif m == "UPSERT":
+                exists = self._get_or_none(call["path"]) is not None
+                if exists:
+                    self._req("PATCH", call["path"], json={x: y for x, y in call["json"].items()
+                                                           if x not in ("session_type", "area_id")})
+                else:
+                    self._req("POST", call["collection"], json=call["json"])
+            elif m == "DELETE":
+                try:
+                    self._req("DELETE", call["path"])
+                except WriterError as exc:
+                    if not (call.get("missing_ok") and "HTTP 404" in str(exc)):
+                        raise
+            else:
+                self._req(m, call["path"], json=call["json"])
+            sent.append({**call, "json": ({**call["json"], "passkey": "********"} if isinstance(call["json"], dict)
+                                          and "passkey" in call["json"] else call["json"])})
+        return sent
+
+    def _readback_rc18(self, op: dict) -> tuple[bool, dict]:
+        op = self._norm18(op)
+        k, action = op["op"], op.get("action", "create")
+        if k == "switch.aaa.radius_server":
+            d = self._get_or_none(self._srv_path(op), depth=1)
+            if action == "delete":
+                return d is None, {"present": d is not None}
+            if d is None:
+                return False, {"present": False}
+            got = {f: d.get(f) for f in self._SRV_FIELDS if f in op}
+            return got == {f: op[f] for f in self._SRV_FIELDS if f in op}, {"present": True, **got}
+        if k == "switch.aaa.server_group":
+            gpath = f"/system/aaa_server_groups/{op['group_name']}"
+            g = self._get_or_none(gpath)
+            if action == "delete":
+                return g is None, {"present": g is not None}
+            gref = self._ref(gpath)
+            prios = {}
+            for r in op["servers"]:
+                srv = self._get_or_none(self._srv_path(r), depth=1) or {}
+                prios[r["address"]] = (srv.get("server_group") or {}).get(gref)
+            ok = bool(g) and g.get("load_balancing_mode") == op["load_balancing_mode"] and \
+                [prios[r["address"]] for r in op["servers"]] == list(range(1, len(op["servers"]) + 1))
+            return ok, {"load_balancing_mode": (g or {}).get("load_balancing_mode"), "priorities": prios}
+        if k == "switch.aaa.accounting":
+            d = self._get_or_none("/system/aaa_accounting_attributes/port-access")
+            if op["accounting_mode"] == "disabled":
+                return d is None, {"present": d is not None}
+            want = self._render_rc18(op)[0]["json"]
+            got = {x: (d or {}).get(x) for x in want}
+            return got == want, got
+        if k == "switch.port.auth_policy":
+            d = self._get_or_none(f"/system/interfaces/{_port(op['port'])}/port_access_auth_configurations/{op['method']}")
+            if action == "delete":
+                return d is None, {"present": d is not None}
+            want = {f: op[f] for f in self._AUTH_FIELDS if f in op}
+            got = {f: (d or {}).get(f) for f in want}
+            if "radius_server_group" in want:
+                got["radius_server_group"] = str(got["radius_server_group"] or "").rsplit("/", 1)[-1] or None
+            return d is not None and got == want, got
+        if k == "switch.route.ospf":
+            rpath = f"/system/vrfs/{op['vrf']}/ospf_routers/{op['instance_tag']}"
+            r = self._get_or_none(rpath, depth=1)
+            if action == "delete":
+                return r is None, {"present": r is not None}
+            area = self._get_or_none(f"{rpath}/areas/{op['area']}")
+            ifs = sorted(str(x).rsplit("/", 1)[-1].replace("%2F", "/") for x in (r or {}).get("active_interfaces") or [])
+            ok = bool(r) and r.get("admin_router_id") == op["router_id"] and bool(area) and \
+                area.get("area_type") == op["area_type"] and ifs == sorted(op["interfaces"]) and \
+                sorted(r.get("redistribute") or []) == op["redistribute"]
+            return ok, {"router_id": (r or {}).get("admin_router_id"), "area": (area or {}).get("area_id"),
+                        "interfaces": ifs}
+        raise WriterError("UNSUPPORTED", k)
+
+    def optics(self) -> dict:
+        """Transceiver identification + DOM per port/lane from the advertised read-only show command (A-CX-15)."""
+        from ..optics import parse_transceiver_detail
+        try:
+            out = self.read_diagnostics(kind="transceivers")["output"]
+        except WriterError as exc:
+            if exc.category == "UNSUPPORTED":
+                return {"state": "UNSUPPORTED", "ports": {}, "reason": str(exc)}
+            raise
+        return parse_transceiver_detail(out)
+
+    def port_access_clients(self, port: str) -> list[dict]:
+        """Authentication status monitoring (read-only): clients on a port with method and state."""
+        d = self._get_or_none(f"/system/interfaces/{_port(port)}/port_access_clients", depth=2) or {}
+        out = []
+        for mac, c in d.items():
+            c = c if isinstance(c, dict) else {}
+            out.append({"mac": c.get("mac", mac), "status": c.get("status"), "methods": sorted((c.get("auth_attributes") or {}).keys()),
+                        "role": c.get("role") or c.get("applied_role"), "vlan": c.get("vlan_id") or c.get("vlan")})
+        return out
 
     def apply(self, op: dict) -> list[dict]:
         sent = []
+        if op.get("op") in RC18_OPS:
+            return self._apply_rc18(op)
+        if op.get("op") == "switch.vsf.member":
+            platform = str(read_cx_system(self._req, "platform_name").get("platform_name") or "")
+            if "6200" not in platform:
+                raise WriterError("UNSUPPORTED", f"VSF provisioning is not supported on {platform or 'this platform'}.")
         for call in self.render(op):
             body = call["json"]
+            if call.get("create_if_missing"):
+                try:
+                    self._req("GET", call["create_if_missing"])
+                    continue                     # route already exists; only its next hop is added
+                except WriterError as exc:
+                    if "HTTP 404" not in str(exc):
+                        raise
             if op["op"] == "switch.vlan.voice":
                 baseline = self._req("GET", call["path"], params={"selector": "writable"}).json()
                 if not isinstance(baseline, dict) or baseline.get("id") != op["vlan"] or baseline.get("type") != "static" or type(baseline.get("voice")) is not bool:
@@ -597,6 +995,10 @@ class ArubaCxWriter:
 
     def readback(self, op: dict) -> tuple[bool, dict]:
         k, v = op.get("op"), op.get("value")
+        if k in RC17_OPS:
+            return self._readback_rc17(op)
+        if k in RC18_OPS:
+            return self._readback_rc18(op)
         if k == "switch.vlan.voice":
             d = self._req("GET", f"/system/vlans/{op['vlan']}", params={"selector": "configuration"}).json()
             return (d.get("id") == op["vlan"] and d.get("voice") is (v == "enabled")), {"id": d.get("id"), "voice": d.get("voice")}

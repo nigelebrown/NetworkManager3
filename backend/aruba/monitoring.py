@@ -130,8 +130,8 @@ def enrich_with_telemetry(client: ArubaClient, snap: SiteSnapshot) -> None:
             try:
                 obs["uplink_counters"] = telemetry.parse_uplink_counters(
                     parsers.output_text(client.show("show interface counters", iap_ip=ip)))
-            except ArubaCommandError:
-                pass
+            except ArubaCommandError as _exc:
+                log.warning("uplink counters unavailable; reported as not measured: %s", type(_exc).__name__, exc_info=True)
         if obs["uplink_counters"] is None:
             obs["gaps"].append("No identifiable uplink byte counters returned by the AP")
         for cmd, kind in (("show ap monitor ap-list", "ap"), ("show ap monitor sta-list", "client")):

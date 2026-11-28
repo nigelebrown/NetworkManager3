@@ -7,6 +7,9 @@ with readback -> monitoring -> done. Every decision is appended to the workflow 
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -22,7 +25,7 @@ from ..database.models_phases import ChangeExecution, ChangePlan, CollectionPlan
 from ..database.models_remediation import DeviceGroup, DeviceGroupMember, OnboardingWorkflow
 from ..database.session import get_db
 from ..security.deps import audit, require_any_role, require_role
-from ._phase_common import real_device
+from ._phase_common import iso, real_device
 
 router = APIRouter(prefix="/api/v1", tags=["workflows"])
 
@@ -117,12 +120,31 @@ def list_groups(db: Session = Depends(get_db), user: User = Depends(require_role
                                     if db.get(InmDevice, m.device_id) is not None)]
 
 
+def _clean_group_name(raw: str) -> str:
+    """Imported group values: trim, collapse whitespace; 2-100 printable characters, no path/control characters."""
+    name = " ".join(str(raw or "").split())
+    if not 2 <= len(name) <= 100:
+        raise ValueError("Group name must be 2-100 characters.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in name) or any(c in name for c in "<>\\/|"):
+        raise ValueError("Group name contains a character that is not allowed (< > / \\ | or control characters).")
+    return name
+
+
+def _group_by_name(db: Session, name: str) -> DeviceGroup | None:
+    from sqlalchemy import func
+    return db.scalar(select(DeviceGroup).where(func.lower(DeviceGroup.name) == name.lower()))
+
+
 @router.post("/device-groups", status_code=201)
 def create_group(body: GroupInput, request: Request, db: Session = Depends(get_db),
                  user: User = Depends(require_role("admin"))):
-    if db.scalar(select(DeviceGroup).where(DeviceGroup.name == body.name.strip())):
+    try:
+        name = _clean_group_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    if _group_by_name(db, name):                         # case-insensitive: "Floor 1" == "floor 1"
         raise HTTPException(409, "A group with this name exists.")
-    g = DeviceGroup(name=body.name.strip(), family=body.family, description=body.description, created_by=user.username)
+    g = DeviceGroup(name=name, family=body.family, description=body.description, created_by=user.username)
     db.add(g)
     db.flush()
     audit(db, "device_group_created", username=user.username, target=g.id, detail=g.name, request=request)
@@ -145,6 +167,111 @@ def add_members(group_id: str, body: MembersInput, request: Request, db: Session
     audit(db, "device_group_members_added", username=user.username, target=g.id,
           detail=f"{len(body.device_ids)} device(s)", request=request)
     return _group_out(db, g)
+
+
+class ImportAssignment(BaseModel):
+    group: str = Field(max_length=200)                      # value from the imported Group column
+    family: str = Field(pattern="^(switch|access_point)$")
+    device_ids: list[str] = Field(min_length=1, max_length=2000)
+    target: str = Field(default="create", pattern="^(create|existing|skip)$")
+    group_id: str | None = None
+
+
+class ImportAssignInput(BaseModel):
+    assignments: list[ImportAssignment] = Field(min_length=1, max_length=500)
+    reassign: bool = False                                  # move devices out of other groups of the same type
+    dry_run: bool = False
+
+
+@router.post("/device-groups/import-assign")
+def import_assign(body: ImportAssignInput, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(require_role("admin"))):
+    """rc18 (2.12) Imported Group column -> group membership, validated server-side per device.
+
+    Partial by design: valid devices are assigned, every other device gets a reason. Checks: group name rules and
+    case-insensitive duplicates, family compatibility (a name already used by the other device type is refused),
+    existing group selection, device exists / visible to the actor (site scope), DEMO and REAL devices never share
+    a group, a device listed twice or under two groups of one type in the same file is refused. ``reassign`` removes
+    the device from its other groups of the same type (recorded as moved_from). Membership never writes to devices."""
+    results, created, by_device = [], [], {}
+    for a in body.assignments:
+        for did in a.device_ids:
+            by_device.setdefault(did, set()).add((a.family, " ".join(a.group.split()).lower()))
+    seen: set[str] = set()
+    for a in body.assignments:
+        try:
+            name = _clean_group_name(a.group)
+        except ValueError as exc:
+            results += [{"device_id": d, "group": a.group, "status": "REJECTED", "reason": str(exc)} for d in a.device_ids]
+            continue
+        if a.target == "skip":
+            results += [{"device_id": d, "group": name, "status": "SKIPPED", "reason": "Not assigned (operator choice)"}
+                        for d in a.device_ids]
+            continue
+        if a.target == "existing":
+            g = db.get(DeviceGroup, a.group_id) if a.group_id else None
+            if g is None or g.family != a.family:
+                results += [{"device_id": d, "group": name, "status": "REJECTED",
+                             "reason": "Selected group not found for this device type"} for d in a.device_ids]
+                continue
+        else:
+            g = _group_by_name(db, name)
+            if g is not None and g.family != a.family:
+                results += [{"device_id": d, "group": name, "status": "REJECTED",
+                             "reason": f"Group name already used by a {g.family.replace('_', ' ')} group"}
+                            for d in a.device_ids]
+                continue
+            if g is None and not body.dry_run:
+                g = DeviceGroup(name=name, family=a.family, description="Created from inventory import",
+                                created_by=user.username)
+                db.add(g)
+                db.flush()
+                created.append({"id": g.id, "name": g.name, "family": g.family})
+        members = [] if g is None else [db.get(InmDevice, m.device_id) for m in
+                                        db.scalars(select(DeviceGroupMember).where(DeviceGroupMember.group_id == g.id))]
+        sources = {m.source_type for m in members if m is not None}
+        for did in a.device_ids:
+            row = {"device_id": did, "group": g.name if g else name, "group_id": g.id if g else None}
+            d = db.get(InmDevice, did)
+            if did in seen:
+                results.append(row | {"status": "REJECTED", "reason": "Device listed more than once in this import"}); continue
+            seen.add(did)
+            if d is None or d.source_type not in ("REAL", "DEMO") or not _may_see_site(db, user, d.site_id):
+                results.append(row | {"status": "REJECTED", "reason": "Device not found or outside your sites"}); continue
+            if d.family != a.family:
+                results.append(row | {"status": "REJECTED", "reason": f"Device is a {d.family.replace('_', ' ')}, "
+                                                                    f"group is for {a.family.replace('_', ' ')}s"}); continue
+            if len({k for k in by_device[did] if k[0] == a.family}) > 1:
+                results.append(row | {"status": "REJECTED", "reason": "Device has conflicting group values in this import"})
+                continue
+            if sources and d.source_type not in sources:
+                results.append(row | {"status": "REJECTED", "reason": "DEMO and REAL devices cannot share a group"}); continue
+            others = [m for m in db.scalars(select(DeviceGroupMember).where(DeviceGroupMember.device_id == d.id))
+                      if g is None or m.group_id != g.id]
+            others = [m for m in others if (og := db.get(DeviceGroup, m.group_id)) is not None and og.family == d.family]
+            already = g is not None and db.get(DeviceGroupMember, (g.id, d.id)) is not None
+            if body.dry_run:
+                results.append(row | {"status": "WOULD_ASSIGN" if not already else "ALREADY_MEMBER",
+                                      "moved_from": [m.group_id for m in others] if body.reassign else []})
+                continue
+            moved = []
+            if body.reassign:
+                for m in others:
+                    moved.append(db.get(DeviceGroup, m.group_id).name)
+                    db.delete(m)
+            if not already:
+                db.add(DeviceGroupMember(group_id=g.id, device_id=d.id, added_by=user.username))
+            sources.add(d.source_type)
+            results.append(row | {"status": "ALREADY_MEMBER" if already else "ASSIGNED", "moved_from": moved,
+                                  "other_groups": [] if body.reassign else [db.get(DeviceGroup, m.group_id).name for m in others]})
+    db.flush()
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    if not body.dry_run:
+        audit(db, "device_group_import_assigned", username=user.username,
+              detail=f"{counts} created={[c['name'] for c in created]} reassign={body.reassign}"[:900], request=request)
+    return {"results": results, "counts": counts, "created_groups": created, "dry_run": body.dry_run}
 
 
 @router.delete("/device-groups/{group_id}/members/{device_id}")
@@ -186,6 +313,95 @@ def _progress(rows: list[dict]) -> dict:
             "rejected": states.count("REJECTED")}
 
 
+HIGH_RISK_REASONS = ("CLUSTER_SCOPE", "MULTI_SITE", "LARGE_BATCH")
+
+
+def _high_risk_devices() -> int:
+    try:
+        return max(2, int(os.environ.get("INM_DEPLOYMENT_HIGH_RISK_DEVICES", "10")))
+    except ValueError:
+        return 10
+
+
+def _batch_meta(db: Session, batch_id: str) -> dict:
+    row = db.get(AppSetting, "deployment-batch:" + batch_id)
+    return dict(row.value or {}) if row else {}
+
+
+def _impact(db: Session, batch_id: str, plans: list[ChangePlan]) -> dict:
+    """Impact and scope of a multi-device deployment (P6-10).
+
+    An Aruba Instant configuration is applied through the virtual controller and reaches every member of the
+    cluster, so a plan for one AP is a cluster-wide change; members that are not in the batch are listed as also
+    affected. A batch is HIGH risk when it is cluster-scoped, spans more than one site, or reaches the configured
+    device count. The digest covers every plan revision and the computed scope, so an approval of the impact
+    is invalidated by any later change to the batch or its clusters."""
+    pending = [p for p in plans if p.state not in ("REJECTED", "CANCELLED", "DRAFT")]
+    devices = {p.device_id: db.get(InmDevice, p.device_id) for p in pending}
+    sites = sorted({d.site_id for d in devices.values() if d is not None and d.site_id})
+    site_names = {s.id: s.name for s in db.scalars(select(InmSite).where(InmSite.id.in_(sites)))} if sites else {}
+    clusters: dict[str, dict] = {}
+    for p in pending:
+        d = devices.get(p.device_id)
+        if d is None or not d.cluster_id:
+            continue
+        c = clusters.get(d.cluster_id)
+        if c is None:
+            cl = db.get(InmCluster, d.cluster_id)
+            members = list(db.scalars(select(InmDevice).where(InmDevice.cluster_id == d.cluster_id,
+                                                               InmDevice.lifecycle != "merged")
+                                      .order_by(InmDevice.hostname, InmDevice.id)))
+            c = clusters[d.cluster_id] = {"cluster_id": d.cluster_id, "name": cl.name if cl else d.cluster_id,
+                                          "members": [{"device_id": m.id, "hostname": m.hostname} for m in members],
+                                          "plans": []}
+        c["plans"].append(p.id)
+    in_batch = set(devices)
+    for c in clusters.values():
+        c["member_count"] = len(c["members"])
+        c["also_affected"] = [m for m in c["members"] if m["device_id"] not in in_batch]
+        c["cluster_wide"] = c["member_count"] >= 2
+    ops: dict[str, int] = {}
+    for p in pending:
+        for o in p.operations or []:
+            k = str(o.get("op") or o.get("operation") or o.get("kind") or "operation") if isinstance(o, dict) else "operation"
+            ops[k] = ops.get(k, 0) + 1
+    reasons: list[dict] = []
+    wide = [c for c in clusters.values() if c["cluster_wide"]]
+    if wide:
+        reasons.append({"code": "CLUSTER_SCOPE", "detail": "; ".join(
+            f"{c['name']}: applied through the virtual controller to all {c['member_count']} members"
+            + (f" ({len(c['also_affected'])} not in this batch)" if c["also_affected"] else "") for c in wide)})
+    if len(sites) > 1:
+        reasons.append({"code": "MULTI_SITE", "detail": f"{len(sites)} sites: " + ", ".join(site_names.get(s, s) for s in sites)})
+    limit = _high_risk_devices()
+    if len(pending) >= limit:
+        reasons.append({"code": "LARGE_BATCH", "detail": f"{len(pending)} devices (high-risk threshold {limit})"})
+    warnings = [f"{c['name']} is configured by {len(c['plans'])} plans; each is applied cluster-wide - review for "
+                "conflicting values" for c in clusters.values() if len(c["plans"]) > 1]
+    reached = in_batch | {m["device_id"] for c in clusters.values() for m in c["members"]}
+    body = {"batch_id": batch_id, "plans": sorted((p.id, p.plan_hash, p.revision) for p in pending),
+            "sites": sites, "clusters": sorted((c["cluster_id"], [m["device_id"] for m in c["members"]])
+                                                for c in clusters.values())}
+    digest = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+    return {"batch_id": batch_id, "risk": "HIGH" if reasons else "STANDARD", "reasons": reasons, "warnings": warnings,
+            "devices_in_batch": len(in_batch), "devices_reached": len(reached),
+            "sites": [{"site_id": s, "name": site_names.get(s, s)} for s in sites],
+            "clusters": list(clusters.values()), "operations": ops, "digest": digest,
+            "policy": ("HIGH-risk deployments need a release approval of this impact by an approver or administrator "
+                       "who neither created the deployment nor approved any of its plans; any later change to the "
+                       "plans or clusters invalidates it. Emergency access does not waive it.")}
+
+
+def _release_state(db: Session, batch_id: str, impact: dict) -> dict:
+    row = db.get(AppSetting, "deployment-release:" + batch_id)
+    rel = dict(row.value or {}) if row else None
+    if impact["risk"] != "HIGH":
+        return {"required": False, "approved": True, "approval": rel}
+    valid = bool(rel and rel.get("digest") == impact["digest"])
+    return {"required": True, "approved": valid, "approval": rel,
+            "stale": bool(rel) and not valid}
+
+
 @router.post("/deployments", status_code=201)
 def create_deployment(body: DeploymentInput, request: Request, db: Session = Depends(get_db),
                       user: User = Depends(require_role("operator"))):
@@ -203,6 +419,9 @@ def create_deployment(body: DeploymentInput, request: Request, db: Session = Dep
         device = real_device(db, did)
         _require_site(db, user, device.site_id)
     batch = str(uuid.uuid4())
+    db.add(AppSetting(key="deployment-batch:" + batch, value={"created_by": user.username,
+                                                               "created_at": _now().isoformat()},
+                      updated_by=user.username))
     results = []
     for did in ids:
         try:
@@ -216,6 +435,30 @@ def create_deployment(body: DeploymentInput, request: Request, db: Session = Dep
     return {"batch_id": batch, "devices": results}
 
 
+@router.get("/deployments")
+def list_deployments(db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    """Recent multi-device deployments the user may see (so approvers and release reviewers can open them)."""
+    batches: dict[str, list[ChangePlan]] = {}
+    for p in db.scalars(select(ChangePlan).where(ChangePlan.source == "TEMPLATE")
+                        .order_by(ChangePlan.created_at.desc()).limit(2000)):
+        bid = (p.rollback_plan or {}).get("batch_id")
+        if bid:
+            batches.setdefault(bid, []).append(p)
+    out = []
+    for bid, plans in batches.items():
+        devices = [db.get(InmDevice, p.device_id) for p in plans]
+        if any(d is not None and not _may_see_site(db, user, d.site_id) for d in devices):
+            continue
+        impact = _impact(db, bid, plans)
+        rows = [_plan_summary(db, p) for p in plans]
+        out.append({"batch_id": bid, "created_at": iso(min(p.created_at for p in plans)),
+                    "created_by": _batch_meta(db, bid).get("created_by"), "progress": _progress(rows),
+                    "risk": impact["risk"], "release": _release_state(db, bid, impact)})
+        if len(out) >= 50:
+            break
+    return sorted(out, key=lambda b: b["created_at"] or "", reverse=True)
+
+
 @router.get("/deployments/{batch_id}")
 def get_deployment(batch_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
     plans = _batch_plans(db, batch_id)
@@ -224,8 +467,67 @@ def get_deployment(batch_id: str, db: Session = Depends(get_db), user: User = De
         raise HTTPException(404, "Deployment not found.")
     rows = [_plan_summary(db, p) for p in plans]
     state = db.get(AppSetting, "deployment-wave:" + batch_id) if len(batch_id) == 36 else None
+    impact = _impact(db, batch_id, plans) if plans else None
     return {"batch_id": batch_id, "plans": rows, "progress": _progress(rows),
-            "wave": dict(state.value) if state else {"state": "READY"}}
+            "wave": dict(state.value) if state else {"state": "READY"}, "impact": impact,
+            "release": _release_state(db, batch_id, impact) if impact else None,
+            "created_by": _batch_meta(db, batch_id).get("created_by")}
+
+
+@router.get("/deployments/{batch_id}/impact")
+def deployment_impact(batch_id: str, db: Session = Depends(get_db), user: User = Depends(require_role("viewer"))):
+    plans = _batch_plans(db, batch_id)
+    if not plans or any(not _may_see_site(db, user, db.get(InmDevice, p.device_id).site_id)
+                        for p in plans if db.get(InmDevice, p.device_id) is not None):
+        raise HTTPException(404, "Deployment not found.")
+    impact = _impact(db, batch_id, plans)
+    return {**impact, "release": _release_state(db, batch_id, impact)}
+
+
+class ReleaseApproval(BaseModel):
+    digest: str = Field(min_length=64, max_length=64)
+    note: str = Field(min_length=20, max_length=500)
+
+
+@router.post("/deployments/{batch_id}/release-approval")
+def approve_release(batch_id: str, body: ReleaseApproval, request: Request, db: Session = Depends(get_db),
+                    user: User = Depends(require_any_role("approver", "admin"))):
+    """Stronger review for HIGH-risk deployments: a separate reviewer approves the computed impact."""
+    plans = _batch_plans(db, batch_id)
+    if not plans:
+        raise HTTPException(404, "Deployment not found.")
+    for p in plans:
+        d = db.get(InmDevice, p.device_id)
+        _require_site(db, user, d.site_id if d else None)
+    impact = _impact(db, batch_id, plans)
+    if impact["risk"] != "HIGH":
+        raise HTTPException(409, "This deployment is not high risk; each plan's own approval is sufficient.")
+    if body.digest != impact["digest"]:
+        raise HTTPException(409, "The deployment or its cluster scope changed after you reviewed it. Reload the impact.")
+    creator = _batch_meta(db, batch_id).get("created_by")
+    involved = {creator} | {p.requester for p in plans} | {p.approver for p in plans if p.approver}
+    if user.username in involved:
+        audit(db, "deployment_release_refused", username=user.username, target=batch_id,
+              detail="reviewer created the deployment or approved one of its plans", request=request)
+        db.commit()
+        raise HTTPException(403, "A high-risk deployment must be released by someone who neither created it nor "
+                                 "approved any of its plans.")
+    pending = [p for p in plans if p.state == "PENDING_APPROVAL"]
+    if pending:
+        raise HTTPException(409, f"{len(pending)} plan(s) still await their own approval; release after every plan "
+                                 "is approved.")
+    value = {"approved_by": user.username, "approved_at": _now().isoformat(), "digest": impact["digest"],
+             "note": body.note.strip(), "reasons": [r["code"] for r in impact["reasons"]],
+             "devices_reached": impact["devices_reached"]}
+    row = db.get(AppSetting, "deployment-release:" + batch_id)
+    if row is None:
+        db.add(AppSetting(key="deployment-release:" + batch_id, value=value, updated_by=user.username))
+    else:
+        row.value, row.updated_by, row.updated_at = value, user.username, _now()
+    audit(db, "deployment_release_approved", username=user.username, target=batch_id,
+          detail=f"risk=HIGH reasons={','.join(value['reasons'])} reached={impact['devices_reached']} "
+                 f"digest={impact['digest'][:16]}", request=request)
+    return {"batch_id": batch_id, "release": _release_state(db, batch_id, impact), "impact": impact}
 
 
 class ExecuteInput(BaseModel):
@@ -262,6 +564,16 @@ def execute_deployment(batch_id: str, body: ExecuteInput, request: Request, db: 
             raise HTTPException(409, "Review the previous failure or interrupted wave and supply a resume note.")
         if any(p.state in ("ROLLBACK_FAILED", "EXECUTING") for p in plans):
             raise HTTPException(409, "Resolve failed recovery or interrupted execution before resuming.")
+        impact = _impact(db, batch_id, plans)
+        release = _release_state(db, batch_id, impact)
+        if release["required"] and not release["approved"]:
+            audit(db, "deployment_execute_refused", username=user.username, target=batch_id,
+                  detail="high-risk deployment without a current release approval"
+                         + (" (approval stale: batch changed)" if release.get("stale") else ""), request=request)
+            db.commit()
+            raise HTTPException(409, "High-risk deployment (" + ", ".join(r["code"] for r in impact["reasons"])
+                                + "): a separate reviewer must approve the current impact before execution"
+                                + (" - the previous release approval no longer matches the batch." if release.get("stale") else "."))
         if state is None:
             state = AppSetting(key=key, value={}, updated_by=user.username)
             db.add(state)

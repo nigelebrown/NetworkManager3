@@ -93,7 +93,7 @@ def _installed_facts(device: InmDevice, text: str) -> dict:
         if isinstance(cfg, dict):
             return DS.cx_facts(cfg)
     except ValueError:
-        pass
+        pass  # not JSON: parse as CLI text below
     old = BP.installed_facts("switch", BP.normalize_config(text))
     ports = {p: {"vlan_mode": "access" if p in old["access_vlans"] else ("native-untagged" if p in old["trunks"] else None),
                  "access_vlan": old["access_vlans"].get(p), "trunk_vlans": old["trunks"].get(p, []),

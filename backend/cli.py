@@ -7,6 +7,7 @@
   python -m backend.cli audit-verify            recompute the audit hash chain; exit 1 if broken
 """
 from __future__ import annotations
+import logging
 
 import argparse
 import asyncio
@@ -18,6 +19,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+
+_log = logging.getLogger(__name__)
 
 
 def _init(migrate: bool = False):
@@ -142,8 +145,8 @@ def _await_loki_startup(max_wait_s: float = 40.0) -> bool:
             ready, _ = store.ready()
             if ready:
                 return True
-        except Exception:
-            pass
+        except Exception as _exc:
+            _log.warning("readiness probe failed; retrying until the deadline: %s", type(_exc).__name__, exc_info=True)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
@@ -216,6 +219,16 @@ def cmd_verify(a) -> int:
         return False, "syslog line not found in Loki within 30 s"
     _check(results, "logging:alloy-syslog-to-loki", syslog)
 
+    def syslog_parse_errors():
+        """rc18: syslog the collector could not parse (e.g. a year-before-time BSD header) is counted by Alloy; a
+        non-zero count means device logs are being lost and the sender's header format must be checked."""
+        body = httpx.get(a.alloy_metrics_url, timeout=5).text
+        n = sum(float(line.rsplit(" ", 1)[1]) for line in body.splitlines()
+                if line.startswith("loki_source_syslog_parsing_errors_total"))
+        return n == 0, f"loki_source_syslog_parsing_errors_total={n:g}" + (
+            "" if n == 0 else " (unparseable syslog was dropped: capture a packet from the sender and check its header)")
+    _check(results, "logging:syslog-parse-errors", syslog_parse_errors)
+
     def round_trip():
         return asyncio.run(_synthetic_round_trip(api))
     _check(results, "pipeline:worker->nats->timescale/postgres/loki->ui", round_trip)
@@ -249,7 +262,7 @@ async def _synthetic_round_trip(api: str):
                 if json.loads(m.data).get("correlation_id") == cid and not seen.done():
                     seen.set_result(m.metadata.sequence.stream)
             except ValueError:
-                pass
+                pass  # a non-JSON message on the UI subject is not the probe reply
         sub = await js.subscribe(UI_SUBJECT, cb=cb, ordered_consumer=True, deliver_policy=DeliverPolicy.NEW)
         reply = await nc.request(SYNTHETIC_JOB_SUBJECT, json.dumps({"correlation_id": cid, "requested_by": "verify.sh"}).encode(), timeout=8)
         event_id = json.loads(reply.data)["event_id"]
@@ -274,6 +287,48 @@ async def _synthetic_round_trip(api: str):
                 f"ui_seq={ui_seq} api_ws_cursor={cursor}")
 
 
+def change_quiesce_state(db) -> dict:
+    """rc18 (P6-DEP-01): may the platform be stopped for an update right now?
+    Blockers: a change executing (plan EXECUTING or recovery journal OPEN) or an interrupted change awaiting
+    recovery (journal RECOVERY_REQUIRED, plan ROLLBACK_FAILED). Approved-but-not-started plans are not blockers:
+    every approval is re-validated (config hash, firmware, certification) when it is executed after the update."""
+    from sqlalchemy import select
+    from .database.models_phases import ChangePlan
+    from .database.models_remediation import ChangeRecoveryJournal
+    executing = [p.id for p in db.scalars(select(ChangePlan).where(ChangePlan.state.in_(("EXECUTING", "ROLLBACK_FAILED"))))]
+    journals = {j.id: j.state for j in db.scalars(select(ChangeRecoveryJournal).where(
+        ChangeRecoveryJournal.state.in_(("OPEN", "RECOVERY_REQUIRED"))))}
+    approved = [p.id for p in db.scalars(select(ChangePlan).where(ChangePlan.state == "APPROVED"))]
+    blockers = ([f"plan {x} is executing or failed rollback" for x in executing] +
+                [f"recovery journal {k} is {v}" for k, v in journals.items()])
+    return {"quiescent": not blockers, "blockers": blockers, "approved_not_started": len(approved)}
+
+
+def cmd_change_quiesce_check(_args) -> int:
+    from .database.session import init_engine, session_scope
+    init_engine()
+    with session_scope() as db:
+        out = change_quiesce_state(db)
+    print(json.dumps(out))
+    return 0 if out["quiescent"] else 4
+
+
+def cmd_migrate_legacy_samples(a) -> int:
+    """rc18 (INTEG-P3-02): copy SIMS ap_samples history into the telemetry store (UTC, provenance, idempotent)."""
+    from .database.session import init_engine, session_scope
+    from .infrastructure.legacy_history import migrate_ap_samples
+    from .infrastructure.runtime import telemetry_store
+    init_engine()
+    store = telemetry_store()
+    if store is None:
+        print(json.dumps({"error": "telemetry store not configured"}))
+        return 2
+    with session_scope() as db:
+        out = migrate_ap_samples(db, store, dry_run=a.dry_run)
+    print(json.dumps(out, indent=1))
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="inm")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -294,11 +349,17 @@ def main(argv=None) -> int:
     v.add_argument("--api-url", default="http://127.0.0.1:8000")
     v.add_argument("--syslog-host", default="alloy")
     v.add_argument("--syslog-port", type=int, default=1514)
+    v.add_argument("--alloy-metrics-url", default="http://alloy:12345/metrics")
     v.add_argument("--json", action="store_true")
+    sub.add_parser("change-quiesce-check")
+    ml = sub.add_parser("migrate-legacy-samples")
+    ml.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
     return {"migrate": cmd_migrate, "schema-status": cmd_schema_status, "record-release": cmd_record_release,
             "verify": cmd_verify, "audit-verify": cmd_audit_verify,
-            "heartbeat-check": cmd_heartbeat_check}[a.cmd](a)
+            "heartbeat-check": cmd_heartbeat_check,
+            "migrate-legacy-samples": cmd_migrate_legacy_samples,
+            "change-quiesce-check": cmd_change_quiesce_check}[a.cmd](a)
 
 
 if __name__ == "__main__":

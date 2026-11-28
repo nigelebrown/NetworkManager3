@@ -13,6 +13,7 @@
   publishes the documented manual procedure instead of advertising an automatic one.
 """
 from __future__ import annotations
+import logging
 
 import json
 import uuid
@@ -25,6 +26,8 @@ from ..database.models_inm import InmDevice
 from ..database.models_remediation import ChangeRecoveryJournal
 from ..security.crypto import decrypt_secret
 from .writers import WriterError
+
+_log = logging.getLogger(__name__)
 
 STALE_AFTER = timedelta(minutes=10)
 
@@ -108,8 +111,8 @@ def recover(db: Session, journal: ChangeRecoveryJournal, *, actor: str, writer=N
         finally:
             try:
                 writer.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                _log.debug("best-effort closing the recovery writer: %s", type(_exc).__name__)
         now = datetime.now(timezone.utc)
         journal.updated_at = now
         if matches:

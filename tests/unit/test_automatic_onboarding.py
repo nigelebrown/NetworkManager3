@@ -224,3 +224,90 @@ def test_fresh_authenticated_discovery_enrolls_selected_profile_and_preserves_si
         saved = AO.enroll_authenticated_result(db, profiles[1], result, "Other site", "tester")
         assert saved == ids[0] and db.get(InmDevice, saved).site_id == site.id
         assert db.get(OnboardingDeviceCredential, saved).credential_id == profiles[1]
+
+
+# ---- RC16-T12 (rc18): saved profiles must not drive a device / AAA account into lockout -------------------------
+def _rejecting_rest(calls):
+    def rest(ip, user, password):
+        from backend.aruba.errors import ArubaAuthError
+        calls.append(("rest", ip, user))
+        raise ArubaAuthError("rejected")
+    return rest
+
+
+def _rejecting_ssh(calls):
+    def ssh(ip, user, password, fp):
+        from backend.aruba.errors import ArubaAuthError
+        calls.append(("ssh", ip, user))
+        raise ArubaAuthError("rejected")
+    return ssh
+
+
+def test_rest_rejection_is_not_repeated_over_ssh_and_accounts_are_capped_across_hosts_and_runs(env, app_env):
+    app_env.setenv("INM_ONBOARDING_MAX_AUTH_FAILURES", "2")
+    ids, profiles = env
+    calls = []
+    with session_scope() as db:
+        AD._put(db, "ssh-hostkey:10.9.8.10", {"fingerprint": "SHA256:k0"}, "t")
+        AD._put(db, "ssh-hostkey:10.9.8.11", {"fingerprint": "SHA256:k1"}, "t")
+        out = AD.discover(db, "t", device_ids=ids[:2], rest_members=_rejecting_rest(calls),
+                          ssh_members=_rejecting_ssh(calls), poll=poll)
+        # each AP-family account ("bad", "good") is tried once per host over REST only - never again over SSH
+        assert [c for c in calls if c[0] == "ssh"] == []
+        per_account = {u: sum(1 for c in calls if c[2] == u) for u in ("bad", "good")}
+        assert per_account == {"bad": 2, "good": 2}
+        assert {r["result"] for r in out["results"]} == {"AUTH_REJECTED"}
+        status = AD.auth_guard_status(db)
+        assert {a["account"]: a["held"] for a in status["accounts"]} == {"bad": True, "good": True}
+    # a later run (scheduled onboarding) offers neither account again inside the window
+    calls.clear()
+    with session_scope() as db:
+        out = AD.discover(db, "t", device_ids=ids[:2], rest_members=_rejecting_rest(calls),
+                          ssh_members=_rejecting_ssh(calls), poll=poll)
+        assert calls == []
+        assert {r["result"] for r in out["results"]} == {"AUTH_ATTEMPTS_CAPPED"}
+        assert "account lockout" in out["results"][0]["detail"]
+        from backend.database.models import AuditLog
+        rows = db.scalars(select(AuditLog).where(AuditLog.action == "onboarding_auth_rejected")).all()
+        assert len(rows) == 4 and all("password" not in (r.detail or "").lower() for r in rows)
+
+
+def test_capped_account_is_offered_again_after_the_window(env, app_env):
+    app_env.setenv("INM_ONBOARDING_MAX_AUTH_FAILURES", "1")
+    ids, profiles = env
+    calls = []
+    with session_scope() as db:
+        AD.discover(db, "t", device_ids=[ids[0]], credential_ids=[profiles[0]],
+                    rest_members=_rejecting_rest(calls), ssh_members=_rejecting_ssh(calls), poll=poll)
+        assert len(calls) == 1
+        ledger = AD._get(db, AD.AUTH_LEDGER)
+        ledger["bad"] = [{**f, "at": "2020-01-01T00:00:00+00:00"} for f in ledger["bad"]]
+        AD._put(db, AD.AUTH_LEDGER, ledger, "t")
+    with session_scope() as db:
+        def ok(ip, user, password):
+            calls.append(("rest", ip, user))
+            return members(), {"transport": "rest"}
+        out = AD.discover(db, "t", device_ids=[ids[0]], credential_ids=[profiles[0]], rest_members=ok,
+                          ssh_members=_rejecting_ssh(calls), poll=poll)
+        assert len(calls) == 2 and out["results"][0]["result"] != "AUTH_ATTEMPTS_CAPPED"
+
+
+def test_switch_rest_rejection_skips_ssh_bootstrap_and_is_capped(env, app_env, monkeypatch):
+    app_env.setenv("INM_ONBOARDING_MAX_AUTH_FAILURES", "1")
+    ids, profiles = env
+    attempts = []
+
+    def probe(profile, ip):
+        from backend.infrastructure.writers import WriterError
+        attempts.append(profile.username)
+        raise WriterError("AUTH_REJECTED", "rejected")
+
+    def no_bootstrap(*a, **k):
+        raise AssertionError("SSH bootstrap must not reuse a rejected password")
+    monkeypatch.setattr(AO, "_bootstrap_switch", no_bootstrap)
+    with session_scope() as db:
+        d = db.get(InmDevice, ids[2])
+        out = AO._switch(db, d, "t", {"auto_enable_rest": True}, probe=probe)
+        assert attempts == ["switch"] and out["result"] == "AUTH_OR_CONNECTION_FAILED"
+        out = AO._switch(db, d, "t", {"auto_enable_rest": True}, probe=probe)
+        assert attempts == ["switch"] and out["result"] == "AUTH_ATTEMPTS_CAPPED"

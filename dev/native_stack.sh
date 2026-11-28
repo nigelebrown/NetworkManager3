@@ -22,8 +22,8 @@ write_env() {
     cat > "$SECRETS" <<EOF
 MGMT_PW=$(gen)
 TS_PW=$(gen)
-INM_NATS_API_PASSWORD=$(gen)
-INM_NATS_WORKER_PASSWORD=$(gen)
+INM_NATS_API_PASSWORD=nats$(gen)
+INM_NATS_WORKER_PASSWORD=nats$(gen)
 SIMS_JWT_SECRET=$(gen 48)
 SIMS_FERNET_KEY=$("$PY" -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')
 SIMS_ADMIN_PASSWORD=$(gen 18)
@@ -71,7 +71,20 @@ bg() {  # name cmd...
   echo $! > "$STATE/$name.pid"   # setsid makes this pid a process-group leader: stop kills the whole group
 }
 
+provision() {
+  # rc18: reuse the pinned, checksum-verified binaries (and TimescaleDB build) from the full-stack harness
+  if [[ ! -x "$BIN/loki-linux-amd64" || ! -x "$BIN/alloy-linux-amd64" || ! -x "$BIN/nats-server-v2.11.9-linux-amd64/nats-server" ]]; then
+    bash "$ROOT/tests/fullstack/stack.sh" provision
+    local src="${INM_STACK_DIR:-/tmp/inm-stack}/bin"
+    mkdir -p "$BIN/nats-server-v2.11.9-linux-amd64"
+    ln -sf "$src/nats-server" "$BIN/nats-server-v2.11.9-linux-amd64/nats-server"
+    ln -sf "$src/loki-linux-amd64" "$BIN/loki-linux-amd64"
+    ln -sf "$src/alloy-linux-amd64" "$BIN/alloy-linux-amd64"
+  fi
+}
+
 start() {
+  provision
   write_env; common_env
   pg_cluster mgmt 55432 inm_management inm_app "$MGMT_PW"
   pg_cluster ts 55433 inm_telemetry inm_metrics "$TS_PW" timescaledb
@@ -118,6 +131,7 @@ status() {
 }
 
 case "${1:-}" in
+  provision) provision ;;
   start) start ;;
   stop) stop ;;
   status) status ;;
@@ -128,5 +142,5 @@ case "${1:-}" in
       *) stop_one "$2" ;;
     esac ;;
   start-role) write_env; common_env; start ;;
-  *) echo "usage: $0 start|stop|status|env|stop-role <name>"; exit 2 ;;
+  *) echo "usage: $0 provision|start|stop|status|env|stop-role <name>"; exit 2 ;;
 esac

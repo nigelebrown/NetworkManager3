@@ -22,7 +22,7 @@ VALIDATION_MIN_WINDOWS = 30
 def _utc(t) -> datetime:
     if isinstance(t, str):
         t = datetime.fromisoformat(t.replace("Z", "+00:00"))
-    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t.astimezone(timezone.utc)
 
 
 def _phi(z: float) -> float:

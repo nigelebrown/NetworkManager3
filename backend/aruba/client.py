@@ -182,8 +182,8 @@ class ArubaClient:
             return
         try:
             self._http.post("/rest/logout", json={"sid": sid})
-        except httpx.HTTPError:
-            pass  # best effort
+        except httpx.HTTPError as _exc:
+            log.debug("best-effort Instant REST logout: %s", type(_exc).__name__)
 
     # -- configuration writes (guarded) --------------------------------------------------
     def config_post(self, endpoint: str, body: dict[str, Any]) -> str:

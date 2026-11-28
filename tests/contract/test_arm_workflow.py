@@ -15,7 +15,7 @@ from tests.unit.test_arm_intelligence import measured,outputs
 def arm_device(client,admin,monkeypatch):
     from backend.api import ap_operations as API
     with session_scope() as db:
-        d=InmDevice(source_type="REAL",environment="production",vendor="Aruba",family="access_point",
+        d=InmDevice(source_type="REAL",environment="live",vendor="Aruba",family="access_point",
              model="AP-505",firmware="8.10.0.21",serial_number="REAL-REFERENCE-1",
              hostname="Measured-AP",adapter="aruba_instant",mgmt_addresses=["10.9.8.10"])
         db.add(d);db.flush();did=d.id
@@ -258,3 +258,150 @@ def test_optimizer_does_not_report_missing_arm_data_as_healthy(client,admin,arm_
         AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
         result=O.run_optimizer(db,actor="test")
         assert result["insufficient_evidence"]==1 and result["no_adjustment_needed"]==0 and result["executed"]==0
+
+
+def test_selected_optimizer_reports_pending_enrollment_without_running_other_ap(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment
+    did,_ = arm_device
+    monkeypatch.setattr(O, "propose", lambda *args: pytest.fail("Pending enrollment cannot reach optimizer proposal"))
+    with session_scope() as db:
+        d = db.get(InmDevice,did)
+        db.add(OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            status="PENDING_APPROVAL"))
+    result = client.post(f"/api/v1/devices/{did}/optimization/run-now",headers=admin)
+    assert result.status_code == 200, result.text
+    data = result.json()
+    assert data["device_id"] == did and data["enrollment_status"] == "PENDING_APPROVAL"
+    assert data["selected_for_review"] == 0 and data["skipped_not_armed"] == 1 and data["executed"] == 0
+
+
+def test_selected_optimizer_counts_stale_measurements_as_evaluated(client,admin,arm_device,monkeypatch):
+    from backend.database.models_phases import OptimizationEnrollment
+    did,_ = arm_device
+    with session_scope() as db:
+        d = db.get(InmDevice,did)
+        db.add(OptimizationEnrollment(device_id=did,immutable_serial=d.serial_number,vendor_model="Aruba AP-505",
+            firmware_bound=d.firmware,mode="DEVICE_OPT_IN",allowed_operation_types=["ap.radio.channel"],
+            value_constraints={},permitted_windows={},impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED"))
+        AD._put(db,"arm-rf:"+did,{"state":"UNAVAILABLE"},"test")
+        # A dangling armed enrollment must not enter the selected-device batch.
+        db.add(OptimizationEnrollment(device_id="unrelated-ap",immutable_serial="OTHER-AP",
+            vendor_model="Aruba AP-505",firmware_bound=d.firmware,mode="DEVICE_OPT_IN",
+            allowed_operation_types=["ap.radio.channel"],value_constraints={},permitted_windows={},
+            impact_stop_threshold={},cooldown_seconds=3600,max_actions_per_day=2,
+            expires_at_utc=datetime.now(timezone.utc)+timedelta(days=1),requester_id="requester",
+            independent_approver_id="reviewer",status="ARMED"))
+        AD._put(db,"optimizer:cursor",{"offset":47},"test")
+    original=O.propose
+    def only_selected(db,device,enrollment):
+        assert device.id == did
+        return original(db,device,enrollment)
+    monkeypatch.setattr(O,"propose",only_selected)
+    result=client.post(f"/api/v1/devices/{did}/optimization/run-now",headers=admin)
+    assert result.status_code==200,result.text
+    data=result.json()
+    assert data["device_id"]==did and data["selected_for_review"]==data["evaluated"]==1
+    assert data["insufficient_evidence"]==1 and data["executed"]==0 and data["skipped_missing_device"]==0
+    with session_scope() as db:
+        assert AD._get(db,"optimizer:cursor")["offset"]==47
+
+
+def test_empty_fleet_optimizer_explains_zero_result(client,admin,arm_device):
+    with session_scope() as db:
+        result=O.run_optimizer(db,actor="test")
+        assert result["selected_for_review"]==0 and result["evaluated"]==0
+        assert "No ARMED enrollments" in result["reason"]
+
+
+def test_one_click_prepares_waits_and_resumes_exact_approved_plan(client,admin,arm_device,monkeypatch):
+    from backend.infrastructure import optimization_workflow as W, change_executor as X
+    from backend.database.models_phases import OptimizationEnrollment, ConfigArtifact
+    from tests.conftest import make_user
+    did,m=arm_device
+    reviewer=make_user(client,admin,"workflow.reviewer","approver")
+    monkeypatch.setenv("INM_AUTOMATIC_OPTIMIZATION","true")
+    calls=[]
+    class Reader:
+        def open(self): calls.append("open")
+        def identity(self): return {"serial_number":"REAL-REFERENCE-1","model":"AP-505","firmware":"8.10.0.21"}
+        def backup(self): calls.append("backup"); return b"test configuration for vault roundtrip"
+        def close(self): calls.append("close")
+    monkeypatch.setattr(X,"reader_for",lambda *a:(Reader(),"HARDWARE"))
+    monkeypatch.setattr(X,"certification_map",lambda *a:{"ap.radio.channel":"CERTIFIED_WRITE"})
+    monkeypatch.setattr(O,"evaluate",lambda *a,**kw:({"decision":"ALLOW","guard_evaluation":[]},None))
+    def execute(db,p,**kw):
+        calls.append(("execute",p.id))
+        p.state="APPLIED_VERIFIED"
+        return {"outcome":"APPLIED_VERIFIED","device_writes":1}
+    monkeypatch.setattr(X,"execute_plan",execute)
+    url=f"/api/v1/devices/{did}/optimization/start"
+    body={"serial":"REAL-REFERENCE-1","standing_approval":False}
+    first=client.post(url,json=body,headers=admin)
+    assert first.status_code==202,first.text
+    job=first.json()
+    assert client.post(url,json=body,headers=admin).json()["id"]==job["id"]
+    assert calls==[]
+    W.tick(session_scope)
+    def fresh():
+        with session_scope() as db:
+            AD._put(db,"arm-rf:"+did,{**m,"observed_at":datetime.now(timezone.utc).isoformat(),
+                "collection_state":"SUCCEEDED","identity":{"verified":True}},"test")
+    fresh()
+    W.tick(session_scope)
+    with session_scope() as db:
+        job=W.state(db,did)
+        assert job["status"]=="WAIT_ENROLLMENT" and db.get(ConfigArtifact,job["backup_artifact_id"])
+        eid=job["enrollment_id"]
+    assert calls==["open","backup","close"]
+    approve_url=f"/api/v1/optimization/enrollments/{eid}/approve"
+    assert client.post(approve_url,headers=admin).status_code==403
+    assert client.post(approve_url,headers=reviewer).status_code==200
+    W.tick(session_scope)
+    fresh()
+    W.tick(session_scope)
+    with session_scope() as db:
+        job=W.state(db,did)
+        assert job["status"]=="WAIT_CHANGE"
+        pid=job["plan_id"]
+        p=db.get(ChangePlan,pid)
+        assert p.state=="PENDING_APPROVAL"
+        revision=p.revision
+    assert client.post(f"/api/v1/changes/plans/{pid}/execute",headers=admin).status_code==409
+    approval=f"/api/v1/changes/plans/{pid}/approve"
+    assert client.post(approval,json={"expected_revision":revision,"note":"reviewed"},headers=reviewer).status_code==200
+    W.tick(session_scope)
+    assert calls==["open","backup","close"]
+    fresh()
+    W.tick(session_scope)
+    with session_scope() as db:
+        assert W.state(db,did)["status"]=="MONITORING"
+    assert calls[-1]==("execute",pid)
+    W.tick(session_scope)
+    assert calls.count(("execute",pid))==1
+
+
+def test_analyze_now_does_not_request_enrollment_backup_or_write(client,admin,arm_device,monkeypatch):
+    from backend.infrastructure import optimization_workflow as W
+    from backend.database.models_phases import OptimizationEnrollment
+    did,m=arm_device
+    monkeypatch.setenv("INM_AUTOMATIC_OPTIMIZATION","true")
+    monkeypatch.setattr(W,"_backup",lambda *a:pytest.fail("Analysis must not require backup"))
+    monkeypatch.setattr(W.X,"execute_plan",lambda *a,**kw:pytest.fail("Analysis must not write"))
+    r=client.post(f"/api/v1/devices/{did}/optimization/start",headers=admin,
+                  json={"serial":"REAL-REFERENCE-1","analyze_only":True})
+    assert r.status_code==202,r.text
+    W.tick(session_scope)
+    with session_scope() as db:
+        AD._put(db,"arm-rf:"+did,{**m,"observed_at":datetime.now(timezone.utc).isoformat(),
+            "collection_state":"SUCCEEDED","identity":{"verified":True}},"test")
+    W.tick(session_scope)
+    with session_scope() as db:
+        job=W.state(db,did)
+        assert job["status"]=="ANALYSIS_ONLY" and job["device_writes"]==0
+        assert db.scalar(select(OptimizationEnrollment).where(OptimizationEnrollment.device_id==did)) is None
+        assert db.scalar(select(ChangePlan).where(ChangePlan.device_id==did)) is None

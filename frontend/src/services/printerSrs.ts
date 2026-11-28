@@ -92,12 +92,15 @@ const id = (x: string) => `${P}/${encodeURIComponent(x)}`;
 export type PrinterChange = { id: string; state: string; operation: string; before: string; after: string;
   created_at: string; created_by: string; finished_at?: string; result?: { readback_verified?: boolean; restored?: boolean } | null };
 export type PrinterConfiguration = { hardware_verified: boolean; writes_enabled: boolean; current_location: string | null;
-  read_error: string | null; history: PrinterChange[]; available: string[] };
+  read_error: string | null; history: PrinterChange[]; available: string[];
+  settings?: Record<string, { status: string; mib?: string; type?: string; reason?: string }> };
 
 export const prn = {
   discoveryJobs: () => request<{ id: string; status: string; target: string; created_at: string; progress: number; total: number; found: number }[]>(`${P}/discovery/jobs`),
   configuration: (p: string) => request<PrinterConfiguration>(`${id(p)}/configuration`),
   previewLocation: (p: string, location: string) => request<PrinterChange>(`${id(p)}/configuration/preview`, j({ location })),
+  previewSetting: (p: string, operation: string, value: string | number) => request<PrinterChange>(`${id(p)}/configuration/preview`, j({ operation, value })),
+  hardwareTest: (p: string, operation: string) => request<{ operation: string; status: string; result: Record<string, unknown> }>(`${id(p)}/configuration/hardware-test`, j({ operation })),
   applyConfiguration: (p: string, change: string) => request<PrinterChange>(`${id(p)}/configuration/${encodeURIComponent(change)}/apply`, j({})),
   rollbackConfiguration: (p: string, change: string) => request<PrinterChange>(`${id(p)}/configuration/${encodeURIComponent(change)}/rollback`, j({})),
   list: (f: Record<string, string | number | boolean | undefined> = {}) => request<PrinterRow[]>(`${P}${q(f)}`),

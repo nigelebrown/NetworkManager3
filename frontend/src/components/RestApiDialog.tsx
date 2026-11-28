@@ -45,7 +45,7 @@ export default function RestApiDialog({ site, onClose }: { site: Site; onClose: 
                 <pre className="rounded bg-slate-950 p-2 text-xs">{state.commands.join("\n")}</pre>
                 <div>
                   <div className="text-xs uppercase text-slate-400">AP SSH host key (read without sending any credentials)</div>
-                  {fp && state.ssh?.legacy_algorithms && <p className="mt-1 text-xs text-amber-300">This AP only accepts older SSH algorithms (ssh-rsa / SHA-1), so SIMS used the legacy fallback. Compare the fingerprint below with the one on the AP before continuing.</p>}
+                  {fp && state.ssh?.legacy_algorithms && <p className="mt-1 text-xs text-amber-300">This AP only accepts older SSH algorithms (ssh-rsa / SHA-1). It was reached only because an administrator approved it for legacy SSH; the session was audited. Compare the fingerprint below with the one on the AP before continuing.</p>}
                   {fp ? <code className="mt-1 block break-all rounded bg-slate-950 p-2 text-xs">{fp}</code>
                       : <p className="mt-1 text-amber-300">{state.ssh?.error ?? "Could not read the SSH host key. Is SSH (TCP 22) reachable from SIMS?"}</p>}
                   <label className="mt-2 flex items-start gap-2 text-slate-300"><input type="checkbox" className="mt-1" checked={seen} onChange={(e) => setSeen(e.target.checked)} />

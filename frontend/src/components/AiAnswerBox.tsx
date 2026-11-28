@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { SimBadge } from "./ui";
 import type { AiAnswer } from "../services/api";
 

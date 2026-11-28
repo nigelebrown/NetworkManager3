@@ -1,11 +1,11 @@
 /** Printer detail: Overview, Usage, Consumables, Faults & Maintenance, Raw SNMP Data, Configuration. */
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router";
 import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { Notice, PageHeader, Pill, ago, btn, btn2, inputCls, useAction } from "../components/viz";
 import { getSession } from "../services/api";
-import { prn, waitJob, type Job, type PrinterChange } from "../services/printerSrs";
+import { prn, waitJob, type Job, type PrinterChange, type PrinterConfiguration } from "../services/printerSrs";
 import { PrinterDetails as ManualRecords } from "./Printers";
 import { PrinterNav, UtilizationChart } from "./PrinterSuite";
 
@@ -290,7 +290,41 @@ function DeviceConfiguration({ id }: { id: string }) {
             onClick={() => act.run(async () => finish(await prn.rollbackConfiguration(id, r.id)))}>Restore original location</button>,
         ])} />
       </div>}
-      <p className="mt-3 text-xs text-slate-500">Print defaults, trays, network, security and firmware controls are not enabled yet.</p>
+      {cfg.data.settings && <OtherSettings id={id} cfg={cfg.data} reload={cfg.reload} />}
+      <p className="mt-3 text-xs text-slate-500">Network, security and firmware controls are not offered on printers. Each setting needs its own hardware write-and-restore test on this printer and firmware.</p>
     </>}
   </Box>;
+}
+
+
+const SETTING_LABEL: Record<string, string> = { "system.location": "Location", "system.contact": "Administrative contact",
+  "system.name": "Device name", "entity.asset_id": "Asset ID", "printer.name": "Printer name",
+  "printer.default_input": "Default input tray (paper)", "printer.default_media_path": "Default media path (duplex)",
+  "printer.energy_saving": "Energy saving" };
+
+function OtherSettings({ id, cfg, reload }: { id: string; cfg: PrinterConfiguration; reload: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [plan, setPlan] = useState<PrinterChange | null>(null);
+  const act = useAction();
+  const admin = getSession()?.role === "admin";
+  const entries = Object.entries(cfg.settings ?? {}).filter(([k]) => k !== "system.location");
+  return <div className="mt-4 border-t pt-3">
+    <h3 className="mb-2 font-semibold">Other device settings</h3>
+    <Notice error={act.error} message={act.message} />
+    <table className="inm-table"><thead><tr><th>Setting</th><th>Standard object</th><th>Status</th><th>Change</th></tr></thead>
+      <tbody>{entries.map(([op, st]) => <tr key={op}><td>{SETTING_LABEL[op] ?? op}</td><td className="text-xs">{st.mib ?? "—"}</td>
+        <td><Pill value={st.status.replace(/_/g, " ")} tone={st.status === "VERIFIED" ? "good" : st.status === "UNSUPPORTED" ? "none" : "fair"} />
+          {st.reason && <div className="text-xs text-slate-500">{st.reason}</div>}</td>
+        <td>{st.status === "VERIFIED" ? <span className="flex gap-1">
+            <input aria-label={`New ${SETTING_LABEL[op] ?? op}`} className={inputCls} value={vals[op] ?? ""} onChange={e => setVals({ ...vals, [op]: e.target.value })} />
+            <button className={btn2} disabled={act.busy || !cfg.writes_enabled || !(vals[op] ?? "").length} onClick={() => act.run(async () => {
+              setPlan(await prn.previewSetting(id, op, st.type === "index" ? Number(vals[op]) : vals[op])); })}>Preview</button></span>
+          : st.status === "NOT_VERIFIED" && admin ? <button className={btn2} disabled={act.busy || !cfg.writes_enabled} onClick={() => act.run(async () => {
+              const r = await prn.hardwareTest(id, op); reload(); return `Hardware test ${r.status}.`; })}>Run hardware test (lab printer)</button> : null}</td></tr>)}</tbody></table>
+    {plan && <div className="mt-2 rounded border p-3 text-sm" role="region" aria-label="Printer setting preview">
+      <p><b>{SETTING_LABEL[plan.operation] ?? plan.operation}:</b> {plan.before || "(empty)"} → {plan.after || "(empty)"}</p>
+      <button className={btn + " mt-2"} disabled={act.busy} onClick={() => act.run(async () => {
+        const r = await prn.applyConfiguration(id, plan.id); setPlan(null); reload(); return `Result: ${r.state.replace(/_/g, " ")}`; })}>Apply change</button>
+    </div>}
+  </div>;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { getSession } from "../services/api";
 import { STATE_TONE, TIER_TONE, pct, wl } from "../services/wireless";
 import DiagnosisPanel from "./DiagnosisPanel";

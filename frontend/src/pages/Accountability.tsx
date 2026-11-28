@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { COLORS, Donut, Notice, PageHeader, Pill, ago, btn, btn2, inputCls, useAction } from "../components/viz";

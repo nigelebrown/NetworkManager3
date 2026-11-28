@@ -123,7 +123,8 @@ export const wl = {
   pendingKeys: () => request<{ ip: string; fingerprint: string; key_type: string; scanned_at: string; changed_from?: string | null }[]>("/v1/wireless/autodiscover/pending-keys"),
   approveKeys: (items: { ip: string; fingerprint: string }[]) => post<{ ip: string; approved: boolean; reason?: string }[]>(
     "/v1/wireless/autodiscover/approve-keys", { items, confirm: "APPROVE HOST KEYS" }),
-  onboardingPolicy: () => request<{ enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }>("/v1/wireless/autodiscover/policy"),
+  onboardingPolicy: () => request<{ enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean;
+    lockout_guard?: { max_failures: number; window_minutes: number; accounts: { account: string; failures: number; held: boolean }[] } }>("/v1/wireless/autodiscover/policy"),
   saveOnboardingPolicy: (body: { enabled: boolean; credential_ids: string[] | null; auto_trust_new_hosts: boolean; auto_enable_rest: boolean }) =>
     request("/v1/wireless/autodiscover/policy", { method: "PUT", body: JSON.stringify(body) }),
   onboardingProfiles: () => request<{ id: string; name: string; device_family: string; enabled: boolean }[]>("/v1/onboarding/credentials"),

@@ -169,7 +169,7 @@ class ChangePlan(Base):
     approver: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source: Mapped[str] = mapped_column(String(16), default="OPERATOR")  # OPERATOR | AI_DRAFT
+    source: Mapped[str] = mapped_column(String(32), default="OPERATOR")  # OPERATOR | AI_DRAFT | TEMPLATE | AUTO_OPTIMIZER_ROLLBACK
     revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(_TS, default=utcnow, index=True)
 
@@ -247,6 +247,15 @@ class MlModel(Base):
     trained_at: Mapped[datetime] = mapped_column(_TS, default=utcnow)
     decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(_TS, nullable=True)
+    # rc18 (0016): breach-risk models per predictive rule. NULL target = WP-08 rule-success model.
+    target: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dataset_source: Mapped[str | None] = mapped_column(String(12), nullable=True)   # LIVE | DEMO | SYNTHETIC
+    production_validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    validation_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    training_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)       # per-feature bins for drift
+    health: Mapped[str | None] = mapped_column(String(16), nullable=True)            # OK | WATCH | DRIFT | DEGRADED
+    health_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 # ---- WP-09 per-device optimization ------------------------------------------------------

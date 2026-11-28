@@ -131,6 +131,39 @@ def printer_daily() -> dict:
     return {"retention": retention, "recommendations": recs}
 
 
+def device_log_retention() -> dict:
+    """Daily device-log retention (no-op until an administrator enables a policy)."""
+    from .device_log_retention import apply
+    with session_scope() as db:
+        return apply(db)
+
+
+def device_probes() -> dict | None:
+    """Active reachability + clock-offset probe of registered devices inside the approved CIDRs (every 5 min)."""
+    if not _on("INM_SCHEDULED_ACTIVE_PROBE", "false"):
+        return None
+    from .device_probes import run
+    from .runtime import telemetry_store
+    with session_scope() as db:
+        return run(db, store=telemetry_store())
+
+
+def printer_purchasing() -> dict:
+    """Daily automatic supply purchase requests (no-op unless the module is authorised and the policy enables it)."""
+    if not _on("INM_FEATURE_PURCHASING", "false"):
+        return {"automatic": False, "created": 0, "reason": "purchasing module not authorised"}
+    from ..printers.purchasing import generate
+    with session_scope() as db:
+        return generate(db)
+
+
+def print_job_retention() -> dict:
+    """Daily print-job retention purge (also runs while the module is disabled, so old records still expire)."""
+    from ..printers.print_jobs import purge
+    with session_scope() as db:
+        return purge(db)
+
+
 def predictive() -> dict | None:
     """Score finished prediction windows, then issue a new run (needs the telemetry store)."""
     if not _on("INM_SCHEDULED_PREDICTIVE"):
@@ -139,7 +172,44 @@ def predictive() -> dict | None:
     if telemetry_store() is None:
         return None
     from ..api.intelligence import run_predictions, score_predictions
+    from .clock import now as clock_now
+    at = clock_now()                     # one instant: windows that ended by `at` are scored, new ones start at `at`
     with session_scope() as db:
-        scored = score_predictions(db)
-        run = run_predictions(db, actor="predictive-scheduler")
+        scored = score_predictions(db, now=at)
+        run = run_predictions(db, actor="predictive-scheduler", now=at)
         return {"scored": scored["scored"], "run": run.id, "validation": run.validation_state}
+
+
+def ml_monitor() -> dict | None:
+    """Daily: score finished model inferences, drift-check promoted models, update their health (fallback)."""
+    if not _on("INM_SCHEDULED_ML"):
+        return None
+    from ..ml import service as MLS
+    with session_scope() as db:
+        return MLS.monitor(db)
+
+
+def ml_retrain() -> dict | None:
+    """Daily check: retrain targets whose last run is older than the interval or whose model drifted.
+    Creates CANDIDATES only; promotion is an independent human decision."""
+    if not _on("INM_SCHEDULED_ML"):
+        return None
+    from .runtime import telemetry_store
+    if telemetry_store() is None:
+        return None
+    from ..ml import service as MLS
+    with session_scope() as db:
+        return MLS.scheduled_retrain(db)
+
+
+def syslog_bridge() -> dict | None:
+    """Device syslog in Loki -> device timeline + change attribution; then logging-health alerts (rc18)."""
+    if not _on("INM_SYSLOG_BRIDGE"):
+        return None
+    from .runtime import log_store
+    from .syslog_bridge import bridge, logging_health
+    store = log_store()
+    with session_scope() as db:
+        out = {"bridge": bridge(db, store) if store is not None else {"skipped": "Loki not configured"}}
+        out["logging_health"] = logging_health(db)
+        return out

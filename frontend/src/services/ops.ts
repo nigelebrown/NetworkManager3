@@ -75,7 +75,8 @@ export interface Timeline { device_id: string; attributions: Attribution[];
   log_events: { id: string; observed_at: string; severity: string; event_code: string | null; message: string;
     user: string | null; is_config_change: boolean; transport: string }[];
   coverage: { present: string[]; missing: string[]; complete: boolean } }
-export interface OptState { device_id: string; mode: string; status: string; badge: string; display?: string;
+export interface OptimizationWorkflow { approval_notification?: string; id: string; device_id: string; status: string; detail: string; requester: string; backup_artifact_id: string | null; plan_id: string | null; plan?: {id: string; state: string; revision: number; requester: string; approver: string | null}; enrollment_id: string | null; arm_observed_at?: string; findings: {id: string; severity: string; title: string; why: string; proposal?: Record<string, unknown> | null}[]; device_writes?: number | null; proposed_operation?: Record<string, unknown>; outcome?: Record<string, unknown>; guards?: {guard: string; pass: boolean}[] }
+export interface OptState { workflow?: OptimizationWorkflow | null; device_id: string; mode: string; status: string; badge: string; display?: string;
   enrollment: Record<string, unknown> | null; global_write_lock: boolean; emergency_stop: boolean;
   native_vendor_optimization: string }
 export interface LearningItem { id: string; created_at: string; device_id: string | null; title: string; why: string;
@@ -109,8 +110,8 @@ export const ops = {
   // change control
   changePlans: () => request<ChangePlan[]>("/v1/changes/plans"),
   createChange: (b: Record<string, unknown>) => post<ChangePlan>("/v1/changes/plans", b),
-  decideChange: (id: string, a: "approve" | "reject", rev: number, note: string) =>
-    post<ChangePlan>(`/v1/changes/plans/${enc(id)}/${a}`, { expected_revision: rev, note }),
+  decideChange: (id: string, a: "approve" | "reject", rev: number, note: string, emergency = false) =>
+    post<ChangePlan>(`/v1/changes/plans/${enc(id)}/${a}`, { expected_revision: rev, note, ...(emergency ? { emergency: true } : {}) }),
   executeChange: (id: string) => post<{ decision: string; denial_reason: string | null; guards: Decision["guards"] }>(`/v1/changes/plans/${enc(id)}/execute`),
   decisions: () => request<Decision[]>("/v1/changes/decisions"),
   // vault
@@ -137,6 +138,7 @@ export const ops = {
   decideModel: (id: string, a: "promote" | "reject") => post<Model>(`/v1/ai/models/${enc(id)}/${a}`),
   shadow: (b: Record<string, unknown>) => post<{ timeline: { at: string; op: string; result: string }[]; stopped: boolean; device_writes: number }>("/v1/ai/evaluation/shadow", b),
   // optimization (recommend + shadow only)
+  optStart: (id: string, serial: string, standing_approval: boolean, analyze_only = false) => post<OptimizationWorkflow>(`/v1/devices/${enc(id)}/optimization/start`, {serial, standing_approval, analyze_only}),
   optState: (id: string) => request<OptState>(`/v1/devices/${enc(id)}/optimization`),
   optEnroll: (id: string, b: Record<string, unknown>) => post<Record<string, unknown>>(`/v1/devices/${enc(id)}/optimization/enroll`, b),
   optApprove: (eid: string) => post<Record<string, unknown>>(`/v1/optimization/enrollments/${enc(eid)}/approve`),
@@ -239,7 +241,8 @@ export const rw = {
   setRule: (rule: string, b: Record<string, unknown>) => request(`/v1/alert-rules/${enc(rule)}`, { method: "PUT", body: JSON.stringify(b) }),
   windows: () => request<{ id: string; site_id: string | null; device_id: string | null; starts_at: string; ends_at: string; reason: string; created_by: string }[]>("/v1/maintenance-windows"),
   addWindow: (b: Record<string, unknown>) => post("/v1/maintenance-windows", b),
-  optimizerRun: () => post<Record<string, number>>("/v1/optimization/run-now"),
+  optimizerRun: () => post<Record<string, number | string>>("/v1/optimization/run-now"),
+  optimizerRunDevice: (id: string) => post<Record<string, number | string | OptState>>(`/v1/devices/${enc(id)}/optimization/run-now`),
   sitePolicies: () => request<{ site_id: string; allowed_channels_5g: number[]; allowed_widths_mhz: number[]; min_tx_dbm: number; max_tx_dbm: number }[]>("/v1/optimization/site-policies"),
   setSitePolicy: (site: string, b: Record<string, unknown>) => request(`/v1/optimization/site-policies/${enc(site)}`, { method: "PUT", body: JSON.stringify(b) }),
 };

@@ -1,61 +1,77 @@
-import PortGroups from "./pages/PortGroups";
-import InventoryImport from "./pages/InventoryImport";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Suspense, lazy } from "react";
+import { Navigate, Route, Routes } from "react-router";
 import Layout from "./components/Layout";
 import { getSession } from "./services/api";
-import Alerts from "./pages/Alerts";
-import Assistant from "./pages/Assistant";
-import APs from "./pages/APs";
-import ApFleet from "./pages/ApFleet";
-import ApHealthReport from "./pages/ApHealthReport";
-import ClientConnectivity from "./pages/ClientConnectivity";
-import DiscoveryRules from "./pages/DiscoveryRules";
-import Clients from "./pages/Clients";
-import Configuration from "./pages/Configuration";
-import Firmware from "./pages/Firmware";
-import Dashboard from "./pages/Dashboard";
-import Experience from "./pages/Experience";
 import Login from "./pages/Login";
-import Sites from "./pages/Sites";
-import AiLearning from "./pages/AiLearning";
-import Audit from "./pages/Audit";
 import ChangePassword from "./pages/ChangePassword";
-import Logs from "./pages/Logs";
-import DeviceIntake from "./pages/DeviceIntake";
-import GuidedOnboarding from "./pages/GuidedOnboarding";
-import DeviceConfig from "./pages/DeviceConfig";
-import ConfigTemplates from "./pages/ConfigTemplates";
-import Phase4Insights from "./pages/Phase4Insights";
-import DiscoveryRanges from "./pages/DiscoveryRanges";
-import { PrinterConsumables, PrinterInventory, PrinterLive, PrinterMaintenance, PrinterModels, PrinterOverview,
-  PrinterProfiles, PrinterRecommendations, PrinterReports, PrinterUtilization } from "./pages/PrinterSuite";
-import PrinterDevice from "./pages/PrinterDevice";
-import { AiRules, IntelRecommendations, OperationalAnalytics, PredictiveHealth } from "./pages/Intelligence";
-import DeviceDetails from "./pages/DeviceDetails";
-import Recovery from "./pages/Recovery";
-import Switches from "./pages/Switches";
-import SystemHealth from "./pages/SystemHealth";
-import Users from "./pages/Users";
-import NocDashboard from "./pages/NocDashboard";
-import ExecutiveDashboard from "./pages/ExecutiveDashboard";
-import Compliance from "./pages/Compliance";
-import Certification from "./pages/Certification";
-import Deployments from "./pages/Deployments";
-import Notifications from "./pages/Notifications";
-import Topology from "./pages/Topology";
-import DeviceAlerts from "./pages/DeviceAlerts";
-import Device360 from "./pages/Device360";
-import DeviceInventory from "./pages/DeviceInventory";
-import Collection from "./pages/Collection";
-import ChangePlans from "./pages/ChangePlans";
-import Vault from "./pages/Vault";
-import Accountability from "./pages/Accountability";
-import Replacement from "./pages/Replacement";
-import LearningCentre from "./pages/LearningCentre";
-import Optimization from "./pages/Optimization";
-import Platform from "./pages/Platform";
-import DataManagement from "./pages/DataManagement";
-import WireframeWorkspace from "./pages/WireframeWorkspaces";
+const PortGroups = lazy(() => import("./pages/PortGroups"));
+const Optics = lazy(() => import("./pages/Optics"));
+const InventoryImport = lazy(() => import("./pages/InventoryImport"));
+const Alerts = lazy(() => import("./pages/Alerts"));
+const Assistant = lazy(() => import("./pages/Assistant"));
+const APs = lazy(() => import("./pages/APs"));
+const ApFleet = lazy(() => import("./pages/ApFleet"));
+const ApHealthReport = lazy(() => import("./pages/ApHealthReport"));
+const ClientConnectivity = lazy(() => import("./pages/ClientConnectivity"));
+const DiscoveryRules = lazy(() => import("./pages/DiscoveryRules"));
+const Clients = lazy(() => import("./pages/Clients"));
+const Configuration = lazy(() => import("./pages/Configuration"));
+const Firmware = lazy(() => import("./pages/Firmware"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Experience = lazy(() => import("./pages/Experience"));
+const Sites = lazy(() => import("./pages/Sites"));
+const AiLearning = lazy(() => import("./pages/AiLearning"));
+const Audit = lazy(() => import("./pages/Audit"));
+const Logs = lazy(() => import("./pages/Logs"));
+const DeviceIntake = lazy(() => import("./pages/DeviceIntake"));
+const GuidedOnboarding = lazy(() => import("./pages/GuidedOnboarding"));
+const DeviceConfig = lazy(() => import("./pages/DeviceConfig"));
+const ConfigTemplates = lazy(() => import("./pages/ConfigTemplates"));
+const Phase4Insights = lazy(() => import("./pages/Phase4Insights"));
+const DiscoveryRanges = lazy(() => import("./pages/DiscoveryRanges"));
+const PrinterConsumables = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterConsumables })));
+const PrinterInventory = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterInventory })));
+const PrinterLive = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterLive })));
+const PrinterMaintenance = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterMaintenance })));
+const PrinterModels = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterModels })));
+const PrinterOverview = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterOverview })));
+const PrinterProfiles = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterProfiles })));
+const PrinterPurchasing = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterPurchasing })));
+const PrinterRecommendations = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterRecommendations })));
+const PrinterReports = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterReports })));
+const PrinterUtilization = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrinterUtilization })));
+const PrintJobs = lazy(() => import("./pages/PrinterSuite").then(m => ({ default: m.PrintJobs })));
+const PrinterDevice = lazy(() => import("./pages/PrinterDevice"));
+const AiRules = lazy(() => import("./pages/Intelligence").then(m => ({ default: m.AiRules })));
+const IntelRecommendations = lazy(() => import("./pages/Intelligence").then(m => ({ default: m.IntelRecommendations })));
+const OperationalAnalytics = lazy(() => import("./pages/Intelligence").then(m => ({ default: m.OperationalAnalytics })));
+const Integrations = lazy(() => import("./pages/Integrations"));
+const PredictiveHealth = lazy(() => import("./pages/Intelligence").then(m => ({ default: m.PredictiveHealth })));
+const DeviceDetails = lazy(() => import("./pages/DeviceDetails"));
+const Recovery = lazy(() => import("./pages/Recovery"));
+const Switches = lazy(() => import("./pages/Switches"));
+const SystemHealth = lazy(() => import("./pages/SystemHealth"));
+const Users = lazy(() => import("./pages/Users"));
+const NocDashboard = lazy(() => import("./pages/NocDashboard"));
+const ExecutiveDashboard = lazy(() => import("./pages/ExecutiveDashboard"));
+const Compliance = lazy(() => import("./pages/Compliance"));
+const Certification = lazy(() => import("./pages/Certification"));
+const Deployments = lazy(() => import("./pages/Deployments"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const Topology = lazy(() => import("./pages/Topology"));
+const DeviceAlerts = lazy(() => import("./pages/DeviceAlerts"));
+const Device360 = lazy(() => import("./pages/Device360"));
+const DeviceInventory = lazy(() => import("./pages/DeviceInventory"));
+const Collection = lazy(() => import("./pages/Collection"));
+const ChangePlans = lazy(() => import("./pages/ChangePlans"));
+const Vault = lazy(() => import("./pages/Vault"));
+const Accountability = lazy(() => import("./pages/Accountability"));
+const Replacement = lazy(() => import("./pages/Replacement"));
+const LearningCentre = lazy(() => import("./pages/LearningCentre"));
+const Optimization = lazy(() => import("./pages/Optimization"));
+const Platform = lazy(() => import("./pages/Platform"));
+const DataManagement = lazy(() => import("./pages/DataManagement"));
+const WireframeWorkspace = lazy(() => import("./pages/WireframeWorkspaces"));
 
 function Protected({ children }: { children: JSX.Element }) {
   const s = getSession();
@@ -71,6 +87,7 @@ function WithSession({ children }: { children: JSX.Element }) {
 
 export default function App() {
   return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-500" role="status">Loading…</div>}>
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/change-password" element={<WithSession><ChangePassword /></WithSession>} />
@@ -116,6 +133,8 @@ export default function App() {
         <Route path="printers/models" element={<PrinterModels />} />
         <Route path="printers/recommendations" element={<PrinterRecommendations />} />
         <Route path="printers/reports" element={<PrinterReports />} />
+        <Route path="printers/purchasing" element={<PrinterPurchasing />} />
+        <Route path="printers/print-jobs" element={<PrintJobs />} />
         <Route path="printers/profiles" element={<PrinterProfiles />} />
         <Route path="printers/:id" element={<PrinterDevice />} />
         <Route path="devices/:id" element={<DeviceDetails />} />
@@ -139,6 +158,7 @@ export default function App() {
         {/* Approved full-system wireframe workspaces: reuse existing APIs and change safeguards. */}
         <Route path="rf-health" element={<ApFleet mode="rf" />} />
         <Route path="port-groups" element={<PortGroups />} />
+        <Route path="optics" element={<Optics />} />
         <Route path="port-health" element={<WireframeWorkspace kind="ports" />} />
         <Route path="client-journeys" element={<ClientConnectivity />} />
         <Route path="approvals" element={<WireframeWorkspace kind="approvals" />} />
@@ -146,12 +166,13 @@ export default function App() {
         <Route path="predictive" element={<PredictiveHealth />} />
         <Route path="analytics" element={<OperationalAnalytics />} />
         <Route path="credentials" element={<WireframeWorkspace kind="credentials" />} />
-        <Route path="integrations" element={<WireframeWorkspace kind="integrations" />} />
+        <Route path="integrations" element={<Integrations />} />
         <Route path="switch-config" element={<WireframeWorkspace kind="switchconfig" />} />
         <Route path="ssid-policies" element={<WireframeWorkspace kind="ssid" />} />
         <Route path="device-360" element={<WireframeWorkspace kind="device360" />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   );
 }

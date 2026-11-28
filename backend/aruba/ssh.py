@@ -48,42 +48,43 @@ def fingerprint(key: paramiko.PKey) -> str:
     return "SHA256:" + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
 
 
-# Older Instant APs sometimes need RSA/SHA-1 host signatures and group14/SHA-1
-# key exchange. Do NOT negotiate obsolete group1 or SHA-1 group exchange.
-# These preferences are private to Paramiko's per-device transport; the host
-# OpenSSH configuration and every other 10.0.0.0/8 destination are untouched.
-_LEGACY_ALGS = {"keys": ["ssh-rsa"], "kex": ["diffie-hellman-group14-sha1"]}
-_UNSAFE_KEX = {"kex": ["diffie-hellman-group1-sha1", "diffie-hellman-group-exchange-sha1"]}
+# rc18: Paramiko 5 negotiates modern algorithms only (ed25519, ecdsa, rsa-sha2-256/512; curve25519, ecdh, group14/16
+# with SHA-2). There is no silent fallback: a device that offers only ssh-rsa / SHA-1 is refused unless an
+# administrator approved that exact device for legacy SSH AND INM_SSH_LEGACY_COMPAT=true (see ssh_legacy.py).
+_LEGACY_ALGS = {"keys": ["ssh-rsa"], "kex": ["diffie-hellman-group14-sha1"]}   # documentation / legacy client only
+LEGACY_REFUSED_HELP = (
+    "{host} offers only legacy SSH algorithms (ssh-rsa / SHA-1), which this platform does not negotiate by default "
+    "({why}). Prefer upgrading the device firmware. If the device must be used as is, an administrator can approve it "
+    "for legacy SSH (Platform settings → SSH legacy compatibility) and enable INM_SSH_LEGACY_COMPAT on the server; "
+    "every legacy session is audited."
+)
 
 
 def _open_transport(host: str, port: int, timeout: float):  # patched in tests
-    """Connect with modern algorithms only; if the AP offers nothing we accept, retry once allowing the legacy
-    ssh-rsa / SHA-1 set (the equivalent of `ssh -o HostKeyAlgorithms=+ssh-rsa`). The returned transport has
-    `sims_legacy` set when the fallback was used. The pinned host-key fingerprint is still enforced by callers."""
-    for legacy in (False, True):
-        try:
-            sock = socket.create_connection((host, port), timeout=timeout)
-        except OSError as exc:
-            raise ArubaConnectionError(f"SSH connection to {host}:{port} failed: {exc.strerror or type(exc).__name__}") from None
-        t = paramiko.Transport(sock, disabled_algorithms=_UNSAFE_KEX if legacy else {
-            "keys": _LEGACY_ALGS["keys"], "kex": [*_LEGACY_ALGS["kex"], *_UNSAFE_KEX["kex"]],
-        })
-        t.banner_timeout = timeout
-        try:
-            t.start_client(timeout=timeout)
-        except paramiko.ssh_exception.IncompatiblePeer:
-            t.close()
-            if legacy:
-                raise ArubaSshError(LEGACY_SSH_HELP.format(host=host)) from None
-            continue
-        except (paramiko.SSHException, EOFError, OSError) as exc:
-            t.close()
-            raise ArubaSshError(f"SSH negotiation with {host} failed: {type(exc).__name__}") from None
-        t.sims_legacy = legacy
-        if legacy:
-            log.warning("SSH to %s needed legacy algorithms (ssh-rsa / SHA-1); host key is still pinned.", host)
-        return t
-    raise ArubaSshError(LEGACY_SSH_HELP.format(host=host))  # unreachable; keeps type checkers happy
+    """Modern algorithms only; never downgrades silently. The pinned host-key fingerprint is enforced by callers."""
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as exc:
+        raise ArubaConnectionError(f"SSH connection to {host}:{port} failed: {exc.strerror or type(exc).__name__}") from None
+    t = paramiko.Transport(sock)
+    t.banner_timeout = timeout
+    try:
+        t.start_client(timeout=timeout)
+    except paramiko.ssh_exception.IncompatiblePeer:
+        t.close()
+        from . import ssh_legacy
+        ok, why = ssh_legacy.allowed(host)
+        if not ok:
+            ssh_legacy._audit("ssh_legacy_refused", host, why, False)
+            raise ArubaSshError(LEGACY_REFUSED_HELP.format(host=host, why=why)) from None
+        ssh_legacy._audit("ssh_legacy_used", host, why, True)
+        log.warning("SSH to %s uses APPROVED legacy algorithms (ssh-rsa / SHA-1); host key still pinned.", host)
+        return ssh_legacy.LegacyTransport(host, port, timeout)
+    except (paramiko.SSHException, EOFError, OSError) as exc:
+        t.close()
+        raise ArubaSshError(f"SSH negotiation with {host} failed: {type(exc).__name__}") from None
+    t.sims_legacy = False
+    return t
 
 
 def scan_host_key(host: str, port: int = 22, timeout: float = 8.0) -> dict[str, str]:
@@ -242,6 +243,16 @@ _ALLOWED_CONFIG_LINES = [re.compile(p) for p in (
     r"^a-channels [0-9]{1,3}\+?(?:,[0-9]{1,3}\+?){0,47}$",
     r"^captive-portal external profile [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
     r"^mac-authentication$", r"^set-role-(pre-auth|mac-auth) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    # rc17 typed WLAN security objects (roles, external captive portal, MAC + 802.1X)
+    r"^(no )?wlan (access-rule|external-captive-portal) [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^rule (?:any any|(?:[0-9]{1,3}\.){3}[0-9]{1,3} (?:[0-9]{1,3}\.){3}[0-9]{1,3}) match "
+    r"(?:any any any|(?:tcp|udp) [0-9]{1,5} [0-9]{1,5}) (?:permit|deny)$",
+    r"^server [A-Za-z0-9][A-Za-z0-9.-]{0,252}$", r'^url "/[A-Za-z0-9._~!$&()*+,;=:@%/?-]{0,254}"$', r"^https$",
+    r"^redirect-url https://[A-Za-z0-9._~!$&()*+,;=:@%/?-]{1,247}$",
+    r"^no (mac-authentication|l2-auth-failthrough|set-role-mac-auth)$", r"^l2-auth-failthrough$",
+    # rc18 RADIUS server attributes and SSID server assignment
+    r"^timeout [0-9]{1,2}$", r"^retry-count [0-5]$", r"^no auth-server [A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+    r"^(no )?server-load-balancing$",
 )]
 
 
@@ -378,3 +389,32 @@ class SshShowClient:
                 self._t.close()
             finally:
                 self._t, self._chan = None, None
+
+
+def run_exec_command(host: str, username: str, password: str, expected_fingerprint: str, command: str, *,
+                     port: int = 22, timeout: float = 60.0, max_bytes: int = 32768) -> str:
+    """Run ONE fixed operational command (ping/traceroute) after verifying the pinned host key. The command string is
+    built by the caller from a fixed template with validated arguments; never pass user text. Output is bounded."""
+    if not expected_fingerprint:
+        raise ArubaSshError("No approved SSH host-key fingerprint for this device; approve it first.")
+    t = _open_transport(host, port, min(timeout, 20.0))
+    try:
+        if fingerprint(t.get_remote_server_key()) != expected_fingerprint:
+            raise ArubaSshError("SSH host key does not match the approved fingerprint. Nothing was sent.")
+        try:
+            t.auth_password(username, password)
+        except paramiko.AuthenticationException:
+            raise ArubaAuthError("SSH login rejected (check the username/password).") from None
+        chan = t.open_session()
+        chan.get_pty(width=512, height=1000)
+        chan.invoke_shell()
+        _read_until_prompt(chan, 20.0)
+        chan.send(command + "\n")
+        out = _read_until_prompt(chan, timeout)
+        try:
+            chan.send("exit\n")
+        except (OSError, EOFError) as _exc:
+            log.debug("best-effort sending exit to an SSH channel: %s", type(_exc).__name__)
+        return out[:max_bytes]
+    finally:
+        t.close()

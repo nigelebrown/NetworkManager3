@@ -248,3 +248,77 @@ def test_anomalies_bounded_for_steady_workload_and_ignore_partial_days():
     days[5]["volume"] = 6000.0
     a = U.robust_anomalies(days)
     assert [x["day"] for x in a] == ["d5"] and abs(a[0]["robust_z"]) < 100
+
+
+# ---- 1.3.0-rc16: partial readings, truncated tables and SNMPv3 protocol selection ---------------------
+def test_one_metric_timeout_keeps_other_valid_readings():
+    agent = C.EmulatedPrinterAgent(C.emulated_printer(impressions=900, supplies=[{"descr": "Black Toner", "level": 40}]))
+    agent.timeout_oids.add(mib.PRT_SUPPLY_LEVEL)            # supply levels time out, everything else answers
+    r = asyncio.run(C.poll(agent, mib.BUILTIN_PROFILES))
+    assert r.snmp_ok and r.meters["impressions_total"]["value"] == 900
+    assert any(s.metric_key == "supply_level" and s.value_state == "MISSING" for s in r.samples)
+    assert all(s["percent_remaining"] is None for s in r.supplies)   # never fabricated from a missing level
+    assert r.faults_observed                                        # fault tables themselves were complete
+
+
+def test_truncated_alert_table_keeps_rows_but_never_clears_faults():
+    alerts = [{"code": 8, "severity": 3, "descr": "Jam"}, {"code": 1101, "severity": 3, "descr": "Toner empty"}]
+    agent = C.EmulatedPrinterAgent(C.emulated_printer(alerts=alerts))
+    agent.truncate_tables[mib.PRT_ALERT_CODE] = 1
+    r = asyncio.run(C.poll(agent, mib.BUILTIN_PROFILES))
+    assert "alert_code" in r.incomplete_metrics and r.error == "table walk interrupted; partial rows kept"
+    assert r.faults and not r.faults_observed
+
+
+def test_snmpv3_protocols_default_to_legacy_and_map_to_pysnmp():
+    from backend.printers import snmp as S
+    assert S.usm_options({}) == {"auth_protocol": "SHA256", "priv_protocol": "AES128"}   # pre-rc16 profiles
+    assert S.usm_options({"auth_protocol": "sha", "priv_protocol": "aes256"}) == {"auth_protocol": "SHA",
+                                                                                 "priv_protocol": "AES256"}
+    with pytest.raises(ValueError):
+        S.usm_options({"auth_protocol": "ROT13"})
+    import pysnmp.hlapi.v3arch.asyncio as hl
+    u = S.build_auth_data("3", "monitor", "authpass123", "privpass123", auth_protocol="SHA", priv_protocol="AES256")
+    assert u.authentication_protocol == hl.USM_AUTH_HMAC96_SHA and u.privacy_protocol == hl.USM_PRIV_CFB256_AES
+    u = S.build_auth_data("3", "monitor", "authpass123", auth_protocol="MD5", priv_protocol="NONE")
+    assert u.privacy_protocol == hl.USM_PRIV_NONE
+    assert S.build_auth_data("2c", "public").message_processing_model == 1
+    assert S.build_auth_data("1", "public").message_processing_model == 0
+    with pytest.raises(ValueError):
+        S.build_auth_data("4", "x")
+
+
+def test_raw_samples_are_stored_on_change_with_heartbeat(app_env):
+    """rc17 storage fix: unchanged values are not re-stored every poll; changes and heartbeats are."""
+    from datetime import timedelta as TD
+    from sqlalchemy import func, select
+    from backend.database import session as dbs
+    from backend.database.models_printer_srs import PrinterMetricSample
+    from backend.printers import service as S
+    dbs.init_engine(); dbs.create_schema()
+    agent = C.EmulatedPrinterAgent(C.emulated_printer(impressions=1000, supplies=[{"descr": "TK-1150 Black", "level": 80}]))
+    with dbs.session_scope() as db:
+        p, _ = S.register_or_update(db, {"manufacturer": "Kyocera", "model": "ECOSYS M2640idw", "serial_number": "EMU0001",
+                                         "management_ip": "10.9.9.9"}, provenance="MANUAL")
+        pid = p.id
+    counts = []
+    for i in range(6):
+        at = T0 + TD(minutes=15 * i)
+        agent.values[mib.PRT_MARKER_LIFE + ".1.1"] += 20            # only the page counter changes
+        res = asyncio.run(C.poll(agent, mib.BUILTIN_PROFILES, now=at))
+        with dbs.session_scope() as db:
+            S.apply_poll(db, db.get(S.PrinterDevice, pid), res)
+            counts.append(db.scalar(select(func.count()).select_from(PrinterMetricSample)))
+    first, per_poll = counts[0], [b - a for a, b in zip(counts, counts[1:])]
+    assert first > 10 and all(0 < d <= 3 for d in per_poll), (first, per_poll)
+    agent.values[mib.PRT_SUPPLY_LEVEL + ".1.1"] = 40                # a supply change is stored
+    at = T0 + TD(minutes=15 * 6)
+    with dbs.session_scope() as db:
+        S.apply_poll(db, db.get(S.PrinterDevice, pid), asyncio.run(C.poll(agent, mib.BUILTIN_PROFILES, now=at)))
+        assert db.scalar(select(func.count()).select_from(PrinterMetricSample).where(
+            PrinterMetricSample.metric_key == "supply_level", PrinterMetricSample.observed_at == at)) == 1
+    at = T0 + TD(hours=7)                                            # past the 6 h heartbeat: everything re-stored
+    with dbs.session_scope() as db:
+        before = db.scalar(select(func.count()).select_from(PrinterMetricSample))
+        S.apply_poll(db, db.get(S.PrinterDevice, pid), asyncio.run(C.poll(agent, mib.BUILTIN_PROFILES, now=at)))
+        assert db.scalar(select(func.count()).select_from(PrinterMetricSample)) - before >= first - 2

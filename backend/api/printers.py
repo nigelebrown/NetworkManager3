@@ -29,7 +29,7 @@ from ..database.session import get_db
 from ..security.crypto import decrypt_secret, encrypt_secret
 from ..security.deps import audit, require_role
 from ..printers.analytics import cycle_analysis, low_supply_alert, meter_change, compare_model_cycles
-from ..printers.snmp import permitted_target, read_printer, read_snmpv3
+from ..printers.snmp import WEAK_PROTOCOLS, permitted_target, read_printer, read_snmpv3, usm_options
 
 router = APIRouter(prefix="/api/printers", tags=["printer-intelligence"])
 admin_only = Depends(require_role("admin"))
@@ -273,6 +273,10 @@ class PrinterProfile(BaseModel):
     username: str = Field(default="", max_length=100)
     auth_passphrase: str = Field(default="", max_length=200)
     privacy_passphrase: str = Field(default="", max_length=200)
+    # SNMPv3 only. authPriv is the default; authNoPriv is allowed for printers that offer no privacy.
+    security_level: Literal["authPriv", "authNoPriv"] = "authPriv"
+    auth_protocol: Literal["SHA256", "SHA", "SHA224", "SHA384", "SHA512", "MD5"] = "SHA256"
+    priv_protocol: Literal["AES128", "AES192", "AES256", "DES", "3DES"] = "AES128"
 
 
 class ProfileRange(BaseModel):
@@ -288,8 +292,17 @@ class ProfileTarget(BaseModel):
 
 
 def _profile_info(row: AppSetting) -> dict:
-    return {"id": row.key.removeprefix(PROFILE_PREFIX), "name": row.value["name"],
+    info = {"id": row.key.removeprefix(PROFILE_PREFIX), "name": row.value["name"],
             "version": row.value["version"]}
+    if row.value["version"] == "3":
+        options = usm_options(row.value)
+        info |= options | {"security_level": "authNoPriv" if options["priv_protocol"] == "NONE" else "authPriv",
+                           "weak_protocols": sorted(set(options.values()) & WEAK_PROTOCOLS)}
+    return info
+
+
+def _profile_options(row: AppSetting) -> dict:
+    return usm_options(row.value) if row.value["version"] == "3" else {}
 
 
 @router.get("/credential-profiles")
@@ -301,22 +314,44 @@ def printer_profiles(db: Session = Depends(get_db), admin: User = admin_only):
 @router.post("/credential-profiles", status_code=201)
 def create_printer_profile(body: PrinterProfile, request: Request, db: Session = Depends(get_db),
                            admin: User = admin_only):
+    options: dict = {}
     if body.version == "3":
-        if not body.username.strip() or min(len(body.auth_passphrase), len(body.privacy_passphrase)) < 8:
-            raise HTTPException(422, "SNMPv3 requires a username and both passphrases of at least 8 characters")
-        secrets = [body.username, body.auth_passphrase, body.privacy_passphrase]
+        privacy = body.security_level == "authPriv"
+        if not body.username.strip() or len(body.auth_passphrase) < 8 or (privacy and len(body.privacy_passphrase) < 8):
+            raise HTTPException(422, "SNMPv3 requires a username and passphrases of at least 8 characters")
+        if not privacy and body.privacy_passphrase:
+            raise HTTPException(422, "authNoPriv profiles do not use a privacy passphrase")
+        secrets = [body.username, body.auth_passphrase, body.privacy_passphrase if privacy else ""]
+        options = {"auth_protocol": body.auth_protocol, "priv_protocol": body.priv_protocol if privacy else "NONE"}
     else:
         if not body.community.strip():
             raise HTTPException(422, "Enter the read-only community")
         secrets = [body.community]
     row = AppSetting(key=PROFILE_PREFIX + str(uuid4()), updated_by=admin.username,
-                     value={"name": body.name.strip(), "version": body.version,
+                     value={"name": body.name.strip(), "version": body.version, **options,
                             "encrypted": encrypt_secret(json.dumps(secrets))})
     db.add(row)
     audit(db, "printer_profile_created", username=admin.username, target=row.key,
           detail="Printer credential profile saved", request=request)
     db.commit()
     return _profile_info(row)
+
+
+@router.delete("/credential-profiles/{profile_id}", status_code=204)
+def delete_printer_profile(profile_id: str, request: Request, db: Session = Depends(get_db), admin: User = admin_only):
+    """Delete an unused profile. A profile assigned to monitored printers must be reassigned first (409)."""
+    from ..database.models_printer_srs import PrinterMonitoring
+    row = db.get(AppSetting, PROFILE_PREFIX + profile_id)
+    if row is None:
+        raise HTTPException(404, "Printer credential profile not found")
+    in_use = db.scalar(select(func.count()).select_from(PrinterMonitoring)
+                       .where(PrinterMonitoring.credential_profile_id == profile_id)) or 0
+    if in_use:
+        raise HTTPException(409, f"Profile is assigned to {in_use} printer(s); assign another profile first")
+    db.delete(row)
+    audit(db, "printer_profile_deleted", username=admin.username, target=row.key,
+          detail="Printer credential profile deleted (unused)", request=request)
+    db.commit()
 
 
 @router.post("/credential-profiles/{profile_id}/test")
@@ -330,7 +365,8 @@ async def test_printer_profile(profile_id: str, body: ProfileTarget, request: Re
         raise HTTPException(404, "Printer credential profile not found")
     try:
         secrets = json.loads(decrypt_secret(row.value["encrypted"]))
-        result = await asyncio.wait_for(read_printer(host, row.value["version"], *secrets), timeout=15)
+        result = await asyncio.wait_for(read_printer(host, row.value["version"], *secrets,
+                                                     **_profile_options(row)), timeout=15)
     except Exception as exc:
         audit(db, "printer_profile_test", username=admin.username, target=host,
               detail=f"Printer check failed ({type(exc).__name__})", success=False, request=request)
@@ -386,7 +422,7 @@ async def discover_with_profile(profile_id: str, body: ProfileRange | ProfileAdd
         raise HTTPException(409, "Recreate this printer credential profile before using it") from None
 
     async def read(host):
-        return await read_printer(host, row.value["version"], *secrets)
+        return await read_printer(host, row.value["version"], *secrets, **_profile_options(row))
 
     if isinstance(body, ProfileAddresses):
         hosts = list(dict.fromkeys(map(str, body.management_ips)))

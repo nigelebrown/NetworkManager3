@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Badge, Card, ErrorNote, NA, fmtTime } from "../components/ui";
 import { CapChip, DemoBadge, Table } from "../components/inm";
 import { useLoad } from "../components/useLoad";

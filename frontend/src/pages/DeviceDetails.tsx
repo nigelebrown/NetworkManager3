@@ -1,6 +1,6 @@
 import { PageHeader, btn, inputCls } from "../components/viz";
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { Badge, Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { v1, type MetricPoint } from "../services/inm";

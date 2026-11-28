@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 
 export default function DashboardSwitcher() {
   const location = useLocation(), navigate = useNavigate();

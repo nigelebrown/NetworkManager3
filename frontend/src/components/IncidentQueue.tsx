@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { getSession } from "../services/api";
 import { inc, type Incident } from "../services/wireless";
 import { useLoad } from "./useLoad";

@@ -18,6 +18,7 @@ require_root
 [[ -f "$ENV_FILE" ]] || die "INM is not installed" 2
 start_transcript rollback
 git -C "$ROOT" rev-parse -q --verify "refs/tags/$REF" >/dev/null || die "'$REF' is not a tag" 2
+verify_release_ref "$REF" || die "ROLLBACK REFUSED: $REF failed signature/integrity verification. Nothing was changed." 3
 
 CUR="$(mktemp)"; TGT="$(mktemp)"
 schema_status > "$CUR" || die "cannot read the current schema revisions (is the API running?)" 4
@@ -27,6 +28,7 @@ if ! python3 -I "$ROOT/deployment/tools/schema_gate.py" "$CUR" "$TGT"; then
   die "ROLLBACK REFUSED: $REF cannot run on the current schema. Nothing was changed. See manual_path above." 3
 fi
 [[ $ACK -eq 1 ]] || die "schema gate passed. Re-run with --acknowledge-schema-compatible to proceed." 2
+require_change_quiesce
 
 PREV="$(git_commit)"
 git -C "$ROOT" checkout -q "$REF"

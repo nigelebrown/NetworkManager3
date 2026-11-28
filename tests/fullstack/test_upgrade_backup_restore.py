@@ -4,7 +4,7 @@ The CentOS Stream 9 scripts (deployment/centos9/*.sh) orchestrate container imag
 build environment, so the CentOS host run itself is BLOCKED. These tests exercise exactly the database operations
 those scripts perform, on the same engine versions:
 
-* upgrade: an rc1 database (management 0009 + telemetry t001) holding data is upgraded in place to 0010 + t002;
+* upgrade: an rc1 database (management 0009 + telemetry t001) holding data is upgraded in place to the release head + t002;
   every row survives, port telemetry is back-filled with its interface identity, and the 1.2.0-rc2 ORM reads it.
 * backup/restore: pg_dump -Fc of both databases from the running full stack (after the full-stack suite), restored
   into new databases with timescaledb_pre_restore()/post_restore() as restore.sh does; every table's row count and
@@ -27,6 +27,7 @@ import pytest
 pytestmark = pytest.mark.skipif(not os.environ.get("INM_FS"), reason="INM_FS not set (needs tests/fullstack/stack.sh up)")
 
 ROOT = Path(__file__).resolve().parents[2]
+HEAD = json.loads((ROOT / "release.json").read_text())["management_schema_head"]   # was hard-coded "0010" (rc2)
 PGBIN = "/usr/lib/postgresql/16/bin"
 SU = "host=/tmp port=56432 user=postgres dbname=postgres"
 EVIDENCE = ROOT / "evidence" / "fullstack"
@@ -47,7 +48,7 @@ def sa_url(db: str) -> str:
 
 def alembic(db: str, *args: str) -> str:
     env = {**os.environ, "SIMS_DATABASE_URL": sa_url(db)}
-    r = subprocess.run([str(ROOT / ".venv/bin/python"), "-m", "alembic", "-c", str(ROOT / "alembic.ini"), *args],
+    r = subprocess.run([os.environ.get("INM_PY", str(ROOT / ".venv/bin/python")), "-m", "alembic", "-c", str(ROOT / "alembic.ini"), *args],
                        cwd=ROOT, env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
     return r.stdout + r.stderr
@@ -108,7 +109,7 @@ def test_rc1_to_rc2_upgrade_preserves_data_on_postgresql_and_timescaledb():
         assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0009"
     alembic("inm_upgrade", "upgrade", "head")
     with psycopg.connect(dsn("inm_upgrade")) as c:
-        assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0010"
+        assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == HEAD
         after = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in before}
         new = {r[0] for r in c.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")}
     assert after == before
@@ -150,7 +151,7 @@ def test_rc1_to_rc2_upgrade_preserves_data_on_postgresql_and_timescaledb():
     assert "entity_type, entity_id" in idx
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     (EVIDENCE / "upgrade_rc1_to_rc2.json").write_text(json.dumps(
-        {"management": {"from": "0009", "to": "0010", "rows_before": before, "rows_after": after},
+        {"management": {"from": "0009", "to": HEAD, "rows_before": before, "rows_after": after},
          "telemetry": {"from": "t001", "to": "t002", "rows": rows}}, indent=1, default=str))
 
 
@@ -186,7 +187,7 @@ def test_backup_and_restore_round_trip_of_the_running_full_stack():
         assert not diff, (db, diff)
     # restored database is at head; migrations are a no-op
     with psycopg.connect(dsn("inm_management_restore")) as c:
-        assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0010"
+        assert c.execute("SELECT version_num FROM alembic_version").fetchone()[0] == HEAD
     alembic("inm_management_restore", "upgrade", "head")                    # no-op at head
     from backend.infrastructure.telemetry.timescale import TimescaleTelemetryStore
     assert TimescaleTelemetryStore("postgresql+psycopg://inm_metrics:fs-ts-pass@127.0.0.1:56432/"
@@ -195,7 +196,7 @@ def test_backup_and_restore_round_trip_of_the_running_full_stack():
     (EVIDENCE / "backup_restore_round_trip.json").write_text(json.dumps({
         "tables": {db: {t: v[0] for t, v in src[db].items()} for db in src},
         "row_counts_and_checksums_match": True, "pg_restore_notices": notices,
-        "restored_management_head": "0010", "telemetry_hypertable_restored": True}, indent=1))
+        "restored_management_head": HEAD, "telemetry_hypertable_restored": True}, indent=1))
 
 
 def test_retention_drops_only_points_older_than_the_window_on_timescaledb():

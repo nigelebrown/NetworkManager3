@@ -301,7 +301,7 @@ def test_adapter_registry_unsupported_and_writes_central():
     cisco = AD.resolve("Cisco", "switch", "Catalyst 2960-X")
     assert cisco.key == "cisco_ios_xe_snmpv3"
     assert AD.operation_result(cisco, "backup_full_config")["status"] == "UNSUPPORTED"
-    # placeholder adapter: nothing is implemented, so a write is UNSUPPORTED (not a gated working path) — E2E-19
+    # read-only adapter (rc17): collection works, a write is UNSUPPORTED (not a gated working path) — E2E-19
     assert AD.operation_result(cisco, "apply_change")["status"] == "UNSUPPORTED"
     cx = AD.resolve("Aruba", "switch", "CX 6200F 24G")
     assert cx.key == "aruba_cx_10_14" and AD.operation_result(cx, "collect")["status"] == "AVAILABLE_READ_ONLY"

@@ -173,8 +173,15 @@ def create_device(body: QuickDevice, request: Request, db: Session = Depends(get
 
 
 class BulkQuickDeviceInput(BaseModel):
-    """Review all entries before saving. Bulk onboarding is MANUAL only."""
+    """Review all entries before saving. Bulk onboarding is MANUAL only.
+
+    ``mode="atomic"`` (default, backwards compatible) rejects the whole batch on any conflict.
+    ``mode="partial"`` imports valid rows and returns per-row rejections for duplicate serials in the batch and
+    serial/family collisions with existing inventory. Schema validation errors still reject the request (422)
+    so the client can remove those rows and resubmit.
+    """
     devices: list[QuickDevice] = Field(min_length=1, max_length=100)
+    mode: Literal["atomic", "partial"] = "atomic"
 
 
 @router.post("/bulk", status_code=201)
@@ -186,35 +193,53 @@ def create_device_batch(body: BulkQuickDeviceInput, request: Request,
     No hardware calls. Bulk telemetry is excluded until cross-database transaction
     reconciliation is available; add observations individually after import.
     """
+    partial = body.mode == "partial"
     serials: set[str] = set()
-    for row in body.devices:
+    rejected: list[dict] = []
+    accepted: list[tuple[int, QuickDevice]] = []
+    for index, row in enumerate(body.devices):
         key = row.serial_number.strip().casefold()
-        if key in serials:
-            raise HTTPException(422, f"Duplicate serial number in batch: {row.serial_number}")
-        serials.add(key)
         if row.metrics:
             raise HTTPException(422, "Bulk device import accepts inventory only; record metrics individually.")
+        if key in serials:
+            if not partial:
+                raise HTTPException(422, f"Duplicate serial number in batch: {row.serial_number}")
+            rejected.append({"index": index, "serial_number": row.serial_number,
+                             "reason": "Duplicate serial number in this file"})
+            continue
+        serials.add(key)
+        accepted.append((index, row))
     # Detect all cross-family collisions BEFORE writing any inventory rows.
     existing = list(db.scalars(select(InmDevice).where(
         InmDevice.source_type == "REAL", InmDevice.vendor == "Aruba",
-        func.lower(InmDevice.serial_number).in_(serials))))
+        func.lower(InmDevice.serial_number).in_(serials)))) if serials else []
     indexed = {device.serial_number.casefold(): device for device in existing}
-    for row in body.devices:
+    ready = []
+    for index, row in accepted:
         old = indexed.get(row.serial_number.casefold())
         if old is not None and old.family != row.family:
-            raise HTTPException(409, f"Serial {row.serial_number} already exists as {old.family}")
+            if not partial:
+                raise HTTPException(409, f"Serial {row.serial_number} already exists as {old.family}")
+            rejected.append({"index": index, "serial_number": row.serial_number,
+                             "reason": f"Serial already exists in inventory as {old.family}"})
+            continue
+        ready.append(row)
     results = []
-    for row in body.devices:
+    for row in ready:
         already = row.serial_number.casefold() in indexed
         result = record_observation(db, row, admin.username, request, evidence="MANUAL")
         results.append({"id": result["id"], "hostname": result["hostname"],
                         "serial_number": row.serial_number,
                         "action": "UPDATED" if already else "ADDED"})
     db.commit()  # Keep the bulk import atomic and visible before responding.
+    if rejected:
+        audit(db, "bulk_device_import_rows_rejected", username=admin.username, target="quick-devices/bulk",
+              detail=f"{len(rejected)} rows rejected in partial import", request=request)
+        db.commit()
     return {"count": len(results), "added": sum(x["action"] == "ADDED" for x in results),
             "updated": sum(x["action"] == "UPDATED" for x in results),
-            "source_type": "REAL", "collection_method": "MANUAL",
-            **read_only(), "results": results}
+            "source_type": "REAL", "collection_method": "MANUAL", "mode": body.mode,
+            **read_only(), "results": results, "rejected": sorted(rejected, key=lambda r: r["index"])}
 
 
 class QuickProbe(BaseModel):

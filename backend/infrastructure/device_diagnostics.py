@@ -76,3 +76,75 @@ def parse_optical_dom(text: str) -> dict:
                        "tx_power_mw": numeric(txmw), "tx_power_dbm": numeric(txdbm)}
     return {"state": "PARTIAL" if unknown else "COLLECTED", "ports": ports,
             "unparsed_port_rows": unknown, "source": "CX_REST_ANYCLI_DOM"}
+
+
+
+# ---- device-initiated (active) diagnostics, rc17 ------------------------------------------------------------
+# Fixed command templates; arguments are validated values only. Both are documented operational commands on
+# Instant 8.x and AOS-CX 10.x. Cable test and packet capture are deliberately UNSUPPORTED (see ACTIVE_UNSUPPORTED).
+ACTIVE_KINDS = ("ping", "traceroute")
+ACTIVE_UNSUPPORTED = {
+    "cable_test": "Not offered: the per-model AOS-CX/Instant cable-diagnostic command and its effect on the link "
+                  "(it can interrupt the port) are not verified for CX 6100/6200; validate on hardware first.",
+    "packet_capture": "Not offered: on-device capture needs a mirror/session configuration change and captures user "
+                      "traffic (privacy). Use an approved mirror port and an external analyser.",
+}
+_ACTIVE_LOCK = __import__("threading").Lock()
+_BUSY: set[str] = set()
+
+
+def active_command(family: str, kind: str, target: str, *, vrf: str = "default", count: int = 4) -> str:
+    import ipaddress
+    ip = ipaddress.IPv4Address(target)                     # raises ValueError for anything but an IPv4 address
+    if ip.is_unspecified or ip.is_multicast:
+        raise ValueError("Target must be a unicast IPv4 address.")
+    if not 1 <= int(count) <= 10:
+        raise ValueError("count must be 1–10.")
+    if family == "switch":
+        if vrf not in ("default", "mgmt"):
+            raise ValueError("VRF must be default or mgmt.")
+        return f"ping {ip} repetitions {int(count)} vrf {vrf}" if kind == "ping" else f"traceroute {ip} vrf {vrf}"
+    if family == "access_point":
+        return f"ping {ip}" if kind == "ping" else f"traceroute {ip}"
+    raise ValueError("Unsupported device family.")
+
+
+def run_active(db, device, kind: str, target: str, *, vrf: str = "default", count: int = 4) -> dict:
+    """Run one bounded diagnostic from the device. Raises WriterError categories like the read path."""
+    from .change_executor import writer_for
+    from .writers import WriterError
+    if kind in ACTIVE_UNSUPPORTED:
+        raise WriterError("UNSUPPORTED", ACTIVE_UNSUPPORTED[kind])
+    if kind not in ACTIVE_KINDS:
+        raise WriterError("UNSUPPORTED", "Unknown diagnostic.")
+    try:
+        command = active_command(device.family, kind, target, vrf=vrf, count=count)
+    except ValueError as exc:
+        raise WriterError("INVALID", str(exc)) from None
+    with _ACTIVE_LOCK:
+        if device.id in _BUSY:
+            raise WriterError("DEVICE_BUSY", "A diagnostic is already running on this device.")
+        _BUSY.add(device.id)
+    try:
+        writer, env = writer_for(db, device)
+        if env == "EMULATED":
+            out = (f"EMULATED {kind} from {device.hostname or device.serial_number} to {target}: "
+                   f"{'4 packets transmitted, 4 received, 0% loss' if kind == 'ping' else '1  ' + target + '  1.0 ms'}")
+            return {"kind": kind, "command": command, "output": out, "environment": env, "source": "EMULATOR"}
+        from ..aruba import ssh
+        from ..aruba.errors import ArubaError
+        from ..database.models_phases import DeviceAccess
+        access = db.get(DeviceAccess, device.id)
+        creds = getattr(writer, "creds", None)
+        fp = (access.ssh_fingerprint if access else None) or (creds.ssh_fingerprint if creds else None)
+        if creds is None or not fp:
+            raise WriterError("PRECONDITION", "Approve this device's SSH host key before running device diagnostics.")
+        try:
+            raw = ssh.run_exec_command(creds.host, creds.username, creds.password, fp, command,
+                                       timeout=90.0 if kind == "traceroute" else 45.0)
+        except ArubaError as exc:
+            raise WriterError("PRECONDITION" if "fingerprint" in str(exc) else "CONNECTION_LOST", str(exc)) from None
+        return {"kind": kind, "command": command, "output": safe_output(raw), "environment": env, "source": "SSH_CLI"}
+    finally:
+        with _ACTIVE_LOCK:
+            _BUSY.discard(device.id)

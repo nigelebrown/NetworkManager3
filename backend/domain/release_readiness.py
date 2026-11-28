@@ -79,7 +79,8 @@ def _check_artifacts(artifacts: Any, root: Path, errors: list[str]) -> dict[str,
             target = directory.joinpath(*name.split("/"))
             # Reject symlinks and require all evidence below an explicitly
             # provided root; GitHub-side fixture files never suffice by default.
-            if not target.is_file() or target.is_symlink() or not target.resolve().is_relative_to(directory):
+            if (not target.is_file() or any(p.is_symlink() for p in (target, *target.parents) if p != directory and p.is_relative_to(directory))
+                    or not target.resolve().is_relative_to(directory)):
                 raise ValueError("missing file, symlink, or outside evidence root")
             if target.stat().st_size > MAX_ARTIFACT_BYTES or target.stat().st_size == 0:
                 raise ValueError("empty or oversized evidence")
@@ -96,13 +97,29 @@ def _check_artifacts(artifacts: Any, root: Path, errors: list[str]) -> dict[str,
 
 
 def required_acceptance_checks() -> dict[str, str]:
-    """Return the exact canonical test IDs and phases for this source release."""
-    source = Path(__file__).resolve().parents[2] / "docs" / "Unified_Acceptance_Register_v4.csv"
-    with source.open("r", encoding="utf-8-sig", newline="") as stream:
-        rows = list(csv.DictReader(stream))
-    required = {r["test_id"].strip(): r["phase"].strip() for r in rows}
-    if len(required) < 220 or len(required) != len(rows) or "" in required:
-        raise ValueError("Canonical acceptance register is invalid.")
+    """Require the canonical register for the release, never silently downgrade RC18."""
+    root = Path(__file__).resolve().parents[2]
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    rc = re.fullmatch(r"1\.3\.0-rc(\d+)", version)
+    v5 = root / "docs" / "Unified_Acceptance_Register_v5.csv"
+    requires_v5 = v5.exists() or (rc is not None and int(rc.group(1)) >= 18)
+    source = v5 if requires_v5 else root / "docs" / "Unified_Acceptance_Register_v4.csv"
+
+    def read_checks(path: Path, minimum: int) -> dict[str, str]:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        required = {r["test_id"].strip(): r["phase"].strip() for r in rows}
+        if (len(required) < minimum or len(required) != len(rows)
+                or "" in required or any(not phase for phase in required.values())):
+            raise ValueError("Canonical acceptance register is invalid.")
+        return required
+
+    required = read_checks(source, 303 if requires_v5 else 220)
+    if requires_v5:
+        previous = read_checks(root / "docs" / "Unified_Acceptance_Register_v4.csv", 281)
+        rc18_checks = {f"RC18-T{i:02d}": "RC18" for i in range(1, 23)}
+        if any(required.get(tid) != phase for tid, phase in (previous | rc18_checks).items()):
+            raise ValueError("Canonical RC18 register omits or changes required checks.")
     return required
 
 

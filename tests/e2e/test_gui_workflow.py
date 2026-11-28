@@ -41,7 +41,7 @@ def snap(page, name):
 def test_guided_workflow_live_mode_end_to_end(browser):
     pw = os.environ["INM_E2E_ADMIN_PASSWORD"]
     ctx, page, problems = session(browser, "admin", pw)
-    page.get_by_text("Network command center").wait_for()
+    page.get_by_role("link", name="Network command center").wait_for()   # rc17 breadcrumbs repeat the label
     assert page.get_by_text("DEMO MODE").count() == 0 and page.get_by_text("DEMO DATA LOADED").count() == 0
     devs = api(page, "GET", "/v1/devices")
     assert not [d for d in devs if d["source_type"] == "DEMO"]            # live mode: no demo records
@@ -104,13 +104,20 @@ def test_guided_workflow_live_mode_end_to_end(browser):
     page.get_by_text(re.compile("DENY — .*global_write_lock_off")).first.wait_for(timeout=30000)
     snap(page, "07_apply_refused_locked_uncertified")
     # 11 monitoring through the worker pipeline
-    page.get_by_role("button", name="Skip to monitoring").click()
-    page.get_by_role("button", name="Start monitoring & poll now").click()
-    for _ in range(30):
-        page.wait_for_timeout(2000)
+    # the UI offers read-only monitoring once hardware writes were denied (renamed from "Skip to monitoring" +
+    # "Start monitoring & poll now"); configuration stays pending and still needs approval/certification
+    page.get_by_role("button", name="Start read-only monitoring (configuration pending)").click()
+    page.get_by_text(re.compile("Read-only monitoring initiated. Configuration is NOT applied")).wait_for(timeout=30000)
+    # every reload re-fetches the whole shell; reload every 5 s (60 s in total, as before) so this one session stays
+    # inside the per-user API rate limit (300/min) instead of being throttled by its own polling
+    for _ in range(12):
+        page.wait_for_timeout(5000)
         page.reload()
+        page.get_by_test_id("monitoring-pending").wait_for(timeout=15000)   # count only after the data rendered
         if page.get_by_text("ONLINE", exact=True).count() >= 2:
             break
+    if page.get_by_text("ONLINE", exact=True).count() < 2:
+        snap(page, "08_monitoring_not_online")                          # evidence for the failure report
     assert page.get_by_text("ONLINE", exact=True).count() >= 2
     page.reload()
     page.get_by_text("Monitored — 2 change plan(s) not applied (approve, certify or unlock, then apply)").wait_for(timeout=20000)
@@ -118,10 +125,10 @@ def test_guided_workflow_live_mode_end_to_end(browser):
     # Device 360 for the 48-port switch: faceplate + one port's own history + capability report
     dev48 = next(d for d in api(page, "GET", "/v1/devices") if d["serial_number"] == "EMU-FS-48")
     page.goto(f"{URL}/devices/{dev48['id']}/360")
-    page.get_by_role("button", name="Ports", exact=True).click()
+    page.get_by_role("tab", name="Ports", exact=True).click()          # Device 360 sections are ARIA tabs
     page.get_by_label("Port 1/1/7").click()
     page.get_by_label("Port 1/1/7 history").wait_for()
-    page.get_by_role("button", name="Capabilities", exact=True).click()
+    page.get_by_role("tab", name="Capabilities", exact=True).click()
     page.get_by_text(re.compile("Not certified for")).first.wait_for()
     snap(page, "09_device360_capabilities")
     page.goto(URL + "/topology")

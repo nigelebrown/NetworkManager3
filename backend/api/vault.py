@@ -1,5 +1,6 @@
 """WP-05 — encrypted configuration vault (Phase 5). No restore-to-device endpoint exists."""
 from __future__ import annotations
+import logging
 
 from ..infrastructure.posture import read_only, write_posture
 
@@ -20,6 +21,8 @@ from ..domain.reporting import SECRET_KEYS
 from ..infrastructure.phase_services import LocalObjectStore, vault_master_key
 from ..security.deps import audit, require_any_role, require_role
 from ._phase_common import iso, real_device, require_write_lock
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["wp05-vault"])
 MAX_CONFIG_BYTES = 2_000_000
@@ -172,3 +175,39 @@ def diff(artifact_id: str, other_id: str, request: Request, db: Session = Depend
     audit(db, "vault_diff_viewed", username=user.username, target=a.device_id,
           detail=f"{a.id}..{b.id} (secret lines redacted)", request=request)
     return {"from": a.id, "to": b.id, "diff": lines[:2000], "secret_lines": "REDACTED"}
+
+
+@router.post("/vault/artifacts/{artifact_id}/typed-restore-plan", status_code=201)
+def typed_restore_plan(artifact_id: str, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(require_role("operator"))):
+    """Instant clusters: compare the baseline artifact with the CURRENT running config (read-only) and create a
+    PENDING_APPROVAL change plan of typed restore operations. Nothing is applied here."""
+    from ..domain import instant_reconcile as IR
+    from ..infrastructure.change_executor import writer_for
+    from ..infrastructure.writers import WriterError
+    a = _artifact(db, artifact_id)
+    d = real_device(db, a.device_id)
+    if d.family != "access_point":
+        raise HTTPException(422, "Typed reconciliation is for Instant clusters; CX uses checkpoint restore (config.restore).")
+    baseline = _open(a).decode("utf-8", "replace")
+    w, _env = writer_for(db, d)
+    try:
+        w.open()
+        current = w._running()
+    except WriterError as exc:
+        raise HTTPException(502, f"Could not read the current configuration: {exc}") from None
+    finally:
+        try:
+            w.close()
+        except Exception as _exc:  # noqa: BLE001
+            _log.debug("best-effort closing the vault reader session: %s", type(_exc).__name__)
+    result = IR.plan(baseline, current)
+    audit(db, "typed_restore_reconciled", username=user.username, target=d.id, request=request,
+          detail=f"artifact={a.id} ops={len(result['operations'])} unrestorable={len(result['unrestorable'])}")
+    if not result["operations"]:
+        db.commit()
+        return result | {"plan": None}
+    from .change_control import PlanInput, create_plan
+    created = create_plan(PlanInput(device_id=d.id, title=f"Typed restore to baseline {a.id[:8]}",
+                                    operations=result["operations"], submit=True), request, db, user)
+    return result | {"plan": created}

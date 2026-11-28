@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { getSession } from "../services/api";

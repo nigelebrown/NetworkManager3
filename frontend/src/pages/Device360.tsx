@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
@@ -8,7 +8,7 @@ import { RuleTable } from "./Compliance";
 import Faceplate from "../components/Faceplate";
 import { Notice, btn2, useAction } from "../components/viz";
 import { rw, type DeviceOriginLogs, type DeviceDiagnostic } from "../services/ops";
-import { api, getSession } from "../services/api";
+import { api, getSession, request } from "../services/api";
 import { rem } from "../services/remediation";
 import { v1 } from "../services/inm";
 import { ops } from "../services/ops";
@@ -293,6 +293,9 @@ export default function Device360() {
         </div>}
         {!mayReadHardware && <p className="mt-2 text-xs text-slate-500">
           Device-originated diagnostics require an operator, auditor or administrator account.</p>}
+        {d && d.source_type === "REAL" && <ProbeState deviceId={id} />}
+        {d && d.family === "switch" && <PortAuthStatus deviceId={id} />}
+        {d && <ActiveDiagnostics deviceId={id} family={d.family} />}
       </Card>
       <Card title="Templates → deployment">
         <p className="text-sm text-slate-400">Compare the inherited template with what is installed and create an approvable change plan containing only the needed operations.</p>
@@ -370,4 +373,76 @@ function ApExtrasCard({ x }: { x: import("../services/wireless").ApExtras }) {
     {!!x.gaps.length && <p className="text-xs text-amber-600">Gaps: {x.gaps.join("; ")}</p>}
     <p className="text-[10px] text-slate-500">{x.neighbors.source}. {x.format_verification}.</p>
   </Card>;
+}
+
+
+/** Ping / traceroute run FROM the device (rc17): fixed templates, IPv4 target only, operator or admin. */
+type ProbeInfo = { probe: { reachable: boolean | null; rtt_ms?: number | null; error?: string | null; port?: number; measured_at: string | null; consecutive_failures?: number };
+  clock: { state: string; offset_s: number | null; measured_at: string | null }; clock_tolerance_s: number };
+function ProbeState({ deviceId }: { deviceId: string }) {
+  const p = useLoad(() => request<ProbeInfo>(`/v1/devices/${encodeURIComponent(deviceId)}/probe`), [deviceId], 60000);
+  if (!p.data) return null;
+  const { probe, clock } = p.data;
+  return <div className="mt-4 border-t pt-3 text-sm">
+    <h3 className="text-sm font-semibold">Independent active probe</h3>
+    <div className="mt-1 flex flex-wrap items-center gap-3">
+      {probe.measured_at ? <><Pill value={probe.reachable ? "REACHABLE" : `UNREACHABLE${probe.error ? ` · ${probe.error}` : ""}`} tone={probe.reachable ? "good" : "poor"} />
+        <span>TCP {probe.port} · {probe.rtt_ms != null ? `${probe.rtt_ms} ms` : "no RTT"} · {ago(probe.measured_at)}</span></>
+        : <span className="text-slate-500">Not probed yet (probes run only for allowed management addresses when enabled).</span>}
+      <Pill value={`CLOCK ${clock.state}`} tone={clock.state === "OK" ? "good" : clock.state === "DRIFT" ? "fair" : "none"} />
+      {clock.offset_s != null && <span>offset {clock.offset_s > 0 ? "+" : ""}{clock.offset_s} s (tolerance {p.data.clock_tolerance_s} s)</span>}
+    </div>
+    {clock.state === "DRIFT" && <p className="mt-1 text-xs text-amber-700">Device-timestamped evidence (syslog) is corrected by the measured offset and cannot verify attribution while drift persists.</p>}
+  </div>;
+}
+
+function PortAuthStatus({ deviceId }: { deviceId: string }) {
+  const role = getSession()?.role;
+  const [port, setPort] = useState("");
+  const [out, setOut] = useState<{ clients: { mac: string; status: string | null; methods: string[]; role: string | null; vlan: number | null }[]; environment: string } | null>(null);
+  const act = useAction();
+  if (!role || !["admin", "operator"].includes(role)) return null;
+  return <div className="mt-4 border-t pt-3 text-sm">
+    <h3 className="text-sm font-semibold">Port authentication status (802.1X / MAC-auth)</h3>
+    <div className="mt-1 flex flex-wrap items-end gap-2">
+      <label htmlFor="auth-port">Port</label><input id="auth-port" className="inm-form-control" placeholder="1/1/24" value={port} onChange={e => setPort(e.target.value)} />
+      <button className={btn2} disabled={act.busy || !/^\d+\/\d+\/\d+$/.test(port)} onClick={() => act.run(async () => {
+        setOut(await request(`/v1/devices/${encodeURIComponent(deviceId)}/ports/${port}/auth-clients`)); })}>Read clients</button>
+    </div>
+    <Notice error={act.error} message={act.message} />
+    {out && <table className="inm-table mt-2"><thead><tr><th>MAC</th><th>Status</th><th>Methods</th><th>Role</th><th>VLAN</th></tr></thead>
+      <tbody>{out.clients.map(c => <tr key={c.mac}><td className="font-mono">{c.mac}</td><td>{c.status ?? "—"}</td><td>{c.methods.join(", ") || "—"}</td><td>{c.role ?? "—"}</td><td>{c.vlan ?? "—"}</td></tr>)}
+        {!out.clients.length && <tr><td colSpan={5}>No authenticated clients on this port.</td></tr>}</tbody></table>}
+    {out && out.environment === "EMULATED" && <p className="text-xs text-slate-500">EMULATED device — values are from the labelled emulator.</p>}
+  </div>;
+}
+
+function ActiveDiagnostics({ deviceId, family }: { deviceId: string; family: string }) {
+  const role = getSession()?.role;
+  const [kind, setKind] = useState("ping");
+  const [target, setTarget] = useState("");
+  const [vrf, setVrf] = useState("default");
+  const [out, setOut] = useState<{ command: string; output: string; environment: string } | null>(null);
+  const act = useAction();
+  if (!role || !["admin", "operator"].includes(role)) return null;
+  return <div className="mt-4 border-t pt-3">
+    <h3 className="text-sm font-semibold">Test reachability from this device</h3>
+    <Notice error={act.error} message={act.message} />
+    <div className="mt-2 flex flex-wrap items-end gap-2 text-sm">
+      <label htmlFor="active-diag-kind">Test</label>
+      <select id="active-diag-kind" className="inm-form-control" value={kind} onChange={e => setKind(e.target.value)}>
+        <option value="ping">Ping</option><option value="traceroute">Traceroute</option></select>
+      <label htmlFor="active-diag-target">Target IPv4</label>
+      <input id="active-diag-target" className="inm-form-control" value={target} placeholder="10.0.0.1" onChange={e => setTarget(e.target.value.trim())} />
+      {family === "switch" && <><label htmlFor="active-diag-vrf">VRF</label>
+        <select id="active-diag-vrf" className="inm-form-control" value={vrf} onChange={e => setVrf(e.target.value)}>
+          <option value="default">default</option><option value="mgmt">mgmt</option></select></>}
+      <button className={btn2} disabled={act.busy || !/^\d{1,3}(\.\d{1,3}){3}$/.test(target)} onClick={() => act.run(async () => {
+        const r = await request<{ command: string; output: string; environment: string }>(`/v1/devices/${encodeURIComponent(deviceId)}/active-diagnostics`,
+          { method: "POST", body: JSON.stringify({ kind, target, vrf }) });
+        setOut(r); return `${r.command} completed (${r.environment}).`; })}>Run</button>
+    </div>
+    <p className="mt-1 text-xs text-slate-500">Cable test and packet capture are not offered: see the capability notes in the acceptance matrix.</p>
+    {out && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border p-3 text-xs" aria-label="Device diagnostic output">{out.output}</pre>}
+  </div>;
 }

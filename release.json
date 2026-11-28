@@ -1,11 +1,11 @@
 {
   "product": "Intelligent Network Manager",
-  "version": "1.3.0-rc15",
-  "phase": "1-11 software remediation (hardware certification pending)",
-  "management_schema_head": "0014",
+  "version": "1.3.0-rc18",
+  "phase": "1-11 software completion (rc18; hardware certification pending)",
+  "management_schema_head": "0016",
   "telemetry_schema_head": "t002",
   "accepts_management_schemas": [
-    "0014"
+    "0016"
   ],
   "accepts_telemetry_schemas": [
     "t002"
@@ -35,12 +35,12 @@
       "CentOS 1,000-printer scale run"
     ],
     "not_built_pending_authorisation": [
-      "printer configuration (SNMP SET)",
       "printer firmware upgrades",
-      "print-job interception",
-      "document-content inspection",
-      "automated purchase orders"
-    ]
+      "print-job interception agents (Windows/CUPS)",
+      "document-content inspection (module disabled and not mounted unless authorised)",
+      "automated purchase orders (module disabled and not mounted unless authorised)"
+    ],
+    "configuration": "per-printer hardware-verified SNMP SET of standard objects (location, contact, name, asset ID, printer name, default tray, default media path); energy saving UNSUPPORTED"
   },
   "onboarding_module": {
     "status": "WIZARD_READWRITE_CERTIFICATION_GATED",
@@ -88,9 +88,9 @@
     ],
     "not_yet_certified": [
       "scheduled Aruba device polling",
-      "trained ML model",
       "autonomous RF optimization",
-      "configuration apply"
+      "configuration apply",
+      "trained ML model validated on live fleet telemetry"
     ]
   },
   "upgradable_management_schemas": [
@@ -103,7 +103,9 @@
     "0010",
     "0011",
     "0012",
-    "0013"
+    "0013",
+    "0014",
+    "0015"
   ],
   "capability_completion": {
     "status": "SOFTWARE_REMEDIATION_HARDWARE_UNCERTIFIED",
@@ -146,6 +148,27 @@
     "not_yet_certified": [
       "CentOS restart/recovery",
       "predictive skill on real fleet telemetry"
+    ],
+    "trained_model": "logreg_breach_v1 per predictive target: PRIMARY only when production-validated on live telemetry; synthetic/demo models never drive predictions"
+  },
+  "rc18": {
+    "schema_revision": "0016",
+    "features": [
+      "trained breach-risk model lifecycle",
+      "CX RADIUS/AAA lifecycle and 802.1X/MAB policy",
+      "Instant RADIUS servers and SSID failover",
+      "OSPF on CX 6200 (BGP unsupported on 6100/6200)",
+      "optical DOM monitoring",
+      "printer settings beyond location",
+      "signed releases with trust-store rotation",
+      "Paramiko 5 with approved legacy SSH",
+      "React Router 7",
+      "Integrations module",
+      "imported group assignment"
+    ],
+    "not_certified": [
+      "every new device write (hardware certification pending)",
+      "ML model skill on the real fleet"
     ]
   }
 }

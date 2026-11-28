@@ -1,6 +1,6 @@
 import { PageHeader } from "../components/viz";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote, fmtTime } from "../components/ui";
 import { Table } from "../components/inm";
 import { useLoad } from "../components/useLoad";

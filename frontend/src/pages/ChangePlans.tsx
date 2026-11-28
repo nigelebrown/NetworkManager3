@@ -1,22 +1,53 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { DevicePicker, Notice, PageHeader, Pill, Steps, ago, btn, btn2, btnDanger, inputCls, statusTone, useAction } from "../components/viz";
 import { getSession } from "../services/api";
 import type { Device } from "../services/inm";
 import { ops, rw, type ChangePlan, type ExecResult } from "../services/ops";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { onboardingApi } from "../services/onboarding";
 
 type Op = Record<string, unknown>;
-const OPS: Record<string, { op: string; label: string; fields: { key: string; label: string; kind: "int" | "text" | "list" | "select" | "ips" | "secret"; options?: string[]; optional?: boolean }[] }[]> = {
+const OPS: Record<string, { op: string; label: string; fields: { key: string; label: string; kind: "int" | "text" | "list" | "select" | "ips" | "secret" | "json" | "ports"; options?: string[]; optional?: boolean; placeholder?: string }[] }[]> = {
   switch: [
     { op: "switch.lag.members", label: "LACP LAG members", fields: [{ key: "lag", label: "LAG (e.g. lag10)", kind: "text" }, { key: "value", label: "Member ports (comma separated)", kind: "text" }] },
     { op: "switch.lldp", label: "Port LLDP", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "LLDP", kind: "select", options: ["enabled", "disabled"] }] },
     { op: "switch.vlan.define", label: "Create VLAN", fields: [{ key: "value", label: "VLAN ID", kind: "int" }] },
     { op: "switch.port.access_vlan", label: "Set port access VLAN", fields: [{ key: "port", label: "Port (e.g. 1/1/4)", kind: "text" }, { key: "value", label: "VLAN ID", kind: "int" }] },
     { op: "switch.port.trunk_vlans", label: "Set port trunk VLANs", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "VLANs (comma separated)", kind: "list" }] },
+    { op: "switch.aaa.radius_server", label: "RADIUS server (create / modify / delete)", fields: [{ key: "action", label: "Action", kind: "select", options: ["create", "modify", "delete"] },
+      { key: "address", label: "Server address", kind: "text" }, { key: "vrf", label: "VRF", kind: "select", options: ["default", "mgmt"] },
+      { key: "secret_ref", label: "Shared secret (credential profile)", kind: "secret", optional: true },
+      { key: "timeout", label: "Timeout s (1-60)", kind: "int", optional: true }, { key: "retries", label: "Retries (0-5)", kind: "int", optional: true }] },
+    { op: "switch.aaa.server_group", label: "RADIUS server group (primary / secondary)", fields: [{ key: "action", label: "Action", kind: "select", options: ["create", "modify", "delete"] },
+      { key: "group_name", label: "Group name", kind: "text" }, { key: "load_balancing_mode", label: "Load balancing", kind: "select", options: ["priority-based", "round-robin"] },
+      { key: "servers", label: "Servers in priority order (JSON)", kind: "json", optional: true, placeholder: '[{"address":"10.1.1.10"},{"address":"10.1.1.11"}]' }] },
+    { op: "switch.aaa.accounting", label: "Port-access RADIUS accounting", fields: [{ key: "accounting_mode", label: "Mode", kind: "select", options: ["start-stop", "stop-only", "disabled"] },
+      { key: "interim_update_interval", label: "Interim update minutes", kind: "int", optional: true }] },
+    { op: "switch.port.auth_policy", label: "Port 802.1X / MAC-auth policy", fields: [{ key: "action", label: "Action", kind: "select", options: ["create", "modify", "delete"] },
+      { key: "port", label: "Port", kind: "text" }, { key: "method", label: "Method", kind: "select", options: ["dot1x", "mac-auth"] },
+      { key: "auth_enable", label: "Authentication", kind: "select", options: ["true", "false"] }, { key: "radius_server_group", label: "RADIUS server group", kind: "text", optional: true },
+      { key: "reauth_period", label: "Re-auth period s", kind: "int", optional: true }, { key: "acknowledge_auth_change", label: "Acknowledge authentication change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.route.ospf", label: "OSPF single area (CX 6200 only)", fields: [{ key: "action", label: "Action", kind: "select", options: ["create", "modify", "delete"] },
+      { key: "router_id", label: "Router ID", kind: "text" }, { key: "area", label: "Area", kind: "text", optional: true },
+      { key: "interfaces", label: "Routed interfaces (comma separated)", kind: "ports" }, { key: "acknowledge_routing_change", label: "Acknowledge routing change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.acl.define", label: "IPv4 ACL (create/replace)", fields: [{ key: "name", label: "ACL name", kind: "text" },
+      { key: "entries", label: "Entries (JSON list)", kind: "json", placeholder: '[{"seq":10,"action":"permit","protocol":"tcp","src":"any","dst":"10.1.0.0/16","dst_port":443}]' },
+      { key: "acknowledge_deny_all", label: "Acknowledge deny-all (only if no permit)", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.acl.apply", label: "Apply IPv4 ACL to port (ingress)", fields: [{ key: "port", label: "Port", kind: "text" },
+      { key: "value", label: "ACL name (blank removes)", kind: "text", optional: true }] },
+    { op: "switch.route.static", label: "Static route (default VRF)", fields: [{ key: "prefix", label: "Prefix e.g. 10.20.0.0/16", kind: "text" },
+      { key: "next_hop", label: "Next hop", kind: "text" }, { key: "distance", label: "Distance (1–255)", kind: "int", optional: true },
+      { key: "acknowledge_default_route", label: "Acknowledge default-route change", kind: "select", options: ["no", "yes"] }] },
+    { op: "switch.qos.dscp_policy", label: "QoS DSCP marking policy", fields: [{ key: "name", label: "Policy name", kind: "text" },
+      { key: "protocol", label: "Protocol", kind: "select", options: ["udp", "tcp"] }, { key: "dst_port", label: "Destination port", kind: "int" },
+      { key: "dscp", label: "DSCP (0–63)", kind: "int" }, { key: "ports", label: "Apply to ports (comma separated)", kind: "ports", optional: true }] },
+    { op: "switch.vsf.member", label: "VSF stack member (CX 6200 only)", fields: [{ key: "model_family", label: "Model family", kind: "select", options: ["CX 6200"] },
+      { key: "member", label: "Member number (2–8)", kind: "int" }, { key: "member_type", label: "Member part number", kind: "text" },
+      { key: "links", label: "VSF links (JSON)", kind: "json", placeholder: '{"1":["1/1/27"],"2":["1/1/28"]}' },
+      { key: "acknowledge_stack_change", label: "Acknowledge stack change", kind: "select", options: ["no", "yes"] }] },
     { op: "switch.port.admin_state", label: "Port admin state", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "State", kind: "select", options: ["up", "down"] }] },
     { op: "switch.port.poe", label: "Port PoE", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "PoE", kind: "select", options: ["disabled", "enabled"] }] },
     { op: "switch.port.description", label: "Port description", fields: [{ key: "port", label: "Port", kind: "text" }, { key: "value", label: "Description", kind: "text" }] },
@@ -42,6 +73,24 @@ const OPS: Record<string, { op: string; label: string; fields: { key: string; la
     { op: "ap.ssid.guest_auth", label: "Existing guest captive portal and MAC roles", fields: [{ key: "ssid", label: "Existing guest SSID", kind: "text" },
       { key: "portal_profile", label: "Existing external portal profile", kind: "text" }, { key: "pre_auth_role", label: "Existing pre-auth role", kind: "text" },
       { key: "mac_role", label: "Existing MAC-auth role", kind: "text" }, { key: "acknowledge_guest_auth_change", label: "Acknowledge authentication changes", kind: "select", options: ["no", "yes"] }] },
+    { op: "ap.radius.server", label: "RADIUS server (create / modify / delete)", fields: [{ key: "action", label: "Action", kind: "select", options: ["create", "modify", "delete"] },
+      { key: "name", label: "Server name", kind: "text" }, { key: "ip", label: "IPv4 address", kind: "text", optional: true },
+      { key: "secret_ref", label: "Shared secret (credential profile)", kind: "secret", optional: true },
+      { key: "previous_secret_ref", label: "Previous secret (rotation rollback)", kind: "secret", optional: true },
+      { key: "timeout", label: "Timeout s (1-30)", kind: "int", optional: true }, { key: "retry_count", label: "Retries (0-5)", kind: "int", optional: true }] },
+    { op: "ap.ssid.auth_servers", label: "Assign RADIUS servers to SSID (primary, failover)", fields: [{ key: "ssid", label: "Enterprise SSID", kind: "text" },
+      { key: "servers", label: "Servers, primary first (comma separated)", kind: "ports" }, { key: "load_balancing", label: "Load balancing", kind: "select", options: ["false", "true"] },
+      { key: "accounting", label: "Accounting", kind: "select", options: ["unchanged", "enabled", "disabled"] }, { key: "interval_minutes", label: "Interim minutes", kind: "int", optional: true },
+      { key: "acknowledge_auth_change", label: "Acknowledge authentication change", kind: "select", options: ["no", "yes"] }] },
+    { op: "ap.role.define", label: "Create user role with access rules", fields: [{ key: "role", label: "New role name", kind: "text" },
+      { key: "rules", label: "Rules (JSON list, evaluated in order)", kind: "json", placeholder: '[{"dest":{"ip":"10.0.0.0","mask":"255.0.0.0"},"protocol":"tcp","ports":[443,443],"action":"permit"},{"dest":"any","protocol":"any","action":"deny"}]' }] },
+    { op: "ap.captive_portal.external", label: "Create external captive portal profile", fields: [{ key: "profile", label: "New portal profile", kind: "text" },
+      { key: "server", label: "Portal server (IP or DNS name)", kind: "text" }, { key: "port", label: "Port", kind: "int" },
+      { key: "url", label: "Login URL path (e.g. /guest/login)", kind: "text" }, { key: "redirect_url", label: "Redirect after login (https://…)", kind: "text", optional: true }] },
+    { op: "ap.ssid.multi_auth", label: "MAC + 802.1X on enterprise SSID", fields: [{ key: "ssid", label: "Existing enterprise SSID", kind: "text" },
+      { key: "value", label: "MAC + 802.1X", kind: "select", options: ["enabled", "disabled"] },
+      { key: "mac_role", label: "Existing role for MAC-authenticated clients", kind: "text", optional: true },
+      { key: "acknowledge_auth_change", label: "Acknowledge authentication change", kind: "select", options: ["no", "yes"] }] },
     { op: "ap.ssid.accounting", label: "SSID RADIUS accounting", fields: [{ key: "ssid", label: "Existing SSID profile", kind: "text" }, { key: "value", label: "Accounting", kind: "select", options: ["enabled", "disabled"] },
       { key: "interval_minutes", label: "Interim interval minutes (required when enabled)", kind: "int", optional: true }] },
     { op: "ap.ssid.vlan", label: "SSID VLAN", fields: [{ key: "ssid", label: "SSID", kind: "text" }, { key: "value", label: "VLAN", kind: "int" }] },
@@ -65,12 +114,21 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
   const def = defs.find(d => d.op === kind) ?? defs[0];
   const creds = useLoad(onboardingApi.credentials, [], 0);
   if (!def) return null;
+  const [fieldError, setFieldError] = useState<string | null>(null);
   const add = () => {
+    setFieldError(null);
     const o: Op = { op: def.op };
     for (const f of def.fields) {
       const v = vals[f.key] ?? (f.options?.[0] ?? "");
       if (f.optional && !v.trim()) continue;
-      o[f.key] = ["acknowledge_guest_auth_change", "acknowledge_voice_change", "acknowledge_auth_change"].includes(f.key) ? v === "yes" : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
+      if (f.kind === "json") {
+        try { o[f.key] = JSON.parse(v); } catch { setFieldError(`${f.label}: not valid JSON`); return; }
+        continue;
+      }
+      o[f.key] = ["acknowledge_guest_auth_change", "acknowledge_voice_change", "acknowledge_auth_change", "acknowledge_deny_all",
+        "acknowledge_default_route", "acknowledge_stack_change", "acknowledge_routing_change"].includes(f.key) ? v === "yes" :
+        ["auth_enable", "load_balancing"].includes(f.key) ? v === "true" :
+        f.kind === "ports" ? v.split(/[\s,]+/).filter(Boolean) : def.op === "switch.lag.members" && f.key === "value" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "ips" ? v.split(/[\s,]+/).filter(Boolean)
         : f.kind === "int" || (f.key === "value" && def.op === "ap.radio.width") ? Number(v)
         : f.kind === "list" ? v.split(/[\s,]+/).filter(Boolean).map(Number) : v;
@@ -85,8 +143,11 @@ function OpBuilder({ family, onAdd }: { family: string; onAdd: (o: Op) => void }
           <option value="">Select a credential profile…</option>{(creds.data ?? []).filter(c => c.enabled).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       : f.kind === "select"
       ? <select className={inputCls} value={vals[f.key] ?? f.options![0]} onChange={e => setVals({ ...vals, [f.key]: e.target.value })}>{f.options!.map(o => <option key={o}>{o}</option>)}</select>
+      : f.kind === "json"
+      ? <textarea className={inputCls + " font-mono"} rows={3} placeholder={f.placeholder} value={vals[f.key] ?? ""} onChange={e => setVals({ ...vals, [f.key]: e.target.value })} />
       : <input className={inputCls} value={vals[f.key] ?? ""} onChange={e => setVals({ ...vals, [f.key]: e.target.value })} />}</label>)}
     <button className={btn2} onClick={add}>Add to plan</button>
+    {fieldError && <p role="alert" className="w-full text-sm text-red-700">{fieldError}</p>}
   </div>;
 }
 
@@ -119,6 +180,10 @@ function PlanRow({ p, onDone }: { p: ChangePlan; onDone: () => void }) {
         <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => { await ops.decideChange(p.id, "approve", p.revision, "Reviewed"); onDone(); return "Approved."; })}>Approve</button>
         <button className={btnDanger} disabled={act.busy} onClick={() => act.run(async () => { await ops.decideChange(p.id, "reject", p.revision, "Rejected in review"); onDone(); })}>Reject</button></>}
       {p.state === "PENDING_APPROVAL" && !canDecide && <span className="text-xs text-slate-500">Awaiting an independent approver (two-person rule).</span>}
+      {p.state === "PENDING_APPROVAL" && me?.role === "admin" && me.username === p.requester &&
+        <button className={btnDanger} disabled={act.busy} title="Only with an active emergency session (Platform → Emergency access); reviewed afterwards by another administrator"
+          onClick={() => act.run(async () => { await ops.decideChange(p.id, "approve", p.revision, "Approved under emergency access", true); onDone();
+            return "Approved under emergency access. Certification, backup, readback and rollback still apply."; })}>Approve under emergency access</button>}
       <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => setRender(await rw.render(p.id)))}>Show device requests</button>
       {p.state === "APPROVED" && me?.role === "admin" && <button className={btn} disabled={act.busy} onClick={() => act.run(async () => {
         const r = await rw.execute(p.id); setExec(r); onDone();

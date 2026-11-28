@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import GuidePanel from "../components/GuidePanel";
@@ -7,6 +7,7 @@ import { Notice, PageHeader, Pill, ago, btn, btn2, statusTone, useAction } from 
 import { getSession } from "../services/api";
 import { ops, type LearningItem } from "../services/ops";
 import { intel } from "../services/intel";
+import TrainedModels from "../components/TrainedModels";
 
 function Row({ r, reload }: { r: LearningItem; reload: () => void }) {
   const act = useAction();
@@ -46,10 +47,11 @@ export default function LearningCentre() {
     </div>
     <Card title="Learning timeline"><table className="w-full text-sm"><thead><tr className="text-left text-xs uppercase text-slate-500"><th>When</th><th>Recommendation</th><th>Engine</th><th>Evidence</th><th>Engineer decision</th><th>Outcome</th></tr></thead>
       <tbody>{items.map(r => <Row key={r.id} r={r} reload={hist.reload} />)}{!items.length && <tr><td colSpan={6} className="py-4 text-center text-slate-500">No recommendations yet. Run analysis from <Link className="text-sky-300" to="/phase4-insights">Device insights</Link>.</td></tr>}</tbody></table></Card>
+    <TrainedModels />
     <div className="grid gap-4 lg:grid-cols-2">
-      <Card title="Model registry" right={me?.role === "admin" && <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => {
+      <Card title="Recommendation-success model registry" right={me?.role === "admin" && <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => {
         const r = await ops.train(); models.reload(); return r.status === "CANDIDATE" ? "Candidate model trained; it needs independent promotion." : `Not trained: ${String(r.reason)}`; })}>Train candidate</button>}>
-        <ul className="space-y-2 text-sm">{(models.data ?? []).map(m => <li key={m.id} className="rounded border border-slate-800 p-2">
+        <ul className="space-y-2 text-sm">{(models.data ?? []).filter(m => !(m as { target?: string | null }).target).map(m => <li key={m.id} className="rounded border border-slate-800 p-2">
           <div className="flex gap-2"><b>{m.name}</b><Pill value={m.status} tone={m.status === "PROMOTED" ? "good" : m.status === "REJECTED" ? "poor" : "fair"} /></div>
           <div className="font-mono text-[11px] text-slate-400">{JSON.stringify(m.metrics)}</div>
           {m.status === "CANDIDATE" && me && ["approver", "admin"].includes(me.role) && me.username !== m.trained_by && <div className="mt-1 flex gap-2">

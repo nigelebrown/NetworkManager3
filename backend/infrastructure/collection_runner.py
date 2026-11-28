@@ -260,7 +260,7 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
             store=None, worker: str = "worker", plan_ids: list[str] | None = None, manual: bool = False) -> dict:
     """Execute every due ACTIVE plan once. Returns a summary. Safe to call concurrently."""
     now = now or datetime.now(timezone.utc)
-    collector = collector or aruba_read_collector
+    explicit_collector = collector
     q = select(CollectionPlan).where(CollectionPlan.state == "ACTIVE")
     if plan_ids:
         q = q.where(CollectionPlan.id.in_(plan_ids))
@@ -315,7 +315,10 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
             continue
         corr = runs[0].id            # one correlation id per poll: run -> event -> points -> log -> alerts -> UI
         try:
-            result = (demo_collector if device.source_type == "DEMO" else collector)(device, plan, db)
+            from .adapters.snmp_switch import COLLECTORS as _ADAPTER_COLLECTORS
+            fn = demo_collector if device.source_type == "DEMO" else (
+                explicit_collector or _ADAPTER_COLLECTORS.get(plan.adapter_key, aruba_read_collector))
+            result = fn(device, plan, db)
         except CollectionFailure as exc:
             attempt = max(r.attempt for r in runs)
             action = C.next_action_after_failure(exc.category, attempt)
@@ -340,6 +343,22 @@ def run_due(db: Session, *, now: datetime | None = None, collector: Collector | 
                      action, corr)
             continue
         families = {r.metric_family for r in runs}
+        if "optics" in families and device.family == "switch":
+            try:                                           # rc18: optics never fails the rest of the poll
+                from .change_executor import writer_for
+                from .optics import ingest as optics_ingest
+                ow, _env = writer_for(db, device)
+                ow.open()
+                try:
+                    parsed = ow.optics()
+                finally:
+                    ow.close()
+                from .runtime import telemetry_store as _ts
+                result = {**result, "optics": optics_ingest(db, device, parsed, now=now,
+                                                            store=store if store is not None else _ts())}
+            except Exception as exc:  # noqa: BLE001 — recorded on the poll result, not silently dropped
+                log.warning("optics read failed device=%s: %s", device.id, type(exc).__name__)
+                result = {**result, "optics": {"state": "READ_FAILED", "error": type(exc).__name__}}
         metrics = dict(result.get("metrics") or {})
         port_points: list = []
         if result.get("ports") is not None:

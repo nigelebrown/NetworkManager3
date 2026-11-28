@@ -282,3 +282,12 @@ html,body,#root{min-height:100%;margin:0}body{background:#f4f7fa;color:#172437;f
 
 .inm-dot.warn{background:#e7ae50}.inm-dot.bad{background:#da5b6a}
 @media print{aside,nav,header,.print\:hidden{display:none!important}main{margin:0!important;padding:0!important}.inm-card{break-inside:avoid;box-shadow:none}}
+
+/* rc17: one menu entry per purpose; related screens are views (tabs) of that entry. */
+.inm-viewtabs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-8px 0 18px;padding-bottom:10px;border-bottom:1px solid #dfe6ed}
+.inm-viewtab{padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;color:#41566f;background:#fff;border:1px solid #dfe6ed;text-decoration:none}
+.inm-viewtab:hover{border-color:#9db8dc;color:#1d4f91}
+.inm-viewtab.active{background:#2266c1;border-color:#2266c1;color:#fff}
+.inm-viewpurpose{margin-left:auto;font-size:11px;color:#6d7a8d}
+/* Status banners must never sit under the fixed desktop sidebar. */
+@media(min-width:1101px){.inm-banner{margin-left:268px}}

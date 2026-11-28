@@ -1,6 +1,7 @@
 import { PageHeader } from "../components/viz";
 import { FormEvent, useEffect, useState } from "react";
 import FwPlanDialog from "../components/FwPlanDialog";
+import CxFirmware from "../components/CxFirmware";
 import { Card, ErrorNote, SimBadge } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { api, fwApi, getSession, type FwChange, type FwPolicy } from "../services/api";
@@ -47,6 +48,7 @@ export default function Firmware() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Administration" title="Firmware lifecycle" subtitle="Firmware compliance, certificates and controlled management tasks." />
+      <CxFirmware />
       <ErrorNote error={err} />
       {msg && <div className="rounded border border-emerald-800 bg-emerald-950/40 p-2 text-sm text-emerald-300">{msg}</div>}
 
@@ -122,7 +124,10 @@ export default function Firmware() {
             <p className="text-xs text-slate-500">{c.plan.member_verification.note}</p></div>}
           {["applied", "applied_unverified"].includes(c.status) && <div className="flex flex-wrap gap-2 mt-2">
             <button className="inm-btn-secondary" disabled={busy} onClick={() => run(async () => { const v = await fwApi.verifyUpgrade(c.id); setMsg(v.state); history.reload(); })}>Verify running member versions</button>
-            <button className="inm-btn-secondary" disabled={!writable || busy || !picked.length} onClick={() => run(async () => setPlan(await fwApi.recoveryPlan(c.id, picked)))}>Plan rollback to prior version</button></div>}
+            <button className="inm-btn-secondary" disabled={!writable || busy || !picked.length} onClick={() => run(async () => setPlan(await fwApi.recoveryPlan(c.id, picked)))}>Plan rollback to prior version</button>
+            {!c.plan.reboot && <button className="inm-btn-secondary" disabled={busy} onClick={() => run(async () => { await fwApi.approveReboot(c.id); setMsg("Cluster reboot approved (valid 24 h)."); history.reload(); })}>Approve cluster reboot (independent)</button>}
+            {!c.plan.reboot && c.plan.reboot_approval && <button className="inm-btn-primary" disabled={!writable || busy} onClick={() => run(async () => { const r = await fwApi.rebootCluster(c.id); setMsg(r.state + (r.next ? ` — ${r.next}` : "")); history.reload(); })}>Reboot cluster to activate</button>}</div>}
+          {c.plan.reboot && <p className="text-xs">Reboot: <b>{c.plan.reboot.state}</b> by {c.plan.reboot.by} at {c.plan.reboot.sent_at} — sent once, never replayed.</p>}
         </div>)}
       </Card>}
       {plan && <FwPlanDialog change={plan} onClose={() => { setPlan(null); comp.reload(); history.reload(); }} onDone={() => { comp.reload(); history.reload(); }} />}

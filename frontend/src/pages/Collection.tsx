@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { Card, ErrorNote, Stat } from "../components/ui";
 import { useLoad } from "../components/useLoad";
 import { DevicePicker, Notice, PageHeader, Pill, Steps, ago, btn, btn2, inputCls, statusTone, useAction } from "../components/viz";
@@ -7,12 +7,13 @@ import { v1, type Device } from "../services/inm";
 import { getSession, request } from "../services/api";
 import { onboardingApi } from "../services/onboarding";
 import { ops } from "../services/ops";
+import { prn } from "../services/printerSrs";
 
 const FAMILIES: Record<string, { key: string; label: string }[]> = {
   access_point: [{ key: "system", label: "System (CPU, memory, uptime)" }, { key: "radios", label: "Radios (channel utilisation, noise)" },
     { key: "clients", label: "Clients (count, experience)" }, { key: "rf_quality", label: "RF quality (retries)" }],
   switch: [{ key: "system", label: "System (CPU, memory, uptime)" }, { key: "interfaces", label: "Interfaces (up/down, errors)" },
-    { key: "poe", label: "PoE power budget" }, { key: "lldp", label: "LLDP neighbours" }],
+    { key: "poe", label: "PoE power budget" }, { key: "lldp", label: "LLDP neighbours" }, { key: "optics", label: "Optical transceivers (DOM)" }],
 };
 
 export default function Collection() {
@@ -27,9 +28,13 @@ export default function Collection() {
   const [fams, setFams] = useState<string[]>(["system"]);
   const [interval, setIntervalS] = useState(300);
   const [preview, setPreview] = useState<Record<string, unknown> & { warnings: string[] } | null>(null);
+  const [snmpProfile, setSnmpProfile] = useState("");
+  const snmpProfiles = useLoad(() => admin ? prn.credentialProfiles() : Promise.resolve([]), [admin]);
+  const snmpDevice = !!device && !/aruba|hpe/i.test(device.vendor ?? "");
   const act = useAction();
   const step = !device ? 0 : !preview ? 1 : 2;
-  const body = () => ({ device_id: device?.id, metric_families: fams, interval_seconds: interval });
+  const body = () => ({ device_id: device?.id, metric_families: fams, interval_seconds: interval,
+    ...(snmpDevice && snmpProfile ? { snmp_profile_id: snmpProfile } : {}) });
   const p = plans.data ?? [];
   const states = (s: string) => p.filter(x => x.freshness === s).length;
   return <div className="space-y-4">
@@ -46,6 +51,10 @@ export default function Collection() {
           <label className="block text-sm text-slate-300">Polling interval
             <select className={inputCls} value={interval} onChange={e => { setIntervalS(Number(e.target.value)); setPreview(null); }}>
               {[60, 120, 300, 600, 900, 3600].map(s => <option key={s} value={s}>{s < 3600 ? `every ${s / 60} min` : "hourly"}</option>)}</select></label>
+          {snmpDevice && <label className="block text-sm text-slate-300">SNMP credential profile (read-only adapter)
+            <select className={inputCls} value={snmpProfile} onChange={e => { setSnmpProfile(e.target.value); setPreview(null); }}>
+              <option value="">Select a saved SNMP profile</option>
+              {(snmpProfiles.data ?? []).map(x => <option key={x.id} value={x.id}>{x.name} (v{x.version})</option>)}</select></label>}
           <div className="text-sm text-slate-300">Metrics<div className="mt-1 space-y-1">{(FAMILIES[device?.family ?? "access_point"]).map(f =>
             <label key={f.key} className="flex items-center gap-2"><input type="checkbox" checked={fams.includes(f.key)} disabled={!device}
               onChange={e => { setPreview(null); setFams(e.target.checked ? [...fams, f.key] : fams.filter(x => x !== f.key)); }} />{f.label}</label>)}</div></div>

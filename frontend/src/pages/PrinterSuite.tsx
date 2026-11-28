@@ -1,9 +1,10 @@
+import type React from "react";
 /**
  * Printer Intelligence workspaces (SRS navigation). Every figure comes from the API with its source,
  * coverage and confidence. Missing data is shown as missing — never as zero. Printers stay read-only.
  */
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ErrorNote } from "../components/ui";
 import { useLoad } from "../components/useLoad";
@@ -16,18 +17,29 @@ const NAV = [
   ["/printers", "Overview"], ["/printers/inventory", "Inventory"], ["/printers/live", "Live monitoring"],
   ["/printers/utilization", "Utilization"], ["/printers/consumables", "Consumables"], ["/printers/maintenance", "Maintenance"],
   ["/printers/models", "Model comparison"], ["/printers/recommendations", "Recommendations"], ["/printers/reports", "Reports"],
-  ["/printers/profiles", "SNMP & MIB profiles"],
+  ["/printers/purchasing", "Supply purchasing"], ["/printers/print-jobs", "Print jobs"], ["/printers/profiles", "SNMP & MIB profiles"],
 ];
 const role = () => getSession()?.role ?? "viewer";
 const isAdmin = () => role() === "admin";
+const canOperateNow = () => role() === "admin" || role() === "operator";
 const num = (v: number | null | undefined, d = 0) => v == null ? "—" : v.toLocaleString(undefined, { maximumFractionDigits: d });
 const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v * 100)}%`;
 const capTone = (s: string) => s === "SUPPORTED" ? "good" : s === "UNVERIFIED" ? "fair" : s === "INVALID" ? "poor" : "none";
 const healthTone = (s: string | null | undefined) => s === "HEALTHY" ? "good" : s === "DEGRADED" ? "fair" : s === "CRITICAL" ? "poor" : "none";
 
+const GATED: Record<string, string> = { "/printers/purchasing": "printer_purchasing", "/printers/print-jobs": "print_jobs" };
+let gatedCache: Record<string, boolean> | null = null;
 export function PrinterNav() {
+  const [enabled, setEnabled] = useState<Record<string, boolean> | null>(gatedCache);
+  useEffect(() => {
+    if (gatedCache) return;
+    request<{ modules: { key: string; status: string }[] }>("/v1/system/features").then(r => {
+      gatedCache = Object.fromEntries(r.modules.map(m => [m.key, m.status !== "DISABLED_PENDING_AUTHORIZATION"]));
+      setEnabled(gatedCache);
+    }).catch(() => setEnabled({}));
+  }, []);
   return <nav className="inm-actionbar flex-wrap" aria-label="Printer workspaces">
-    {NAV.map(([to, label]) => <NavLink key={to} to={to} end={to === "/printers"}
+    {NAV.filter(([to]) => !GATED[to] || enabled?.[GATED[to]]).map(([to, label]) => <NavLink key={to} to={to} end={to === "/printers"}
       className={({ isActive }) => isActive ? "inm-btn-primary" : "inm-btn-secondary"}>{label}</NavLink>)}
   </nav>;
 }
@@ -153,7 +165,7 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
   const act = useAction();
   const body = () => {
     const t = target.trim();
-    return { credential_profile_ids: selectedCreds, ...(t.includes("/") ? { management_range: t } : { management_ips: t.split(/[\\s,;]+/).filter(Boolean) }) };
+    return { credential_profile_ids: selectedCreds, ...(t.includes("/") ? { management_range: t } : { management_ips: t.split(/[\s,;]+/).filter(Boolean) }) };
   };
   const start = () => act.run(async () => {
     const j = await prn.discover(body()); setJob(j); recent.reload();
@@ -175,7 +187,7 @@ function DiscoveryJobs({ onDone }: { onDone: () => void }) {
             onChange={e => { setSelectedCreds(e.target.checked ? [...selectedCreds, c.id] : selectedCreds.filter(id => id !== c.id)); setPlan(null); }} />
           {" "}{c.name} (SNMPv{c.version}){blocked(c.version) ? " — disabled by printer policy" : ""}
         </label>)}</div>
-        {!creds.data?.length && <p className="text-sm">Create a saved SNMP credential profile before starting discovery.</p>}
+        {!creds.data?.length && <p className="text-sm">Create a saved SNMP credential profile before starting discovery (at the bottom of this page: “Manual registration, credential profiles and one-off SNMP checks” → Discover printers → Add a credential profile).</p>}
       </fieldset>
       <label className="grow text-sm">CIDR (/9–/32) or IP list<input className={inputCls} value={target} onChange={e => { setTarget(e.target.value); setPlan(null); }} placeholder="10.103.44.0/24 or 10.103.44.21, 10.103.44.22" /></label>
       <button className={btn2} disabled={act.busy || !selectedCreds.length || !target.trim()} onClick={() => act.run(async () => {
@@ -575,4 +587,202 @@ function SettingsCard({ s, reload }: { s: any; reload: () => void }) {  // eslin
       reload(); return "Saved."; })}>Save policy</button>
     <Notice error={act.error} message={act.message} />
   </Section>;
+}
+
+/* ---------------- rc17: internal supply purchase requests ---------------- */
+type Purchase = { id: string; printer_id: string; printer: string | null; serial_number: string | null; supply_description: string;
+  part_number: string | null; quantity: number; estimated_unit_cost: number | null; currency: string; reason: string; origin: string;
+  status: string; requested_by: string; decided_by: string | null; decision_note: string | null; order_reference: string | null;
+  created_at: string; evidence: Record<string, unknown> };
+type PurchasePolicy = { automatic: boolean; lead_time_days: number; default_quantity: number };
+const PP = "/printer-purchasing";
+const jpost = (b: unknown) => ({ method: "POST", body: JSON.stringify(b) });
+
+function PrinterPurchasingModule() {
+  const [status, setStatus] = useState("");
+  const rows = useLoad(() => request<Purchase[]>(`${PP}/requests${status ? `?status=${status}` : ""}`), [status], 30000, ["printers"]);
+  const pol = useLoad(() => request<PurchasePolicy>(`${PP}/policy`), [], 0, ["printers"]);
+  const printers = useLoad(() => canOperateNow() ? prn.list() : Promise.resolve([] as PrinterRow[]), [], 0, ["printers"]);
+  const [f, setF] = useState({ printer_id: "", supply_description: "", part_number: "", quantity: 1, reason: "" });
+  const [ref, setRef] = useState<Record<string, string>>({});
+  const act = useAction();
+  const r = role();
+  const canDecide = r === "admin" || r === "approver";
+  const canOperate = r === "admin" || r === "operator";
+  const step = (x: Purchase, action: string, body: Record<string, unknown> = {}) => act.run(async () => {
+    const path = ["approve", "reject"].includes(action) ? `${PP}/requests/${x.id}/${action}` : `${PP}/requests/${x.id}/progress/${action}`;
+    await request(path, jpost(body)); rows.reload(); return `Request ${action}d.`.replace("eed", "ed"); });
+  return <Shell title="Supply purchasing" subtitle="Internal purchase requests for printer supplies. Automatic requests come only from measured LOW/EMPTY levels or a forecast within the lead time. An independent approver decides; ordering records your external PO reference."
+    right={<button className={btn2} onClick={() => act.run(async () => { await download(`${PP}/requests.csv${status ? `?status=${status}` : ""}`, "printer-purchase-requests.csv"); })}>Export CSV</button>}>
+    <Notice error={act.error || rows.error || pol.error} message={act.message} />
+    {isAdmin() && pol.data && <PurchasePolicyCard p={pol.data} reload={pol.reload} />}
+    {canOperate && <Section title="New request">
+      <div className="grid gap-2 md:grid-cols-5">
+        <label className="text-sm">Printer<select className={inputCls} value={f.printer_id} onChange={e => setF({ ...f, printer_id: e.target.value })}>
+          <option value="">Select…</option>{(printers.data ?? []).map(p => <option key={p.id} value={p.id}>{p.hostname ?? p.serial_number} · {p.model}</option>)}</select></label>
+        <label className="text-sm">Supply<input className={inputCls} value={f.supply_description} onChange={e => setF({ ...f, supply_description: e.target.value })} /></label>
+        <label className="text-sm">Part number<input className={inputCls} value={f.part_number} onChange={e => setF({ ...f, part_number: e.target.value })} /></label>
+        <label className="text-sm">Quantity<input type="number" min={1} max={50} className={inputCls} value={f.quantity} onChange={e => setF({ ...f, quantity: Number(e.target.value) })} /></label>
+        <label className="text-sm">Reason<input className={inputCls} value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} /></label>
+      </div>
+      <button className={`${btn} mt-2`} disabled={act.busy || !f.printer_id || f.supply_description.length < 2 || f.reason.length < 3} onClick={() => act.run(async () => {
+        await request(`${PP}/requests`, jpost({ ...f, part_number: f.part_number || null })); rows.reload();
+        setF({ printer_id: "", supply_description: "", part_number: "", quantity: 1, reason: "" }); return "Request submitted for approval."; })}>Submit request</button>
+    </Section>}
+    <Section title="Requests" right={<select aria-label="Status filter" className={inputCls} value={status} onChange={e => setStatus(e.target.value)}>
+      <option value="">All statuses</option>{["PENDING_APPROVAL", "APPROVED", "ORDERED", "RECEIVED", "REJECTED", "CANCELLED"].map(s => <option key={s}>{s}</option>)}</select>}>
+      <Table head={["Created", "Printer", "Supply", "Qty", "Est. unit cost", "Reason", "Origin", "Status", "Actions"]}
+        rows={(rows.data ?? []).map(x => [ago(x.created_at), <PrinterLink p={{ id: x.printer_id, hostname: x.printer }} />,
+          <span>{x.supply_description}{x.part_number && <span className="text-xs text-slate-500"> · {x.part_number}</span>}</span>, x.quantity,
+          x.estimated_unit_cost == null ? "—" : `${x.currency} ${x.estimated_unit_cost.toLocaleString()}`,
+          <span className="text-xs">{x.reason}</span>, <Pill value={x.origin} tone={x.origin === "AUTOMATIC" ? "info" : "none"} />,
+          <span><Pill value={x.status} tone={statusTone(x.status)} />{x.order_reference && <span className="text-xs"> {x.order_reference}</span>}</span>,
+          <div className="flex flex-wrap gap-1">
+            {x.status === "PENDING_APPROVAL" && canDecide && <>
+              <button className={btn2} disabled={act.busy} onClick={() => step(x, "approve")}>Approve</button>
+              <button className={btn2} disabled={act.busy} onClick={() => step(x, "reject")}>Reject</button></>}
+            {x.status === "APPROVED" && canOperate && <>
+              <input aria-label={`PO reference for ${x.supply_description}`} placeholder="PO reference" className={inputCls}
+                value={ref[x.id] ?? ""} onChange={e => setRef({ ...ref, [x.id]: e.target.value })} />
+              <button className={btn2} disabled={act.busy || !(ref[x.id] ?? "").trim()} onClick={() => step(x, "order", { order_reference: ref[x.id] })}>Mark ordered</button></>}
+            {x.status === "ORDERED" && canOperate && <button className={btn2} disabled={act.busy} onClick={() => step(x, "receive")}>Mark received</button>}
+            {["PENDING_APPROVAL", "APPROVED"].includes(x.status) && canOperate &&
+              <button className={btn2} disabled={act.busy} onClick={() => step(x, "cancel")}>Cancel</button>}
+          </div>])}
+        empty="No purchase requests." />
+    </Section>
+  </Shell>;
+}
+
+function PurchasePolicyCard({ p, reload }: { p: PurchasePolicy; reload: () => void }) {
+  const [v, setV] = useState(p);
+  const act = useAction();
+  return <Section title="Automatic requests" footer="Runs daily in the worker. Off until enabled. One open request per printer supply; nothing is sent to an external procurement system.">
+    <div className="grid gap-2 md:grid-cols-4">
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.automatic} onChange={e => setV({ ...v, automatic: e.target.checked })} />Create requests automatically</label>
+      <label className="text-sm">Lead time (days)<input type="number" min={1} max={180} className={inputCls} value={v.lead_time_days} onChange={e => setV({ ...v, lead_time_days: Number(e.target.value) })} /></label>
+      <label className="text-sm">Default quantity<input type="number" min={1} max={50} className={inputCls} value={v.default_quantity} onChange={e => setV({ ...v, default_quantity: Number(e.target.value) })} /></label>
+    </div>
+    <div className="mt-2 flex gap-2">
+      <button className={btn} disabled={act.busy} onClick={() => act.run(async () => { await request(`${PP}/policy`, { method: "PUT", body: JSON.stringify(v) }); reload(); return "Saved."; })}>Save</button>
+      <button className={btn2} disabled={act.busy} onClick={() => act.run(async () => {
+        const o = await request<{ automatic: boolean; created: number; skipped_open?: number }>(`${PP}/generate`, { method: "POST" });
+        return o.automatic ? `${o.created} created; ${o.skipped_open ?? 0} already open.` : "Automatic requests are off."; })}>Run now</button>
+    </div>
+    <Notice error={act.error} message={act.message} />
+  </Section>;
+}
+
+/* ---------------- rc17: print-job metadata and document inspection ---------------- */
+type PJPolicy = { enabled: boolean; inspection_enabled: boolean; purpose: string; approval_reference: string; retention_days: number;
+  pseudonymise_users: boolean; store_document_names: boolean; keyword_rules: { name: string; keywords: string[]; severity: string }[];
+  built_in_rules?: string[]; content_storage?: string };
+type PJFinding = { id: string; rule_name: string; severity: string; match_count: number; excerpt: string | null; review_state: string; reviewed_by: string | null };
+type PJob = { id: string; source: string; printer_ref: string; printer_id: string | null; user_ref: string; user_pseudonymised: boolean;
+  document_name: string | null; pages: number | null; copies: number; colour: boolean | null; completed_at: string; inspection_state: string; findings: PJFinding[] };
+const PJ = "/print-jobs";
+
+function PrintJobsModule() {
+  const r = role();
+  const restricted = r === "admin" || r === "auditor";
+  const pol = useLoad(() => request<PJPolicy>(`${PJ}/policy`), [], 0, ["printers"]);
+  const sum = useLoad(() => r === "viewer" || r === "approver" ? Promise.resolve(null)
+    : request<{ days: number; policy_enabled: boolean; printers: { printer_id: string | null; printer_ref: string; jobs: number; pages: number; colour_jobs: number }[] }>(`${PJ}/summary?days=30`), [], 60000, ["printers"]);
+  const [state, setState] = useState("");
+  const jobs = useLoad(() => restricted ? request<PJob[]>(`${PJ}?days=30${state ? `&state=${state}` : ""}`) : Promise.resolve([] as PJob[]), [state], 0, ["printers"]);
+  const act = useAction();
+  return <Shell title="Print jobs" subtitle="Print-job metadata from registered print servers and optional document inspection. Off by default; enabling needs a purpose statement and an approval reference. Document content is never stored.">
+    <Notice error={act.error || pol.error || sum.error || jobs.error} message={act.message} />
+    {pol.data && <Section title="Policy" footer={pol.data.content_storage}>
+      <div className="flex flex-wrap gap-2 text-sm">
+        <Pill value={pol.data.enabled ? "COLLECTION ON" : "COLLECTION OFF"} tone={pol.data.enabled ? "info" : "none"} />
+        <Pill value={pol.data.inspection_enabled ? "INSPECTION ON" : "INSPECTION OFF"} tone={pol.data.inspection_enabled ? "fair" : "none"} />
+        <span>Retention {pol.data.retention_days} days · users {pol.data.pseudonymise_users ? "pseudonymised" : "named"} · document names {pol.data.store_document_names ? "kept" : "not kept"}</span>
+      </div>
+      {pol.data.purpose && <p className="mt-2 text-sm"><b>Purpose:</b> {pol.data.purpose} <span className="text-slate-500">({pol.data.approval_reference})</span></p>}
+      {isAdmin() && <PrintJobPolicyForm p={pol.data} reload={pol.reload} />}
+    </Section>}
+    {isAdmin() && <IngestTokens />}
+    {sum.data && <Section title="Last 30 days by printer" footer="Aggregates only: no user or document information.">
+      <Table head={["Printer", "Jobs", "Pages", "Colour jobs"]} rows={sum.data.printers.map(p => [p.printer_id ? <PrinterLink p={{ id: p.printer_id, hostname: p.printer_ref }} /> : p.printer_ref, num(p.jobs), num(p.pages), num(p.colour_jobs)])} empty="No print jobs recorded." />
+    </Section>}
+    {restricted && <Section title="Job records (restricted; every view is audited)" right={<select aria-label="Inspection state" className={inputCls} value={state} onChange={e => setState(e.target.value)}>
+      <option value="">All</option>{["FINDINGS", "CLEAN", "SKIPPED", "NOT_INSPECTED"].map(s => <option key={s}>{s}</option>)}</select>}>
+      <Table head={["Completed", "Printer", "User", "Document", "Pages × copies", "Inspection", "Findings"]}
+        rows={(jobs.data ?? []).map(j => [ago(j.completed_at), j.printer_ref, <span className="font-mono text-xs">{j.user_ref}</span>, j.document_name ?? "—",
+          `${j.pages ?? "—"} × ${j.copies}`, <Pill value={j.inspection_state} tone={j.inspection_state === "FINDINGS" ? "fair" : statusTone(j.inspection_state)} />,
+          <div className="space-y-1">{j.findings.map(f => <div key={f.id} className="text-xs">
+            <Pill value={f.severity} tone={f.severity === "major" ? "poor" : "fair"} /> {f.rule_name} ×{f.match_count} {f.excerpt && <span className="font-mono">{f.excerpt}</span>}
+            {f.review_state === "OPEN" ? <> <button className={btn2} onClick={() => act.run(async () => { await request(`${PJ}/findings/${f.id}/review`, jpost({ state: "CONFIRMED" })); jobs.reload(); })}>Confirm</button>
+              <button className={btn2} onClick={() => act.run(async () => { await request(`${PJ}/findings/${f.id}/review`, jpost({ state: "DISMISSED" })); jobs.reload(); })}>Dismiss</button></>
+              : <span className="text-slate-500"> {f.review_state} by {f.reviewed_by}</span>}</div>)}</div>])}
+        empty="No print jobs in the last 30 days." />
+    </Section>}
+  </Shell>;
+}
+
+function PrintJobPolicyForm({ p, reload }: { p: PJPolicy; reload: () => void }) {
+  const [v, setV] = useState(p);
+  const [rules, setRules] = useState(p.keyword_rules.map(x => `${x.name}|${x.severity}|${x.keywords.join(", ")}`).join("\n"));
+  const act = useAction();
+  const parsed = () => rules.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const [name, severity, kw] = l.split("|"); return { name: (name ?? "").trim(), severity: (severity ?? "minor").trim(), keywords: (kw ?? "").split(",").map(s => s.trim()).filter(Boolean) }; });
+  return <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+    <div className="grid gap-2 md:grid-cols-3">
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.enabled} onChange={e => setV({ ...v, enabled: e.target.checked, inspection_enabled: e.target.checked && v.inspection_enabled })} />Collect print-job metadata</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.inspection_enabled} disabled={!v.enabled} onChange={e => setV({ ...v, inspection_enabled: e.target.checked })} />Inspect document text (not stored)</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.pseudonymise_users} onChange={e => setV({ ...v, pseudonymise_users: e.target.checked })} />Pseudonymise user names</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.store_document_names} onChange={e => setV({ ...v, store_document_names: e.target.checked })} />Keep document names</label>
+      <label className="text-sm">Retention (days)<input type="number" min={7} max={730} className={inputCls} value={v.retention_days} onChange={e => setV({ ...v, retention_days: Number(e.target.value) })} /></label>
+      <label className="text-sm">Approval reference<input className={inputCls} value={v.approval_reference} onChange={e => setV({ ...v, approval_reference: e.target.value })} /></label>
+    </div>
+    <label className="block text-sm">Purpose statement (required to enable)<textarea className={inputCls} rows={2} value={v.purpose} onChange={e => setV({ ...v, purpose: e.target.value })} /></label>
+    <label className="block text-sm">Keyword rules — one per line: NAME|severity|keyword, keyword<textarea className={`${inputCls} font-mono`} rows={3} value={rules} onChange={e => setRules(e.target.value)} /></label>
+    <div className="text-xs text-slate-500">Built-in: {(p.built_in_rules ?? []).join(" · ")}</div>
+    <button className={btn} disabled={act.busy} onClick={() => act.run(async () => {
+      await request(`${PJ}/policy`, { method: "PUT", body: JSON.stringify({ ...v, keyword_rules: parsed(), built_in_rules: undefined, content_storage: undefined }) }); reload(); return "Policy saved and audited."; })}>Save policy</button>
+    <Notice error={act.error} message={act.message} />
+  </div>;
+}
+
+function IngestTokens() {
+  const t = useLoad(() => request<{ id: string; name: string; created_by: string; created_at: string; revoked: boolean; last_used_at: string | null }[]>(`${PJ}/ingest-tokens`), [], 0, ["printers"]);
+  const [name, setName] = useState("");
+  const [shown, setShown] = useState<string | null>(null);
+  const act = useAction();
+  return <Section title="Print-server ingestion tokens" footer="Each print-server agent posts to /api/print-jobs/ingest with header X-INM-Ingest-Token. Tokens are stored hashed and shown once.">
+    <div className="flex flex-wrap gap-2"><input aria-label="Token name" placeholder="e.g. cups-hq" className={inputCls} value={name} onChange={e => setName(e.target.value)} />
+      <button className={btn} disabled={act.busy || name.trim().length < 3} onClick={() => act.run(async () => {
+        const r = await request<{ token: string }>(`${PJ}/ingest-tokens`, jpost({ name })); setShown(r.token); setName(""); t.reload(); })}>Create token</button></div>
+    {shown && <p className="mt-2 break-all font-mono text-xs" role="status">Copy now — it will not be shown again: {shown}</p>}
+    <Table head={["Name", "Created", "By", "Last used", "State", ""]} rows={(t.data ?? []).map(x => [x.name, ago(x.created_at), x.created_by, ago(x.last_used_at),
+      <Pill value={x.revoked ? "REVOKED" : "ACTIVE"} tone={x.revoked ? "none" : "good"} />,
+      !x.revoked && <button className={btn2} onClick={() => act.run(async () => { await request(`${PJ}/ingest-tokens/${x.id}`, { method: "DELETE" }); t.reload(); })}>Revoke</button>])} empty="No tokens." />
+    <Notice error={act.error} message={act.message} />
+  </Section>;
+}
+
+
+/** rc18: purchasing and print-job inspection stay disabled and isolated until explicitly authorised. The API is not
+ *  mounted then, so the screen says so instead of showing request errors. */
+function AuthorisationGate({ module, title, flag, children }: { module: string; title: string; flag: string; children: React.ReactNode }) {
+  const f = useLoad(() => request<{ modules: { key: string; status: string; note?: string }[] }>("/v1/system/features"), [], 0);
+  if (!f.data) return <div className="text-sm text-slate-500">{f.error ? String(f.error) : "Checking module authorisation…"}</div>;
+  const m = f.data.modules.find(x => x.key === module);
+  if (m?.status === "DISABLED_PENDING_AUTHORIZATION") return <div className="space-y-4">
+    <PrinterNav />
+    <PageHeader title={title} subtitle="This module is disabled and isolated until it is explicitly authorised." />
+    <div className="inm-planned-notice" role="status"><b>DISABLED PENDING AUTHORISATION.</b> The server does not expose this module.
+      An administrator can enable it only after written authorisation, by setting <code>{flag}=true</code> on the server. Fleet monitoring,
+      utilisation, supplies and reports are unaffected.</div>
+  </div>;
+  return <>{children}</>;
+}
+
+export function PrinterPurchasing() {
+  return <AuthorisationGate module="printer_purchasing" title="Supply purchasing" flag="INM_FEATURE_PURCHASING"><PrinterPurchasingModule /></AuthorisationGate>;
+}
+
+export function PrintJobs() {
+  return <AuthorisationGate module="print_jobs" title="Print jobs" flag="INM_FEATURE_PRINT_JOBS"><PrintJobsModule /></AuthorisationGate>;
 }

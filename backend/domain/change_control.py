@@ -15,15 +15,20 @@ ALLOWED_WIDTHS_MHZ = (20, 40)          # 80/160 MHz are never permitted
 APPROVAL_TTL = timedelta(hours=24)
 AP_OPERATIONS = {"ap.radio.channel", "ap.radio.width", "ap.radio.tx_power", "ap.ssid.vlan",
                  "ap.band_steering", "ap.client_match", "ap.airtime_fairness", "ap.ssid.create", "ap.ssid.enterprise",
-                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth"}
+                 "ap.ssid.roaming", "ap.ssid.accounting", "ap.radio.allowed_channels", "ap.ssid.guest_auth",
+                 "ap.role.define", "ap.captive_portal.external", "ap.ssid.multi_auth",
+                 "ap.radius.server", "ap.ssid.auth_servers"}
 SWITCH_OPERATIONS = {"switch.vlan.define", "switch.port.access_vlan", "switch.port.trunk_vlans",
                      "switch.port.admin_state", "switch.port.poe", "switch.lag.members",
                      "switch.lldp", "config.restore", "switch.central.disable", "switch.port.description",
                      "switch.port.stp_bpdu_guard", "switch.port.storm_control", "switch.port.qos_trust",
-                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab"}
+                     "switch.system.ntp", "switch.system.dns", "switch.system.syslog", "switch.vlan.voice", "switch.port.auth_dot1x", "switch.port.auth_mab",
+                     "switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy", "switch.vsf.member",
+                     "switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting", "switch.port.auth_policy",
+                     "switch.route.ospf"}
 # Operations whose secret (PSK / RADIUS shared secret) is referenced by an encrypted credential profile id.
 # Plans never contain the secret itself; the executor resolves it only at apply time.
-SECRET_REF_OPS = {"ap.ssid.create", "ap.ssid.enterprise"}
+SECRET_REF_OPS = {"ap.ssid.create", "ap.ssid.enterprise", "switch.aaa.radius_server", "ap.radius.server"}
 _NAME = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$"
 
 
@@ -100,6 +105,10 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
             channels = normalize_channel_list(op.get("value"), excluded_channels=excluded_channels, allow_dfs=allow_dfs)
             # The approval binds the validated channel set and explicit DFS permission.
             return {**op, "value": channels, "allow_dfs": bool(allow_dfs)}
+        if kind in ("ap.role.define", "ap.captive_portal.external", "ap.ssid.multi_auth"):
+            return _validate_rc17_wlan(kind, op)
+        if kind in ("ap.radius.server", "ap.ssid.auth_servers"):
+            return _validate_rc18_wlan(kind, op)
         if kind == "ap.ssid.guest_auth":
             import re as _re
             for field in ("ssid", "portal_profile", "pre_auth_role", "mac_role"):
@@ -263,9 +272,115 @@ def validate_operation(op: dict, *, family: str, excluded_channels: set[int] | N
                 raise PolicyViolation("A LAG needs 2-8 distinct member ports.")
             if uplink_ports and set(ports) & uplink_ports:
                 raise PolicyViolation("LAG members include a protected uplink.")
+        if kind in _RC17_SWITCH_OPS:
+            _validate_rc17_switch(op, uplink_ports or set())
+        if kind in _RC18_SWITCH_OPS:
+            return _validate_rc18_switch(op, uplink_ports or set())
     else:
         raise PolicyViolation("Unknown device family.")
     return dict(op)
+
+
+# ---- rc17 switch operations: ACLs, static routes, DSCP QoS policy, VSF member provisioning ---------------------
+_RC17_SWITCH_OPS = {"switch.acl.define", "switch.acl.apply", "switch.route.static", "switch.qos.dscp_policy",
+                    "switch.vsf.member"}
+_ACL_NAME = r"^[A-Za-z][A-Za-z0-9_-]{0,31}$"
+_PORT_RE = r"^[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?$"
+
+
+def _prefix(v) -> bool:
+    import ipaddress
+    if v == "any":
+        return True
+    try:
+        ipaddress.IPv4Network(v, strict=True)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _validate_rc17_switch(op: dict, uplink_ports: set[str]) -> None:
+    import ipaddress
+    import re
+    kind = op["op"]
+    if kind == "switch.acl.define":
+        if not re.fullmatch(_ACL_NAME, str(op.get("name", ""))):
+            raise PolicyViolation("ACL name: letter first, up to 32 letters, digits, - or _.")
+        entries = op.get("entries")
+        if not (isinstance(entries, list) and 1 <= len(entries) <= 64):
+            raise PolicyViolation("An ACL needs 1–64 entries.")
+        seqs = set()
+        for e in entries:
+            if not isinstance(e, dict):
+                raise PolicyViolation("Each ACL entry must be an object.")
+            seq = e.get("seq")
+            if not (isinstance(seq, int) and 1 <= seq <= 4294967295) or seq in seqs:
+                raise PolicyViolation("ACL sequence numbers must be unique positive integers.")
+            seqs.add(seq)
+            if e.get("action") not in ("permit", "deny"):
+                raise PolicyViolation("ACL action must be permit or deny.")
+            if e.get("protocol", "any") not in ("any", "tcp", "udp", "icmp"):
+                raise PolicyViolation("ACL protocol must be any, tcp, udp or icmp.")
+            if not (_prefix(e.get("src", "any")) and _prefix(e.get("dst", "any"))):
+                raise PolicyViolation("ACL source/destination must be 'any' or an IPv4 network such as 10.1.0.0/16.")
+            port = e.get("dst_port")
+            if port is not None and (e.get("protocol") not in ("tcp", "udp") or not (isinstance(port, int) and 1 <= port <= 65535)):
+                raise PolicyViolation("A destination port (1–65535) needs protocol tcp or udp.")
+        if not any(e["action"] == "permit" for e in entries) and op.get("acknowledge_deny_all") is not True:
+            raise PolicyViolation("An ACL with no permit entry blocks all traffic; acknowledge_deny_all=true is required.")
+    elif kind == "switch.acl.apply":
+        if not re.fullmatch(_PORT_RE, str(op.get("port", ""))):
+            raise PolicyViolation("Select a physical port.")
+        if op.get("port") in uplink_ports:
+            raise PolicyViolation("Applying an ACL to a protected uplink is refused (risk of losing management).")
+        if op.get("value") is not None and not re.fullmatch(_ACL_NAME, str(op.get("value"))):
+            raise PolicyViolation("value must name an existing ACL, or null to remove the ingress ACL.")
+        if op.get("direction", "in") != "in":
+            raise PolicyViolation("Only ingress IPv4 ACL application is supported.")
+    elif kind == "switch.route.static":
+        if not _prefix(op.get("prefix")) or op.get("prefix") == "any":
+            raise PolicyViolation("Route prefix must be an IPv4 network such as 10.20.0.0/16.")
+        if ipaddress.IPv4Network(op["prefix"]).prefixlen == 0 and op.get("acknowledge_default_route") is not True:
+            raise PolicyViolation("Changing the default route needs acknowledge_default_route=true.")
+        try:
+            hop = ipaddress.IPv4Address(op.get("next_hop"))
+        except (ValueError, TypeError):
+            raise PolicyViolation("Next hop must be an IPv4 address.") from None
+        if hop.is_unspecified or hop.is_multicast or hop.is_loopback:
+            raise PolicyViolation("Next hop must be a unicast address.")
+        if op.get("vrf", "default") not in ("default",):
+            raise PolicyViolation("Static routes are supported in the default VRF only (management VRF changes refused).")
+        dist = op.get("distance", 1)
+        if not (isinstance(dist, int) and 1 <= dist <= 255):
+            raise PolicyViolation("Administrative distance must be 1–255.")
+    elif kind == "switch.qos.dscp_policy":
+        if not re.fullmatch(_ACL_NAME, str(op.get("name", ""))):
+            raise PolicyViolation("Policy name: letter first, up to 32 letters, digits, - or _.")
+        if op.get("protocol") not in ("tcp", "udp"):
+            raise PolicyViolation("Classify by tcp or udp destination port.")
+        if not (isinstance(op.get("dst_port"), int) and 1 <= op["dst_port"] <= 65535):
+            raise PolicyViolation("Destination port must be 1–65535.")
+        if not (isinstance(op.get("dscp"), int) and 0 <= op["dscp"] <= 63):
+            raise PolicyViolation("DSCP must be 0–63.")
+        ports = op.get("ports", [])
+        if not (isinstance(ports, list) and len(ports) <= 52 and all(re.fullmatch(_PORT_RE, str(p)) for p in ports)):
+            raise PolicyViolation("Apply-to ports must be physical ports (0–52).")
+    elif kind == "switch.vsf.member":
+        if op.get("model_family") != "CX 6200":
+            raise PolicyViolation("VSF is supported on the CX 6200 family only; CX 6100 does not support VSF.")
+        if not (isinstance(op.get("member"), int) and 2 <= op["member"] <= 8):
+            raise PolicyViolation("VSF member number must be 2–8 (member 1 is the conductor).")
+        if not re.fullmatch(r"^[A-Za-z0-9-]{3,32}$", str(op.get("member_type", ""))):
+            raise PolicyViolation("Give the member's exact part number (e.g. JL724A).")
+        links = op.get("links")
+        if not (isinstance(links, dict) and set(links) <= {"1", "2"} and links and
+                all(isinstance(v, list) and 1 <= len(v) <= 4 and all(re.fullmatch(_PORT_RE, str(p)) for p in v)
+                    for v in links.values())):
+            raise PolicyViolation("VSF links: {'1': [ports], '2': [ports]} with 1–4 physical ports each.")
+        if set(p for v in links.values() for p in v) & uplink_ports:
+            raise PolicyViolation("VSF link ports include a protected uplink.")
+        if op.get("acknowledge_stack_change") is not True:
+            raise PolicyViolation("VSF provisioning changes stack topology; acknowledge_stack_change=true is required.")
 
 
 def capability_check(operations: list[dict], capabilities: dict[str, str]) -> list[dict]:
@@ -321,3 +436,297 @@ def execution_gate(*, write_lock: bool, emergency_stop: bool, plan_state: str,
     return {"decision": "DENY" if failed else "ALLOW",
             "guards": [{"guard": n, "pass": ok} for n, ok in guards],
             "denial_reasons": failed}
+
+
+_HOST = r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$"
+
+
+def _validate_rc17_wlan(kind: str, op: dict) -> dict:
+    """rc17 Instant WLAN security objects. Creation only (no overwrite); rollback deletes what was created."""
+    import re as _re
+    if kind == "ap.role.define":
+        if not _re.fullmatch(_NAME, str(op.get("role", ""))):
+            raise PolicyViolation("Role name must be 1-32 letters, digits, '_', '.', '-'.")
+        rules = op.get("rules")
+        if not isinstance(rules, list) or not 1 <= len(rules) <= 64:
+            raise PolicyViolation("A role needs 1-64 access rules.")
+        clean = []
+        for r in rules:
+            dest, proto, action = r.get("dest", "any"), r.get("protocol", "any"), r.get("action")
+            if action not in ("permit", "deny"):
+                raise PolicyViolation("Each rule action must be permit or deny.")
+            if proto not in ("any", "tcp", "udp"):
+                raise PolicyViolation("Rule protocol must be any, tcp or udp.")
+            if dest != "any":
+                if not (isinstance(dest, dict) and _ipv4(dest.get("ip")) and _ipv4(dest.get("mask"))):
+                    raise PolicyViolation("Rule destination must be any or {ip, mask} IPv4.")
+                dest = {"ip": dest["ip"], "mask": dest["mask"]}
+            ports = r.get("ports")
+            if proto == "any":
+                if ports not in (None, "any"):
+                    raise PolicyViolation("Protocol any takes no port range.")
+                ports = None
+            else:
+                if not (isinstance(ports, list) and len(ports) == 2 and all(type(x) is int and 1 <= x <= 65535 for x in ports)
+                        and ports[0] <= ports[1]):
+                    raise PolicyViolation("TCP/UDP rules need a port range [start, end] within 1-65535.")
+            clean.append({"dest": dest, "protocol": proto, "ports": ports, "action": action})
+        return {"op": kind, "role": op["role"], "rules": clean}
+    if kind == "ap.captive_portal.external":
+        if not _re.fullmatch(_NAME, str(op.get("profile", ""))):
+            raise PolicyViolation("Portal profile name must be 1-32 letters, digits, '_', '.', '-'.")
+        if not (_ipv4(op.get("server")) or _re.fullmatch(_HOST, str(op.get("server", "")))):
+            raise PolicyViolation("Portal server must be an IPv4 address or DNS name.")
+        port = op.get("port", 443)
+        if not (type(port) is int and 1 <= port <= 65535):
+            raise PolicyViolation("Portal port must be 1-65535.")
+        url = op.get("url", "/")
+        if not (isinstance(url, str) and _re.fullmatch(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,254}", url)):
+            raise PolicyViolation("Portal URL path must start with / and contain no spaces or quotes.")
+        redirect = op.get("redirect_url")
+        if redirect is not None and not (isinstance(redirect, str) and
+                                         _re.fullmatch(r"https://[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{1,247}", redirect)):
+            raise PolicyViolation("Redirect URL must be an https:// URL without spaces or quotes.")
+        if op.get("fail_through", False) is not False:
+            raise PolicyViolation("Portal fail-through (open access when the portal is down) is refused.")
+        https = op.get("https", True)
+        if https is not True and op.get("acknowledge_plain_http") is not True:
+            raise PolicyViolation("Plain-HTTP portals need an explicit acknowledgement.")
+        return {"op": kind, "profile": op["profile"], "server": op["server"], "port": port, "url": url,
+                "https": https is True, "redirect_url": redirect, "fail_through": False}
+    # ap.ssid.multi_auth: MAC authentication + 802.1X on an existing enterprise SSID
+    if not _re.fullmatch(_NAME, str(op.get("ssid", ""))):
+        raise PolicyViolation("An existing SSID profile name is required.")
+    if op.get("value") not in ("enabled", "disabled"):
+        raise PolicyViolation("Multi-authentication must be enabled or disabled.")
+    if op["value"] == "enabled" and not (isinstance(op.get("mac_role"), str) and _re.fullmatch(_NAME, op["mac_role"])):
+        raise PolicyViolation("Enabling MAC + 802.1X needs the existing role for MAC-authenticated clients.")
+    if op.get("acknowledge_auth_change") is not True:
+        raise PolicyViolation("Explicitly acknowledge the authentication change.")
+    return {"op": kind, "ssid": op["ssid"], "value": op["value"],
+            "mac_role": op.get("mac_role") if op["value"] == "enabled" else None, "acknowledge_auth_change": True}
+
+
+# ---- rc18 switch operations: RADIUS servers, server groups, port-access accounting, port authentication policy,
+# single-area ("Access") OSPF on CX 6200. Bodies follow the documented AOS-CX 10.x REST resources:
+# /system/vrfs/{vrf}/radius_servers/{address},{port},{port_type}, /system/aaa_server_groups/{group_name},
+# /system/aaa_accounting_attributes/port-access, /system/interfaces/{port}/port_access_auth_configurations/{method},
+# /system/vrfs/{vrf}/ospf_routers/{instance_tag}(/areas/{area_id}).
+_RC18_SWITCH_OPS = {"switch.aaa.radius_server", "switch.aaa.server_group", "switch.aaa.accounting",
+                    "switch.port.auth_policy", "switch.route.ospf"}
+_GROUP_RE = r"^[A-Za-z][A-Za-z0-9_.-]{0,31}$"
+_BUILTIN_GROUPS = {"radius", "tacacs", "local", "none"}
+_HOST_RE = r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$"
+
+
+def _int(v, lo, hi) -> bool:
+    return type(v) is int and lo <= v <= hi
+
+
+def _server_ref(r: dict) -> dict:
+    import re
+    addr = r.get("address")
+    if not (_ipv4(addr) or (isinstance(addr, str) and re.fullmatch(_HOST_RE, addr))):
+        raise PolicyViolation("RADIUS server address must be an IPv4 address or DNS name.")
+    port = r.get("port", 1812)
+    if not _int(port, 1, 65535):
+        raise PolicyViolation("RADIUS port must be 1-65535.")
+    if r.get("port_type", "udp") != "udp":
+        raise PolicyViolation("Only RADIUS over UDP is managed; RadSec (TCP/TLS) needs certificate management first.")
+    vrf = r.get("vrf", "default")
+    if vrf not in ("default", "mgmt"):
+        raise PolicyViolation("RADIUS VRF must be default or mgmt.")
+    return {"address": addr, "port": port, "port_type": "udp", "vrf": vrf}
+
+
+def _validate_rc18_switch(op: dict, uplink_ports: set[str]) -> dict:
+    import ipaddress
+    import re
+    kind, action = op["op"], op.get("action", "create")
+    if kind != "switch.aaa.accounting" and action not in ("create", "modify", "delete"):
+        raise PolicyViolation("action must be create, modify or delete.")
+    if any(k in op for k in ("passkey", "secret", "key")):
+        raise PolicyViolation("Secrets are never placed in a change plan; reference a credential profile with secret_ref.")
+    if kind == "switch.aaa.radius_server":
+        out = {"op": kind, "action": action, **_server_ref(op)}
+        if action == "create" and not op.get("secret_ref"):
+            raise PolicyViolation("A new RADIUS server needs secret_ref (credential profile holding the shared secret).")
+        if action != "delete":
+            for f, lo, hi in (("timeout", 1, 60), ("retries", 0, 5), ("accounting_udp_port", 1, 65535)):
+                if op.get(f) is not None:
+                    if not _int(op[f], lo, hi):
+                        raise PolicyViolation(f"{f} must be {lo}-{hi}.")
+                    out[f] = op[f]
+            if op.get("auth_type") is not None:
+                if op["auth_type"] not in ("pap", "chap"):
+                    raise PolicyViolation("auth_type must be pap or chap.")
+                out["auth_type"] = op["auth_type"]
+            if op.get("tracking_enable") is not None:
+                if type(op["tracking_enable"]) is not bool:
+                    raise PolicyViolation("tracking_enable must be true or false.")
+                out["tracking_enable"] = op["tracking_enable"]
+            if op.get("secret_ref"):
+                out["secret_ref"] = op["secret_ref"]
+        if action == "modify" and len(out) <= 6:
+            raise PolicyViolation("Nothing to modify.")
+        return out
+    if kind == "switch.aaa.server_group":
+        name = str(op.get("group_name", ""))
+        if not re.fullmatch(_GROUP_RE, name) or name.lower() in _BUILTIN_GROUPS:
+            raise PolicyViolation("Group name must be 1-32 safe characters and not a built-in group.")
+        out = {"op": kind, "action": action, "group_name": name}
+        if action != "delete":
+            lbm = op.get("load_balancing_mode", "priority-based")
+            if lbm not in ("priority-based", "round-robin"):
+                raise PolicyViolation("load_balancing_mode must be priority-based or round-robin.")
+            servers = op.get("servers")
+            if not isinstance(servers, list) or not 1 <= len(servers) <= 8:
+                raise PolicyViolation("A server group needs 1-8 servers in priority order (first = primary).")
+            refs = [_server_ref(x) for x in servers]
+            if len({(r["address"], r["port"], r["vrf"]) for r in refs}) != len(refs):
+                raise PolicyViolation("A server appears twice in the group.")
+            out |= {"load_balancing_mode": lbm, "servers": refs}
+        return out
+    if kind == "switch.aaa.accounting":
+        mode = op.get("accounting_mode")
+        if mode not in ("start-stop", "stop-only", "disabled"):
+            raise PolicyViolation("accounting_mode must be start-stop, stop-only or disabled.")
+        out = {"op": kind, "session_type": "port-access", "accounting_mode": mode}
+        if mode == "start-stop" and op.get("interim_update_interval") is not None:
+            if not _int(op["interim_update_interval"], 1, 525600):
+                raise PolicyViolation("interim_update_interval must be 1-525600 minutes.")
+            out["interim_update_interval"] = op["interim_update_interval"]
+        return out
+    if kind == "switch.port.auth_policy":
+        port = op.get("port")
+        if not re.fullmatch(_PORT_RE, str(port or "")):
+            raise PolicyViolation("A front-panel port such as 1/1/10 is required.")
+        if port in uplink_ports:
+            raise PolicyViolation(f"Port {port} is a protected uplink; port authentication is refused there.")
+        method = op.get("method")
+        if method not in ("dot1x", "mac-auth"):
+            raise PolicyViolation("method must be dot1x or mac-auth.")
+        if op.get("acknowledge_auth_change") is not True:
+            raise PolicyViolation("Explicitly acknowledge the port authentication change.")
+        out = {"op": kind, "action": action, "port": port, "method": method, "acknowledge_auth_change": True}
+        if action == "delete":
+            return out
+        spec = {"auth_enable": bool, "reauth_enable": bool, "cached_reauth_enable": bool,
+                "reauth_period": (1, 86400), "quiet_period": (0, 65535), "max_retries": (1, 10)}
+        if method == "dot1x":
+            spec |= {"max_requests": (1, 10), "eapol_timeout": (1, 65535), "discovery_period": (1, 65535)}
+        for f, rule in spec.items():
+            if f not in op or op[f] is None:
+                continue
+            if rule is bool:
+                if type(op[f]) is not bool:
+                    raise PolicyViolation(f"{f} must be true or false.")
+            elif not _int(op[f], *rule):
+                raise PolicyViolation(f"{f} must be {rule[0]}-{rule[1]}.")
+            out[f] = op[f]
+        if op.get("radius_server_group") is not None:
+            g = str(op["radius_server_group"])
+            if not re.fullmatch(_GROUP_RE, g):
+                raise PolicyViolation("radius_server_group must name an existing server group.")
+            out["radius_server_group"] = g
+        if action == "create" and "auth_enable" not in out:
+            raise PolicyViolation("State auth_enable explicitly when creating a port authentication policy.")
+        unknown = set(op) - set(out) - {"op", "action", "model_family", "acknowledge_auth_change"} - set(spec) - {"radius_server_group"}
+        if unknown:
+            raise PolicyViolation(f"Unsupported attribute(s) for {method}: {sorted(unknown)}")
+        return out
+    # switch.route.ospf — CX 6200 "Access OSPF": exactly one area, no redistribution of BGP/RIP
+    tag = op.get("instance_tag", 1)
+    if not _int(tag, 1, 65535):
+        raise PolicyViolation("instance_tag must be 1-65535.")
+    out = {"op": kind, "action": action, "instance_tag": tag, "vrf": op.get("vrf", "default")}
+    if out["vrf"] != "default":
+        raise PolicyViolation("OSPF is managed in the default VRF only.")
+    if op.get("acknowledge_routing_change") is not True:
+        raise PolicyViolation("Explicitly acknowledge the dynamic routing change.")
+    out["acknowledge_routing_change"] = True
+    if action == "delete":
+        return out
+    try:
+        rid = str(ipaddress.IPv4Address(op.get("router_id")))
+        area = str(ipaddress.IPv4Address(op.get("area", "0.0.0.0")))
+    except (ValueError, TypeError):
+        raise PolicyViolation("router_id and area must be dotted IPv4 values.") from None
+    area_type = op.get("area_type", "default")
+    if area_type not in ("default", "stub", "stub_no_summary", "nssa", "nssa_no_summary"):
+        raise PolicyViolation("Invalid area_type.")
+    redist = op.get("redistribute", [])
+    if not isinstance(redist, list) or set(redist) - {"connected", "static"}:
+        raise PolicyViolation("Only connected and static routes may be redistributed.")
+    ifaces = op.get("interfaces", [])
+    if not isinstance(ifaces, list) or not 1 <= len(ifaces) <= 32 or \
+            not all(isinstance(i, str) and re.fullmatch(r"^(vlan[1-9][0-9]{0,3}|[1-9][0-9]?/[1-9][0-9]?/[1-9][0-9]?)$", i) for i in ifaces):
+        raise PolicyViolation("List 1-32 routed interfaces (e.g. vlan20 or 1/1/49) to activate in the area.")
+    paths = op.get("maximum_paths", 4)
+    if not _int(paths, 1, 8):
+        raise PolicyViolation("maximum_paths must be 1-8.")
+    return out | {"router_id": rid, "area": area, "area_type": area_type, "redistribute": sorted(set(redist)),
+                  "interfaces": ifaces, "passive_interface_default": bool(op.get("passive_interface_default", True)),
+                  "maximum_paths": paths}
+
+
+def _validate_rc18_wlan(kind: str, op: dict) -> dict:
+    """rc18 Instant RADIUS management. Instant has no named server-group object: an SSID references up to TWO
+    auth servers (first = primary, second = failover) with optional load balancing; that IS the group model."""
+    import re
+    if any(k in op for k in ("passkey", "secret", "key")):
+        raise PolicyViolation("Secrets are never placed in a change plan; reference a credential profile with secret_ref.")
+    if kind == "ap.radius.server":
+        action = op.get("action", "create")
+        if action not in ("create", "modify", "delete"):
+            raise PolicyViolation("action must be create, modify or delete.")
+        if not re.fullmatch(_NAME, str(op.get("name", ""))):
+            raise PolicyViolation("RADIUS server name must be 1-32 letters, digits, '_', '.', '-'.")
+        out = {"op": kind, "action": action, "name": op["name"]}
+        if action == "delete":
+            if not op.get("secret_ref"):
+                raise PolicyViolation("Deleting a server needs its secret_ref so rollback can recreate it.")
+            return out | {"secret_ref": op["secret_ref"]}
+        if action == "create" or op.get("ip") is not None:
+            if not _ipv4(op.get("ip")):
+                raise PolicyViolation("RADIUS server must be an IPv4 address.")
+            out["ip"] = op["ip"]
+        for f, lo, hi, default in (("port", 1, 65535, 1812), ("acct_port", 1, 65535, 1813), ("timeout", 1, 30, None),
+                                   ("retry_count", 0, 5, None)):
+            val = op.get(f, default if action == "create" else None)
+            if val is not None:
+                if not (type(val) is int and lo <= val <= hi):
+                    raise PolicyViolation(f"{f} must be {lo}-{hi}.")
+                out[f] = val
+        if action == "create" and not op.get("secret_ref"):
+            raise PolicyViolation("A new RADIUS server needs secret_ref (credential profile holding the shared secret).")
+        if op.get("secret_ref"):
+            out["secret_ref"] = op["secret_ref"]
+            if action == "modify":
+                if not op.get("previous_secret_ref"):
+                    raise PolicyViolation("Rotating a shared secret needs previous_secret_ref so rollback can restore it.")
+                out["previous_secret_ref"] = op["previous_secret_ref"]
+        if action == "modify" and len(out) <= 3:
+            raise PolicyViolation("Nothing to modify.")
+        return out
+    if not re.fullmatch(_NAME, str(op.get("ssid", ""))):
+        raise PolicyViolation("An existing enterprise SSID profile name is required.")
+    servers = op.get("servers")
+    if not isinstance(servers, list) or not 1 <= len(servers) <= 2 or len(set(servers)) != len(servers) or \
+            not all(isinstance(x, str) and re.fullmatch(_NAME, x) for x in servers):
+        raise PolicyViolation("Assign one or two distinct RADIUS servers (first = primary, second = failover).")
+    lb = op.get("load_balancing", False)
+    if type(lb) is not bool or (lb and len(servers) < 2):
+        raise PolicyViolation("Load balancing needs two servers.")
+    acct = op.get("accounting", "unchanged")
+    if acct not in ("enabled", "disabled", "unchanged"):
+        raise PolicyViolation("accounting must be enabled, disabled or unchanged.")
+    out = {"op": kind, "ssid": op["ssid"], "servers": servers, "load_balancing": lb, "accounting": acct}
+    if acct == "enabled":
+        iv = op.get("interval_minutes")
+        if not (type(iv) is int and 0 <= iv <= 60):
+            raise PolicyViolation("Enabled accounting needs an interim interval of 0-60 minutes.")
+        out["interval_minutes"] = iv
+    if op.get("acknowledge_auth_change") is not True:
+        raise PolicyViolation("Explicitly acknowledge the authentication server change.")
+    return out | {"acknowledge_auth_change": True}

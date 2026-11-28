@@ -13,7 +13,7 @@ from ..database.models import ConfigChange, FirmwareImage, Site, User
 from ..database.session import get_db
 from ..firmware import compliance, images, upgrade
 from ..monitoring.collector import visible_sites
-from ..security.deps import audit, require_role
+from ..security.deps import audit, require_any_role, require_role
 from .config import change_out
 
 router = APIRouter(prefix="/api/firmware", tags=["firmware"])
@@ -130,6 +130,25 @@ def recovery_plan(change_id: int, body: UpgradeBody, request: Request, db: Sessi
     change = _upgrade_change(db, change_id)
     return change_out(_plan_guard(lambda: upgrade.plan_recovery(db, change, _site(db, change.site_id),
                                                                admin.username, body.image_ids, request=request)))
+
+
+@router.post("/upgrades/{change_id}/reboot-approval")
+def approve_reboot(change_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_any_role("approver", "admin"))):
+    from ..firmware import ap_reboot
+    change = _upgrade_change(db, change_id)
+    out = _plan_guard(lambda: ap_reboot.approve(db, change, user.username, request=request))
+    db.commit()
+    return out
+
+
+@router.post("/upgrades/{change_id}/reboot")
+def reboot_cluster(change_id: int, request: Request, db: Session = Depends(get_db),
+                   admin: User = Depends(require_role("admin"))):
+    """Activate the staged image: one journalled `reload all`, then bounded member verification. Never replayed."""
+    from ..firmware import ap_reboot
+    change = _upgrade_change(db, change_id)
+    return _plan_guard(lambda: ap_reboot.reboot(db, change, _site(db, change.site_id), admin.username, request=request))
 
 
 # ---- certificate --------------------------------------------------------------------------------------------------

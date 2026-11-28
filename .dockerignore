@@ -9,4 +9,6 @@ evidence
 .env
 dev
 tests
-docs
+docs/*
+!docs/Unified_Acceptance_Register_v4.csv
+!docs/Unified_Acceptance_Register_v5.csv

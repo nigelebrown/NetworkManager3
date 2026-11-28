@@ -27,7 +27,8 @@ def plan(tmp_path: Path, current: dict, release: dict) -> subprocess.CompletedPr
                                              ("0008", "t001", "MIGRATE"), ("0009", "t001", "MIGRATE"),
                                              ("0010", "t001", "MIGRATE"), ("0010", "t002", "MIGRATE"), ("0011", "t002", "MIGRATE"),
                                              ("0012", "t002", "MIGRATE"),
-                                             ("0013", "t002", "MIGRATE"), ("0014", "t002", "CURRENT")])
+                                             ("0013", "t002", "MIGRATE"), ("0014", "t002", "MIGRATE"),
+                                             ("0015", "t002", "MIGRATE"), ("0016", "t002", "CURRENT")])
 def test_expected_or_previous_schema_accepted(tmp_path, mgmt, tel, result):
     manifest = json.loads((ROOT / "release.json").read_text())
     output = plan(tmp_path, {"management": mgmt, "telemetry": tel}, manifest)

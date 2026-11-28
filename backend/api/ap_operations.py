@@ -293,7 +293,8 @@ class AutomaticOnboardingPolicy(BaseModel):
 @router.get("/autodiscover/policy")
 def onboarding_policy(db: Session = Depends(get_db), _: User = Depends(require_role("admin"))):
     from ..infrastructure import automatic_onboarding as AO
-    return AO.policy(db)
+    from ..infrastructure.ap_autodiscovery import auth_guard_status
+    return {**AO.policy(db), "lockout_guard": auth_guard_status(db)}
 
 
 @router.put("/autodiscover/policy")
@@ -1014,7 +1015,7 @@ def diagnose_ap(device_id: str, request: Request, ai: bool = False, db: Session 
             if timedelta(0)<=_now()-generated<=timedelta(minutes=15):
                 event_rows=latest.value.get("rows",[])
         except (ValueError,TypeError):
-            pass
+            pass  # malformed cached snapshot timestamp: treat the snapshot as stale
     unique_name=sum(a["name"]==ap["name"] for a in fl["aps"])==1
     ev=next((r for r in event_rows if r.get("ap")==ap["name"] and (
         str(r.get("cluster_key",r.get("site_id","")))==ap["cluster_key"] or unique_name)),None)
