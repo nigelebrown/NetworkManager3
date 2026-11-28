@@ -44,7 +44,8 @@ def servers(tmp_path_factory):
     Path("/run/sshd").mkdir(mode=0o755, exist_ok=True)
     d = Path(tempfile.mkdtemp(prefix="inm-ssh-test-"))          # pytest's tmp dirs are 0700: the login user needs x
     cli = d / "fake-cli"
-    cli.write_text(CLI.format(py=sys.executable)); cli.chmod(0o755)
+    # The unprivileged SSH login must traverse the interpreter path; root's venv may live under /root.
+    cli.write_text(CLI.format(py="/usr/bin/python3")); cli.chmod(0o755)
     os.chmod(d, 0o755)
     if subprocess.run(["id", USER], capture_output=True).returncode != 0:
         subprocess.run(["useradd", "-M", "-s", str(cli), USER], check=True)
